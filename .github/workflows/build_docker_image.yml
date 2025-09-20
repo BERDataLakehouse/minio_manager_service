@@ -1,0 +1,14 @@
+name: Build and push docker image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "master", "develop" ]
+  pull_request:
+    branches: [ "main", "master", "develop" ]
+  release:
+    types: [published]
+
+jobs:
+  build:
+    uses: ./.github/workflow-templates/build_docker_image.yaml
