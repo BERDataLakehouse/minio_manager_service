@@ -11,5 +11,5 @@ on:
 
 jobs:
   build:
-    uses: BERDataLakehouse/.github/workflow-templates/build_docker_image.yaml@main
+    uses: BERDataLakehouse/.github/.github/workflows/build_docker_image.yaml@main
     secrets: inherit
