@@ -26,8 +26,9 @@ POLICY TYPES CREATED:
 
 3. GROUP POLICIES (PolicyType.GROUP_HOME):
    - Policy Name: <GROUP_POLICY_PREFIX><groupname>
-   - Grants WRITE access to group's shared workspace:
-     * s3a://{bucket}/groups-general-warehouse/{groupname}/
+   - Grants WRITE access to group's shared workspaces:
+     * s3a://{bucket}/tenant-sql-warehouse/{groupname}/ (for Spark tables)
+     * s3a://{bucket}/tenant-general-warehouse/{groupname}/ (for general files)
    - Enables collaborative access for group members
    - Members inherit group permissions through policy attachment
 """
@@ -54,6 +55,10 @@ from ..utils.validators import (
     validate_policy_name,
 )
 from .policy_builder import PolicyBuilder
+from ..utils.governance import (
+    generate_group_governance_prefix,
+    generate_user_governance_prefix,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +128,10 @@ class PolicyCreator:
         self.user_sql_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.users_sql_warehouse_prefix}/{self.target_name}"
         # user warehouse for general files
         self.user_general_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.users_general_warehouse_prefix}/{self.target_name}"
-        # group warehouse for general files
-        self.group_general_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.groups_general_warehouse_prefix}/{self.target_name}"
+        # tenant warehouse for spark tables
+        self.tenant_sql_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.tenant_sql_warehouse_prefix}/{self.target_name}"
+        # tenant warehouse for general files
+        self.tenant_general_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.tenant_general_warehouse_prefix}/{self.target_name}"
 
         # Internal section management with Dict[PolicySectionType, List[PolicyStatement]]
         self._sections: Dict[PolicySectionType, List[PolicyStatement]] = {
@@ -311,14 +318,17 @@ class PolicyCreator:
 
     def _create_default_user_home_policy(self) -> "PolicyCreator":
         """Create default user home policy with SQL and general warehouse paths."""
-        # Add access to user's SQL warehouse
+        # Add access to user's SQL warehouse with table naming enforcement
+        # Only allow tables/databases that follow u_username__* pattern
+        governance_prefix = generate_user_governance_prefix(self.target_name)
+        user_sql_warehouse_governed_path = f"{self.user_sql_warehouse_path}/{governance_prefix}*"
         self._add_path_access_via_builder(
             self.config.default_bucket,
-            self.user_sql_warehouse_path,
+            user_sql_warehouse_governed_path,
             PolicyPermissionLevel.ADMIN,
         )
 
-        # Add access to user's general warehouse
+        # Add access to user's general warehouse (no naming restrictions for general files)
         self._add_path_access_via_builder(
             self.config.default_bucket,
             self.user_general_warehouse_path,
@@ -343,10 +353,20 @@ class PolicyCreator:
 
     def _create_default_group_policy(self) -> "PolicyCreator":
         """Create default group policy with group shared workspace paths."""
-        # Add access to group's general warehouse
+        # Add access to group's SQL warehouse with table naming enforcement
+        # Only allow tables/databases that follow t_groupname__* pattern
+        governance_prefix = generate_group_governance_prefix(self.target_name)
+        tenant_sql_warehouse_governed_path = f"{self.tenant_sql_warehouse_path}/{governance_prefix}*"
         self._add_path_access_via_builder(
             self.config.default_bucket,
-            self.group_general_warehouse_path,
+            tenant_sql_warehouse_governed_path,
+            PolicyPermissionLevel.WRITE,
+        )
+
+        # Add access to group's general warehouse (no naming restrictions for general files)
+        self._add_path_access_via_builder(
+            self.config.default_bucket,
+            self.tenant_general_warehouse_path,
             PolicyPermissionLevel.WRITE,
         )
 

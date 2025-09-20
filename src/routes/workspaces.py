@@ -9,12 +9,16 @@ organizing and managing their data storage.
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Depends, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..minio.models.policy import PolicyModel
 from ..minio.models.user import UserModel
 from ..service.app_state import get_app_state
+from ..minio.utils.governance import (
+    generate_group_governance_prefix,
+    generate_user_governance_prefix,
+)
 from ..service.dependencies import auth
 from ..service.exceptions import MinIOManagerError
 from ..service.kb_auth import KBaseUser
@@ -87,6 +91,26 @@ class UserSqlWarehousePrefixResponse(BaseModel):
 
     username: Annotated[str, Field(description="Username", min_length=1)]
     sql_warehouse_prefix: Annotated[str, Field(description="User's SQL warehouse prefix")]
+
+
+class GroupSqlWarehousePrefixResponse(BaseModel):
+    """Response model for group's SQL warehouse prefix."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    group_name: Annotated[str, Field(description="Group name", min_length=1)]
+    sql_warehouse_prefix: Annotated[str, Field(description="Group's SQL warehouse prefix")]
+
+
+class NamespacePrefixResponse(BaseModel):
+    """Response model for governance namespace prefix for user or tenant."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    username: Annotated[str, Field(description="Username", min_length=1)]
+    user_namespace_prefix: Annotated[str, Field(description="User's governance namespace prefix (e.g., u_user__)")]
+    tenant: Annotated[str | None, Field(description="Tenant (group) name", default=None)]
+    tenant_namespace_prefix: Annotated[str | None, Field(description="Tenant's governance namespace prefix (e.g., t_tenant__)", default=None)]
 
 
 # ===== USER WORKSPACE ENDPOINTS =====
@@ -239,6 +263,39 @@ async def get_group_workspace(
 
 
 @router.get(
+    "/me/groups/{group_name}/sql-warehouse-prefix",
+    response_model=GroupSqlWarehousePrefixResponse,
+    summary="Get group SQL warehouse prefix",
+    description="Get the SQL warehouse prefix for a specific group (requires group membership).",
+)
+async def get_group_sql_warehouse_prefix(
+    group_name: Annotated[str, Path(description="Group name", min_length=1)],
+    authenticated_user: Annotated[KBaseUser, Depends(auth)],
+    request: Request,
+):
+    """Get the SQL warehouse prefix for a specific group."""
+    app_state = get_app_state(request)
+
+    username = authenticated_user.user
+
+    # Check if user is a member of the group
+    is_member = await app_state.group_manager.is_user_in_group(username, group_name)
+    if not is_member:
+        raise MinIOManagerError("User is not a member of the group")
+
+    # Get group SQL warehouse prefix (tenant SQL warehouse)
+    sql_warehouse_prefix = f"s3a://{app_state.group_manager.config.default_bucket}/{app_state.group_manager.tenant_sql_warehouse_prefix}/{group_name}/"
+
+    response = GroupSqlWarehousePrefixResponse(
+        group_name=group_name,
+        sql_warehouse_prefix=sql_warehouse_prefix,
+    )
+
+    logger.info(f"Retrieved SQL warehouse prefix for group {group_name} by user {username}")
+    return response
+
+
+@router.get(
     "/me/sql-warehouse-prefix",
     response_model=UserSqlWarehousePrefixResponse,
     summary="Get my SQL warehouse prefix",
@@ -261,3 +318,49 @@ async def get_my_sql_warehouse_prefix(
 
     logger.info(f"Retrieved SQL warehouse prefix for user {username}")
     return response
+
+
+@router.get(
+    "/me/namespace-prefix",
+    response_model=NamespacePrefixResponse,
+    summary="Get governance namespace prefix",
+    description=(
+        "Get the governance namespace prefix for the authenticated user. "
+        "Optionally provide a tenant (group) to get the tenant namespace prefix; "
+        "membership is required."
+    ),
+)
+async def get_namespace_prefix(
+    authenticated_user: Annotated[KBaseUser, Depends(auth)],
+    request: Request,
+    tenant: Annotated[str | None, Query(description="Optional tenant (group) name", min_length=1)] = None,
+):
+    """Return governance namespace prefix for user and optionally for specified tenant.
+
+    Always returns the user's namespace prefix. If tenant is provided and user is a member,
+    also returns the tenant's namespace prefix.
+    """
+    app_state = get_app_state(request)
+    username = authenticated_user.user
+
+    # Always generate user prefix
+    user_ns_prefix = generate_user_governance_prefix(username)
+
+    tenant_ns_prefix = None
+    if tenant:
+        # Check if group exists
+        group_exists = await app_state.group_manager.get_group_info(tenant)
+        if not group_exists:
+            raise MinIOManagerError(f"Group {tenant} does not exist")
+        # Check if user is a member of the group
+        is_member = await app_state.group_manager.is_user_in_group(username, tenant)
+        if not is_member:
+            raise MinIOManagerError(f"User {username} is not a member of the group {tenant}")
+        tenant_ns_prefix = generate_group_governance_prefix(tenant)
+
+    return NamespacePrefixResponse(
+        username=username,
+        user_namespace_prefix=user_ns_prefix,
+        tenant=tenant,
+        tenant_namespace_prefix=tenant_ns_prefix,
+    )

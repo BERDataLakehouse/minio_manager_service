@@ -21,7 +21,7 @@ RESOURCE_TYPE: str = "user"
 
 # This is a global group that all users are automatically added to
 # This group can be used to apply policies, share paths, etc. to all users
-GLOBAL_USER_GROUP = "global-user-group"
+GLOBAL_USER_GROUP = "global_user_group"
 
 
 class UserManager(ResourceManager[UserModel]):
@@ -400,7 +400,7 @@ class UserManager(ResourceManager[UserModel]):
 
     # PRIVATE HELPER METHODS
 
-    def _generate_secure_password(self, length: int = 32) -> str:
+    def _generate_secure_password(self, length: int = 8) -> str:
         """Generate a secure password for MinIO users."""
         alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
         return "".join(secrets.choice(alphabet) for _ in range(length))

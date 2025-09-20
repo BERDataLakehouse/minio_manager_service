@@ -6,20 +6,20 @@ readme = "README.md"
 requires-python = ">=3.13"
 
 dependencies = [
-    "fastapi==0.116.1 ",
+    "fastapi==0.116.2",
     "uvicorn==0.35.0",
     "httpx==0.28.1",
     "python-dotenv==1.1.1",
-    "pydantic==2.11.7",
+    "pydantic==2.11.9",
     "aiohttp==3.12.15",
     "cacheout==0.16.0",
-    "aiobotocore==2.23.2",
+    "aiobotocore==2.24.2",
     "redis==6.4.0",
 ]
 
 [dependency-groups]
 dev = [
-    "ipython==9.4.0",
-    "pytest==8.4.1",
-    "pytest-cov==6.2.1",
+    "ipython==9.5.0",
+    "pytest==8.4.2",
+    "pytest-cov==7.0.0",
 ]

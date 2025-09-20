@@ -157,7 +157,14 @@ class PolicyBuilder:
             )
 
         # Normalize path (remove trailing slashes and /* patterns for consistent handling)
-        normalized_path = relative_path.rstrip("/").removesuffix("/*")
+        # But preserve governance wildcards (patterns ending with single *)
+        normalized_path = relative_path.rstrip("/")
+
+        # Only remove /* suffix if it's not a governance wildcard pattern
+        # Governance patterns end with single * (like u_tgu2__*)
+        # Path suffixes end with /* (like path/*)
+        if normalized_path.endswith("/*"):
+            normalized_path = normalized_path.removesuffix("/*")
 
         if not normalized_path:
             raise PolicyOperationError("Path cannot be empty after bucket name")
@@ -323,6 +330,16 @@ class PolicyBuilder:
         folder_arn = f"arn:aws:s3:::{bucket_name}/{clean_path}"
         folder_contents_arn = f"arn:aws:s3:::{bucket_name}/{clean_path}/*"
 
+        # For governance paths with wildcards, also add parent directory permissions
+        parent_arns = []
+        if clean_path.endswith("*"):
+            path_parts = clean_path.split("/")
+            if len(path_parts) > 1:
+                parent_path = "/".join(path_parts[:-1])
+                parent_folder_arn = f"arn:aws:s3:::{bucket_name}/{parent_path}"
+                parent_contents_arn = f"arn:aws:s3:::{bucket_name}/{parent_path}/*"
+                parent_arns = [parent_folder_arn, parent_contents_arn]
+
         # Add permissions based on level
         if permission_level in [
             PolicyPermissionLevel.READ,
@@ -332,6 +349,9 @@ class PolicyBuilder:
             # For GET operations, need both folder and folder/* for listing and reading
             self._add_object_permission(folder_arn, PolicyAction.GET_OBJECT)
             self._add_object_permission(folder_contents_arn, PolicyAction.GET_OBJECT)
+            # Add parent directory GET permissions for governance paths
+            for parent_arn in parent_arns:
+                self._add_object_permission(parent_arn, PolicyAction.GET_OBJECT)
 
         if permission_level in [
             PolicyPermissionLevel.WRITE,
@@ -370,4 +390,21 @@ class PolicyBuilder:
 
     def _create_list_bucket_prefixes(self, normalized_path: str) -> list[str]:
         """Create list of prefixes for ListBucket operations."""
-        return [normalized_path, f"{normalized_path}/*"]
+        prefixes = [normalized_path, f"{normalized_path}/*"]
+
+        # For governance paths with wildcards, also add parent directory access
+        # This allows users to navigate to paths like users-sql-warehouse/tgu2/u_tgu2__*
+        # by granting access to the parent directory users-sql-warehouse/tgu2
+        if normalized_path.endswith("*"):
+            # Extract parent directory by removing the last path component
+            path_parts = normalized_path.split("/")
+            if len(path_parts) > 1:
+                parent_path = "/".join(path_parts[:-1])
+                if parent_path not in prefixes:
+                    prefixes.append(parent_path)
+                # Also add parent_path/* to allow listing directory contents
+                parent_wildcard = f"{parent_path}/*"
+                if parent_wildcard not in prefixes:
+                    prefixes.append(parent_wildcard)
+
+        return prefixes
