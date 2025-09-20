@@ -12,4 +12,7 @@ on:
 jobs:
   build:
     uses: BERDataLakehouse/.github/.github/workflows/build_docker_image.yaml@main
+    permissions:
+      contents: read
+      packages: write
     secrets: inherit
