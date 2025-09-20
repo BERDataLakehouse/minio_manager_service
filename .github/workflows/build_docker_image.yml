@@ -12,3 +12,4 @@ on:
 jobs:
   build:
     uses: ./.github/workflow-templates/build_docker_image.yaml
+    secrets: inherit
