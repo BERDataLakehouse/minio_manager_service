@@ -19,8 +19,12 @@ CDM_DEFAULT_USERS_GENERAL_WAREHOUSE_PREFIX = os.getenv(
     "CDM_DEFAULT_USERS_GENERAL_WAREHOUSE_PREFIX", "users-general-warehouse"
 )
 
-CDM_DEFAULT_GROUPS_GENERAL_WAREHOUSE_PREFIX = os.getenv(
-    "CDM_DEFAULT_GROUPS_GENERAL_WAREHOUSE_PREFIX", "groups-general-warehouse"
+CDM_DEFAULT_TENANT_GENERAL_WAREHOUSE_PREFIX = os.getenv(
+    "CDM_DEFAULT_TENANT_GENERAL_WAREHOUSE_PREFIX", "tenant-general-warehouse"
+)
+
+CDM_DEFAULT_TENANT_SQL_WAREHOUSE_PREFIX = os.getenv(
+    "CDM_DEFAULT_TENANT_SQL_WAREHOUSE_PREFIX", "tenant-sql-warehouse"
 )
 
 
@@ -97,21 +101,33 @@ class MinIOConfig(BaseModel):
         ),
     ] = CDM_DEFAULT_USERS_GENERAL_WAREHOUSE_PREFIX
 
-    groups_general_warehouse_prefix: Annotated[
+    tenant_general_warehouse_prefix: Annotated[
         str,
         Field(
             min_length=1,
             max_length=1024,
-            default=CDM_DEFAULT_GROUPS_GENERAL_WAREHOUSE_PREFIX,
+            default=CDM_DEFAULT_TENANT_GENERAL_WAREHOUSE_PREFIX,
             description="Prefix for group general warehouse directories",
-            examples=[CDM_DEFAULT_GROUPS_GENERAL_WAREHOUSE_PREFIX],
+            examples=[CDM_DEFAULT_TENANT_GENERAL_WAREHOUSE_PREFIX],
         ),
-    ] = CDM_DEFAULT_GROUPS_GENERAL_WAREHOUSE_PREFIX
+    ] = CDM_DEFAULT_TENANT_GENERAL_WAREHOUSE_PREFIX
+
+    tenant_sql_warehouse_prefix: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=1024,
+            default=CDM_DEFAULT_TENANT_SQL_WAREHOUSE_PREFIX,
+            description="Prefix for tenant SparkSQL warehouse directories",
+            examples=[CDM_DEFAULT_TENANT_SQL_WAREHOUSE_PREFIX],
+        ),
+    ] = CDM_DEFAULT_TENANT_SQL_WAREHOUSE_PREFIX
 
     @field_validator(
         "users_sql_warehouse_prefix",
         "users_general_warehouse_prefix",
-        "groups_general_warehouse_prefix",
+        "tenant_general_warehouse_prefix",
+        "tenant_sql_warehouse_prefix",
     )
     @classmethod
     def validate_warehouse_prefix_str(cls, v: str) -> str:
