@@ -11,5 +11,5 @@ on:
 
 jobs:
   build:
-    uses: ./.github/workflow-templates/build_docker_image.yaml
+    uses: ./.github/workflow-templates/build_docker_image.yaml@main
     secrets: inherit
