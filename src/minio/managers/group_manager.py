@@ -21,7 +21,8 @@ class GroupManager(ResourceManager[GroupModel]):
 
     def __init__(self, client: MinIOClient, config: MinIOConfig):
         super().__init__(client, config)
-        self.groups_general_warehouse_prefix = config.groups_general_warehouse_prefix
+        self.tenant_general_warehouse_prefix = config.tenant_general_warehouse_prefix
+        self.tenant_sql_warehouse_prefix = config.tenant_sql_warehouse_prefix
 
         # Lazy initialization of dependent managers to avoid circular imports
         self._policy_manager = None
@@ -424,10 +425,11 @@ class GroupManager(ResourceManager[GroupModel]):
     ) -> None:
         """Create the group's shared directory structure."""
         group_paths = [
-            f"{self.groups_general_warehouse_prefix}/{group_name}/",
-            f"{self.groups_general_warehouse_prefix}/{group_name}/shared/",
-            f"{self.groups_general_warehouse_prefix}/{group_name}/datasets/",
-            f"{self.groups_general_warehouse_prefix}/{group_name}/projects/",
+            f"{self.tenant_sql_warehouse_prefix}/{group_name}/",
+            f"{self.tenant_general_warehouse_prefix}/{group_name}/",
+            f"{self.tenant_general_warehouse_prefix}/{group_name}/shared/",
+            f"{self.tenant_general_warehouse_prefix}/{group_name}/datasets/",
+            f"{self.tenant_general_warehouse_prefix}/{group_name}/projects/",
         ]
 
         # Create directory markers
@@ -455,24 +457,32 @@ Directory structure:
 Happy collaborating!
 """.encode()
 
-        welcome_key = f"{self.groups_general_warehouse_prefix}/{group_name}/README.txt"
+        welcome_key = f"{self.tenant_general_warehouse_prefix}/{group_name}/README.txt"
         await self.client.put_object(bucket_name, welcome_key, welcome_content)
 
     async def _delete_group_shared_directory(self, group_name: str) -> None:
-        """Delete group shared directory and all contents."""
+        """Delete group shared directories and all contents (both SQL and general warehouse)."""
         bucket_name = self.config.default_bucket
-        group_prefix = f"{self.groups_general_warehouse_prefix}/{group_name}/"
+        
+        # Delete both warehouse directories
+        prefixes = [
+            f"{self.tenant_general_warehouse_prefix}/{group_name}/",
+            f"{self.tenant_sql_warehouse_prefix}/{group_name}/",
+        ]
 
-        try:
-            # List all objects in group directory
-            objects = await self.client.list_objects(
-                bucket_name, group_prefix, list_all=True
-            )
+        for group_prefix in prefixes:
+            try:
+                # List all objects in group directory
+                objects = await self.client.list_objects(
+                    bucket_name, group_prefix, list_all=True
+                )
 
-            # Delete objects
-            for obj_key in objects:
-                await self.client.delete_object(bucket_name, obj_key)
-        except Exception as e:
-            logger.warning(
-                f"Failed to delete group shared directory for {group_name}: {e}"
-            )
+                # Delete objects
+                for obj_key in objects:
+                    await self.client.delete_object(bucket_name, obj_key)
+                    
+                logger.info(f"Deleted {len(objects)} objects from {group_prefix}")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to delete group directory {group_prefix} for {group_name}: {e}"
+                )
