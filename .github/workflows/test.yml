@@ -7,7 +7,7 @@ on:
     branches: [ main, master, develop ]
 
 jobs:
-  cdm-mcp-server-tests:
+  minio-manager-service-tests:
     runs-on: ubuntu-22.04
     strategy:
       matrix:
@@ -34,10 +34,4 @@ jobs:
 
     - name: Run tests
       shell: bash
-      run: PYTHONPATH=. pytest --cov=src --cov-report=xml tests
-
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v5
-      with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-        fail_ci_if_error: true
+      run: PYTHONPATH=. uv run pytest --cov=src --cov-report=xml tests

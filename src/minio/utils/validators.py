@@ -130,20 +130,24 @@ def validate_group_name(group_name: str) -> str:
     if len(group_name) < 2 or len(group_name) > 64:
         raise GroupOperationError("Group name must be between 2 and 64 characters")
 
-    # Character constraints - more restrictive for group names
-    if not re.match(r"^[a-zA-Z0-9_-]+$", group_name):
+    # Character constraints - only alphanumeric and underscores
+    if not re.match(r"^[a-zA-Z0-9_]+$", group_name):
         raise GroupOperationError(
-            "Group name can only contain letters, numbers, hyphens, and underscores"
+            "Group name can only contain letters, numbers, and underscores"
         )
 
     # Must start with letter for better readability
     if not group_name[0].isalpha():
         raise GroupOperationError("Group name must start with a letter")
 
-    # No consecutive special characters
-    if re.search(r"[_-]{2,}", group_name):
+    # Cannot end with underscore
+    if group_name.endswith("_"):
+        raise GroupOperationError("Group name cannot end with an underscore")
+
+    # No consecutive underscores
+    if "__" in group_name:
         raise GroupOperationError(
-            "Group name cannot contain consecutive special characters"
+            "Group name cannot contain consecutive underscores"
         )
 
     # Reserved group names for data governance
