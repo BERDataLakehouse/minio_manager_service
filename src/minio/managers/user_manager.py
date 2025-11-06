@@ -21,7 +21,7 @@ RESOURCE_TYPE: str = "user"
 
 # This is a global group that all users are automatically added to
 # This group can be used to apply policies, share paths, etc. to all users
-GLOBAL_USER_GROUP = "global_user_group"
+GLOBAL_USER_GROUP = "globalusers"
 
 
 class UserManager(ResourceManager[UserModel]):
