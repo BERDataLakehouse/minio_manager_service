@@ -19,9 +19,7 @@ class Settings(BaseModel):
     """
 
     app_name: str = "MinIO Manager Service"
-    app_description: str = (
-        "FastAPI service to manage MinIO users, groups, and policies for data governance with KBase authentication integration"
-    )
+    app_description: str = "FastAPI service to manage MinIO users, groups, and policies for data governance with KBase authentication integration"
     api_version: str = APP_VERSION
     log_level: str = Field(
         default=os.getenv("LOG_LEVEL", "INFO"),

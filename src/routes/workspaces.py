@@ -90,7 +90,9 @@ class UserSqlWarehousePrefixResponse(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
 
     username: Annotated[str, Field(description="Username", min_length=1)]
-    sql_warehouse_prefix: Annotated[str, Field(description="User's SQL warehouse prefix")]
+    sql_warehouse_prefix: Annotated[
+        str, Field(description="User's SQL warehouse prefix")
+    ]
 
 
 class GroupSqlWarehousePrefixResponse(BaseModel):
@@ -99,7 +101,9 @@ class GroupSqlWarehousePrefixResponse(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
 
     group_name: Annotated[str, Field(description="Group name", min_length=1)]
-    sql_warehouse_prefix: Annotated[str, Field(description="Group's SQL warehouse prefix")]
+    sql_warehouse_prefix: Annotated[
+        str, Field(description="Group's SQL warehouse prefix")
+    ]
 
 
 class NamespacePrefixResponse(BaseModel):
@@ -108,9 +112,19 @@ class NamespacePrefixResponse(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
 
     username: Annotated[str, Field(description="Username", min_length=1)]
-    user_namespace_prefix: Annotated[str, Field(description="User's governance namespace prefix (e.g., u_user__)")]
-    tenant: Annotated[str | None, Field(description="Tenant (group) name", default=None)]
-    tenant_namespace_prefix: Annotated[str | None, Field(description="Tenant's governance namespace prefix (e.g., tenant_)", default=None)]
+    user_namespace_prefix: Annotated[
+        str, Field(description="User's governance namespace prefix (e.g., u_user__)")
+    ]
+    tenant: Annotated[
+        str | None, Field(description="Tenant (group) name", default=None)
+    ]
+    tenant_namespace_prefix: Annotated[
+        str | None,
+        Field(
+            description="Tenant's governance namespace prefix (e.g., tenant_)",
+            default=None,
+        ),
+    ]
 
 
 # ===== USER WORKSPACE ENDPOINTS =====
@@ -291,7 +305,9 @@ async def get_group_sql_warehouse_prefix(
         sql_warehouse_prefix=sql_warehouse_prefix,
     )
 
-    logger.info(f"Retrieved SQL warehouse prefix for group {group_name} by user {username}")
+    logger.info(
+        f"Retrieved SQL warehouse prefix for group {group_name} by user {username}"
+    )
     return response
 
 
@@ -333,7 +349,9 @@ async def get_my_sql_warehouse_prefix(
 async def get_namespace_prefix(
     authenticated_user: Annotated[KBaseUser, Depends(auth)],
     request: Request,
-    tenant: Annotated[str | None, Query(description="Optional tenant (group) name", min_length=1)] = None,
+    tenant: Annotated[
+        str | None, Query(description="Optional tenant (group) name", min_length=1)
+    ] = None,
 ):
     """Return governance namespace prefix for user and optionally for specified tenant.
 
@@ -355,7 +373,9 @@ async def get_namespace_prefix(
         # Check if user is a member of the group
         is_member = await app_state.group_manager.is_user_in_group(username, tenant)
         if not is_member:
-            raise MinIOManagerError(f"User {username} is not a member of the group {tenant}")
+            raise MinIOManagerError(
+                f"User {username} is not a member of the group {tenant}"
+            )
         tenant_ns_prefix = generate_group_governance_prefix(tenant)
 
     return NamespacePrefixResponse(

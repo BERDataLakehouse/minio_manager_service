@@ -10,4 +10,4 @@ def test_error_mapping_imports():
 
 def test_noop():
     """Simple placeholder test."""
-    assert 1 == 1 
+    assert 1 == 1

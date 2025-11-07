@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 
 class PolicyBuilder:
-
     def __init__(self, policy_model: PolicyModel, bucket_name: str):
         """
         Initialize the PolicyBuilder with a policy model and bucket name.

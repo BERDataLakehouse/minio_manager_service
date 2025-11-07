@@ -59,9 +59,10 @@ async def get_credentials(
         access_key, secret_key = user_model.access_key, user_model.secret_key
     else:
         # Get fresh credentials (rotates secret key)
-        access_key, secret_key = (
-            await app_state.user_manager.get_or_rotate_user_credentials(username)
-        )
+        (
+            access_key,
+            secret_key,
+        ) = await app_state.user_manager.get_or_rotate_user_credentials(username)
 
     response = CredentialsResponse(
         username=username,

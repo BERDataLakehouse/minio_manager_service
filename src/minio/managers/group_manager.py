@@ -152,7 +152,6 @@ class GroupManager(ResourceManager[GroupModel]):
             creator: Username of the user creating the group (becomes initial member)
         """
         async with self.operation_context("create_group"):
-
             # Create group with initial members (MinIO requires at least one member)
             members = [creator]
 
@@ -463,7 +462,7 @@ Happy collaborating!
     async def _delete_group_shared_directory(self, group_name: str) -> None:
         """Delete group shared directories and all contents (both SQL and general warehouse)."""
         bucket_name = self.config.default_bucket
-        
+
         # Delete both warehouse directories
         prefixes = [
             f"{self.tenant_general_warehouse_prefix}/{group_name}/",
@@ -480,7 +479,7 @@ Happy collaborating!
                 # Delete objects
                 for obj_key in objects:
                     await self.client.delete_object(bucket_name, obj_key)
-                    
+
                 logger.info(f"Deleted {len(objects)} objects from {group_prefix}")
             except Exception as e:
                 logger.warning(

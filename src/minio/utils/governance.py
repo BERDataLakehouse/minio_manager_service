@@ -40,5 +40,3 @@ def generate_group_governance_prefix(group_name: str) -> str:
     """
     validated_group_name = validate_group_name(group_name)
     return _format_tenant_governance_prefix(validated_group_name)
-
-

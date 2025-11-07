@@ -29,4 +29,4 @@ def test_configure_logging():
 
 def test_noop():
     """Simple placeholder test."""
-    assert 1 == 1 
+    assert 1 == 1

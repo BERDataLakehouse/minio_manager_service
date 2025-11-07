@@ -37,7 +37,7 @@ class MinIOCommandBuilder:
             endpoint,
             access_key,
             secret_key,
-            "--api",  
+            "--api",
             "S3v4",
         ]
 

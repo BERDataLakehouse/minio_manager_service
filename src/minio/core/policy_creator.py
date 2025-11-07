@@ -321,7 +321,9 @@ class PolicyCreator:
         # Add access to user's SQL warehouse with table naming enforcement
         # Only allow tables/databases that follow u_username__* pattern
         governance_prefix = generate_user_governance_prefix(self.target_name)
-        user_sql_warehouse_governed_path = f"{self.user_sql_warehouse_path}/{governance_prefix}*"
+        user_sql_warehouse_governed_path = (
+            f"{self.user_sql_warehouse_path}/{governance_prefix}*"
+        )
         self._add_path_access_via_builder(
             self.config.default_bucket,
             user_sql_warehouse_governed_path,
@@ -356,7 +358,9 @@ class PolicyCreator:
         # Add access to group's SQL warehouse with table naming enforcement
         # Only allow tables/databases that follow t_groupname__* pattern
         governance_prefix = generate_group_governance_prefix(self.target_name)
-        tenant_sql_warehouse_governed_path = f"{self.tenant_sql_warehouse_path}/{governance_prefix}*"
+        tenant_sql_warehouse_governed_path = (
+            f"{self.tenant_sql_warehouse_path}/{governance_prefix}*"
+        )
         self._add_path_access_via_builder(
             self.config.default_bucket,
             tenant_sql_warehouse_governed_path,
