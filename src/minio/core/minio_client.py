@@ -263,10 +263,12 @@ class MinIOClient:
             )
             raise BucketOperationError(f"Object deletion failed: {e}") from e
 
-    async def list_objects(self, bucket_name: str, prefix: str = "", list_all: bool = False) -> List[str]:
+    async def list_objects(
+        self, bucket_name: str, prefix: str = "", list_all: bool = False
+    ) -> List[str]:
         """
         Lists objects in a bucket, optionally filtered by a prefix.
-        
+
         Args:
             bucket_name: The name of the bucket to list objects from.
             prefix: An optional prefix to filter the object keys.
@@ -288,7 +290,11 @@ class MinIOClient:
                         page_objects = [obj["Key"] for obj in page["Contents"]]
 
                         # Check if adding this page would exceed the limit (unless list_all=True)
-                        if not list_all and len(objects) + len(page_objects) > MAX_LIST_OBJECTS_COUNT:
+                        if (
+                            not list_all
+                            and len(objects) + len(page_objects)
+                            > MAX_LIST_OBJECTS_COUNT
+                        ):
                             # Add only what we can without exceeding the limit
                             remaining_slots = MAX_LIST_OBJECTS_COUNT - len(objects)
                             objects.extend(page_objects[:remaining_slots])

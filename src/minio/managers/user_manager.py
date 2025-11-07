@@ -227,7 +227,6 @@ class UserManager(ResourceManager[UserModel]):
             username: The username to retrieve information for
         """
         async with self.operation_context("get_user"):
-
             user_exists = await self.resource_exists(username)
             if not user_exists:
                 raise UserOperationError(f"User {username} not found")
@@ -281,7 +280,6 @@ class UserManager(ResourceManager[UserModel]):
             username: The username to generate fresh credentials for
         """
         async with self.operation_context("get_or_rotate_user_credentials"):
-
             # For unified credentials approach:
             # - Access key is always the username
             # - Secret key is a fresh generated password that we set as the user's password

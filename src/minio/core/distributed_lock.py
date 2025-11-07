@@ -9,7 +9,9 @@ from ...service.exceptions import PolicyOperationError
 
 logger = logging.getLogger(__name__)
 
-REDIS_LOCK_TIMEOUT = 30  # seconds; ensure this safely exceeds worst-case critical section duration
+REDIS_LOCK_TIMEOUT = (
+    30  # seconds; ensure this safely exceeds worst-case critical section duration
+)
 
 
 class DistributedLockManager:

@@ -266,7 +266,7 @@ def validate_s3_path(path: str) -> str:
         raise PolicyValidationError(
             "S3 path must include an object key (path within bucket) for data governance operations"
         )
-    
+
     key = path_parts[1]
     _validate_s3_object_key(key)
 
