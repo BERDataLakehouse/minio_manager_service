@@ -7,14 +7,13 @@ table/database naming rules for users and groups (tenants).
 
 from .validators import validate_group_name, validate_username
 
-# Markers and separator used in governance prefixes
-USER_PREFIX_MARKER = "u_"
+# Separators used in governance prefixes
 USER_GOVERNANCE_SUFFIX_SEPARATOR = "__"
 TENANT_GOVERNANCE_SUFFIX_SEPARATOR = "_"
 
 
 def _format_user_governance_prefix(validated_username: str) -> str:
-    return f"{USER_PREFIX_MARKER}{validated_username}{USER_GOVERNANCE_SUFFIX_SEPARATOR}"
+    return f"{validated_username}{USER_GOVERNANCE_SUFFIX_SEPARATOR}"
 
 
 def _format_tenant_governance_prefix(validated_tenant_name: str) -> str:
@@ -24,7 +23,7 @@ def _format_tenant_governance_prefix(validated_tenant_name: str) -> str:
 def generate_user_governance_prefix(username: str) -> str:
     """Return the governance prefix for a user's SQL warehouse names.
 
-    Example: username "alice" -> "u_alice__"
+    Example: username "alice" -> "alice__"
     """
     validated_username = validate_username(username)
     return _format_user_governance_prefix(validated_username)

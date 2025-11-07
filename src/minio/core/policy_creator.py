@@ -319,7 +319,7 @@ class PolicyCreator:
     def _create_default_user_home_policy(self) -> "PolicyCreator":
         """Create default user home policy with SQL and general warehouse paths."""
         # Add access to user's SQL warehouse with table naming enforcement
-        # Only allow tables/databases that follow u_username__* pattern
+        # Only allow tables/databases that follow username__* pattern
         governance_prefix = generate_user_governance_prefix(self.target_name)
         user_sql_warehouse_governed_path = (
             f"{self.user_sql_warehouse_path}/{governance_prefix}*"

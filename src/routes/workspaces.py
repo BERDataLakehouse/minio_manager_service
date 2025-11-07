@@ -113,7 +113,7 @@ class NamespacePrefixResponse(BaseModel):
 
     username: Annotated[str, Field(description="Username", min_length=1)]
     user_namespace_prefix: Annotated[
-        str, Field(description="User's governance namespace prefix (e.g., u_user__)")
+        str, Field(description="User's governance namespace prefix (e.g., user__)")
     ]
     tenant: Annotated[
         str | None, Field(description="Tenant (group) name", default=None)

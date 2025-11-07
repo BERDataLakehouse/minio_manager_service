@@ -160,7 +160,7 @@ class PolicyBuilder:
         normalized_path = relative_path.rstrip("/")
 
         # Only remove /* suffix if it's not a governance wildcard pattern
-        # Governance patterns end with single * (like u_tgu2__*)
+        # Governance patterns end with single * (like tgu2__*)
         # Path suffixes end with /* (like path/*)
         if normalized_path.endswith("/*"):
             normalized_path = normalized_path.removesuffix("/*")
@@ -392,7 +392,7 @@ class PolicyBuilder:
         prefixes = [normalized_path, f"{normalized_path}/*"]
 
         # For governance paths with wildcards, also add parent directory access
-        # This allows users to navigate to paths like users-sql-warehouse/tgu2/u_tgu2__*
+        # This allows users to navigate to paths like users-sql-warehouse/tgu2/tgu2__*
         # by granting access to the parent directory users-sql-warehouse/tgu2
         if normalized_path.endswith("*"):
             # Extract parent directory by removing the last path component
