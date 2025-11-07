@@ -163,8 +163,8 @@ class GroupManager(ResourceManager[GroupModel]):
             # Create group policy
             try:
                 policy_model = await self.policy_manager.get_group_policy(group_name)
-            except Exception as e:
-                logger.warning(f"Failed to get group policy - creating new policy")
+            except Exception:
+                logger.warning("Failed to get group policy - creating new policy")
                 policy_model = await self.policy_manager.ensure_group_policy(group_name)
 
             # Create the group

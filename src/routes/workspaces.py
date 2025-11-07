@@ -110,7 +110,7 @@ class NamespacePrefixResponse(BaseModel):
     username: Annotated[str, Field(description="Username", min_length=1)]
     user_namespace_prefix: Annotated[str, Field(description="User's governance namespace prefix (e.g., u_user__)")]
     tenant: Annotated[str | None, Field(description="Tenant (group) name", default=None)]
-    tenant_namespace_prefix: Annotated[str | None, Field(description="Tenant's governance namespace prefix (e.g., t_tenant__)", default=None)]
+    tenant_namespace_prefix: Annotated[str | None, Field(description="Tenant's governance namespace prefix (e.g., tenant_)", default=None)]
 
 
 # ===== USER WORKSPACE ENDPOINTS =====

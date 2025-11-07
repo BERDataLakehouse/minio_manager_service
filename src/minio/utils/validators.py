@@ -114,6 +114,14 @@ def validate_group_name(group_name: str) -> str:
     """
     Validate group name for data governance workflows.
 
+    Group names (tenants) are used to construct namespace prefixes in the format
+    {tenant_name}_{namespace_name}. To prevent ambiguity with this separator,
+    underscores are NOT allowed in tenant names.
+
+    Additionally, group names must be lowercase only because Hive/Spark Metastore
+    stores all database names in lowercase. Mixed case names (e.g., 'KBase' vs 'kbase')
+    would create namespace collisions in Hive.
+
     Args:
         group_name: Group name to validate
 
@@ -130,25 +138,20 @@ def validate_group_name(group_name: str) -> str:
     if len(group_name) < 2 or len(group_name) > 64:
         raise GroupOperationError("Group name must be between 2 and 64 characters")
 
-    # Character constraints - only alphanumeric and underscores
-    if not re.match(r"^[a-zA-Z0-9_]+$", group_name):
+    # Character constraints - lowercase alphanumeric only (NO underscores or uppercase)
+    # - Underscores are reserved as the namespace separator: {tenant}_{namespace}
+    # - Uppercase letters are forbidden because Hive stores names in lowercase,
+    #   which would cause collisions: 'KBase' and 'kbase' → both become 'kbase_'
+    if not re.match(r"^[a-z0-9]+$", group_name):
         raise GroupOperationError(
-            "Group name can only contain letters, numbers, and underscores"
+            "Group name can only contain lowercase letters and numbers. "
+            "Uppercase letters and underscores are not allowed. "
+            "(Hive stores all names in lowercase, so 'KBase' and 'kbase' would collide.)"
         )
 
     # Must start with letter for better readability
     if not group_name[0].isalpha():
         raise GroupOperationError("Group name must start with a letter")
-
-    # Cannot end with underscore
-    if group_name.endswith("_"):
-        raise GroupOperationError("Group name cannot end with an underscore")
-
-    # No consecutive underscores
-    if "__" in group_name:
-        raise GroupOperationError(
-            "Group name cannot contain consecutive underscores"
-        )
 
     # Reserved group names for data governance
     reserved_groups = {
