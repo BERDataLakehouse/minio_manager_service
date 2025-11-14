@@ -41,6 +41,7 @@ services:
       - MINIO_ROOT_PASSWORD=minio123
       - KBASE_AUTH_URL=https://ci.kbase.us/services/auth/
       - KBASE_ADMIN_ROLES=CDM_JUPYTERHUB_ADMIN
+      - KBASE_REQUIRED_ROLES=BERDL_USER
       - REDIS_URL=redis://redis:6379
     ports:
       - "8000:8000"
