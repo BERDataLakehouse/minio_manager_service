@@ -105,7 +105,13 @@ def mock_group_manager():
 
 
 @pytest.fixture
-def user_manager(mock_minio_client, mock_minio_config, mock_executor, mock_policy_manager, mock_group_manager):
+def user_manager(
+    mock_minio_client,
+    mock_minio_config,
+    mock_executor,
+    mock_policy_manager,
+    mock_group_manager,
+):
     """Create a UserManager with mocked dependencies."""
     manager = UserManager(
         client=mock_minio_client,
@@ -134,12 +140,16 @@ def sample_user_home_policy():
                     effect=PolicyEffect.ALLOW,
                     action=PolicyAction.LIST_BUCKET,
                     resource=["arn:aws:s3:::test-bucket"],
-                    condition={"StringLike": {"s3:prefix": ["users-sql-warehouse/testuser/*"]}},
+                    condition={
+                        "StringLike": {"s3:prefix": ["users-sql-warehouse/testuser/*"]}
+                    },
                 ),
                 PolicyStatement(
                     effect=PolicyEffect.ALLOW,
                     action=PolicyAction.GET_OBJECT,
-                    resource=["arn:aws:s3:::test-bucket/users-sql-warehouse/testuser/*"],
+                    resource=[
+                        "arn:aws:s3:::test-bucket/users-sql-warehouse/testuser/*"
+                    ],
                 ),
             ],
         ),
@@ -282,11 +292,20 @@ class TestCreateUser:
 
     @pytest.mark.asyncio
     async def test_creates_new_user_successfully(
-        self, user_manager, mock_executor, mock_policy_manager, mock_group_manager, sample_user_home_policy, sample_user_system_policy
+        self,
+        user_manager,
+        mock_executor,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
     ):
         """Test creating a new user with all components."""
         mock_executor._execute_command.return_value = MagicMock(success=True, stderr="")
-        mock_policy_manager.ensure_user_policies.return_value = (sample_user_home_policy, sample_user_system_policy)
+        mock_policy_manager.ensure_user_policies.return_value = (
+            sample_user_home_policy,
+            sample_user_system_policy,
+        )
         user_manager.resource_exists = AsyncMock(return_value=False)
 
         result = await user_manager.create_user("testuser")
@@ -300,11 +319,20 @@ class TestCreateUser:
 
     @pytest.mark.asyncio
     async def test_creates_user_with_provided_password(
-        self, user_manager, mock_executor, mock_policy_manager, mock_group_manager, sample_user_home_policy, sample_user_system_policy
+        self,
+        user_manager,
+        mock_executor,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
     ):
         """Test creating user with explicit password."""
         mock_executor._execute_command.return_value = MagicMock(success=True, stderr="")
-        mock_policy_manager.ensure_user_policies.return_value = (sample_user_home_policy, sample_user_system_policy)
+        mock_policy_manager.ensure_user_policies.return_value = (
+            sample_user_home_policy,
+            sample_user_system_policy,
+        )
         user_manager.resource_exists = AsyncMock(return_value=False)
 
         result = await user_manager.create_user("testuser", password="mypassword123")
@@ -313,12 +341,25 @@ class TestCreateUser:
 
     @pytest.mark.asyncio
     async def test_creates_user_idempotent(
-        self, user_manager, mock_executor, mock_policy_manager, mock_group_manager, sample_user_home_policy, sample_user_system_policy
+        self,
+        user_manager,
+        mock_executor,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
     ):
         """Test that create_user is idempotent (can be called multiple times)."""
-        mock_policy_manager.ensure_user_policies.return_value = (sample_user_home_policy, sample_user_system_policy)
-        user_manager.resource_exists = AsyncMock(return_value=True)  # User already exists
-        mock_policy_manager.is_policies_attached_to_user.return_value = True  # Policies attached
+        mock_policy_manager.ensure_user_policies.return_value = (
+            sample_user_home_policy,
+            sample_user_system_policy,
+        )
+        user_manager.resource_exists = AsyncMock(
+            return_value=True
+        )  # User already exists
+        mock_policy_manager.is_policies_attached_to_user.return_value = (
+            True  # Policies attached
+        )
 
         result = await user_manager.create_user("testuser")
 
@@ -327,31 +368,54 @@ class TestCreateUser:
 
     @pytest.mark.asyncio
     async def test_creates_global_user_group_if_not_exists(
-        self, user_manager, mock_executor, mock_policy_manager, mock_group_manager, sample_user_home_policy, sample_user_system_policy
+        self,
+        user_manager,
+        mock_executor,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
     ):
         """Test that global user group is created if it doesn't exist."""
         mock_executor._execute_command.return_value = MagicMock(success=True, stderr="")
-        mock_policy_manager.ensure_user_policies.return_value = (sample_user_home_policy, sample_user_system_policy)
+        mock_policy_manager.ensure_user_policies.return_value = (
+            sample_user_home_policy,
+            sample_user_system_policy,
+        )
         user_manager.resource_exists = AsyncMock(return_value=False)
         mock_group_manager.resource_exists.return_value = False  # Group doesn't exist
 
         await user_manager.create_user("testuser")
 
-        mock_group_manager.create_group.assert_called_once_with(GLOBAL_USER_GROUP, "testuser")
+        mock_group_manager.create_group.assert_called_once_with(
+            GLOBAL_USER_GROUP, "testuser"
+        )
 
     @pytest.mark.asyncio
     async def test_create_user_validates_username(self, user_manager):
         """Test that create_user validates the username."""
-        with pytest.raises(UserOperationError):  # Should raise validation error for reserved
+        with pytest.raises(
+            UserOperationError
+        ):  # Should raise validation error for reserved
             await user_manager.create_user("admin")
 
     @pytest.mark.asyncio
     async def test_create_user_command_failure(
-        self, user_manager, mock_executor, mock_policy_manager, sample_user_home_policy, sample_user_system_policy
+        self,
+        user_manager,
+        mock_executor,
+        mock_policy_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
     ):
         """Test create_user handles command failure."""
-        mock_executor._execute_command.return_value = MagicMock(success=False, stderr="Command failed")
-        mock_policy_manager.ensure_user_policies.return_value = (sample_user_home_policy, sample_user_system_policy)
+        mock_executor._execute_command.return_value = MagicMock(
+            success=False, stderr="Command failed"
+        )
+        mock_policy_manager.ensure_user_policies.return_value = (
+            sample_user_home_policy,
+            sample_user_system_policy,
+        )
         user_manager.resource_exists = AsyncMock(return_value=False)
 
         with pytest.raises(UserOperationError) as exc_info:
@@ -361,11 +425,21 @@ class TestCreateUser:
 
     @pytest.mark.asyncio
     async def test_create_user_creates_directory_structure(
-        self, user_manager, mock_minio_client, mock_executor, mock_policy_manager, mock_group_manager, sample_user_home_policy, sample_user_system_policy
+        self,
+        user_manager,
+        mock_minio_client,
+        mock_executor,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
     ):
         """Test that create_user creates home directory structure."""
         mock_executor._execute_command.return_value = MagicMock(success=True, stderr="")
-        mock_policy_manager.ensure_user_policies.return_value = (sample_user_home_policy, sample_user_system_policy)
+        mock_policy_manager.ensure_user_policies.return_value = (
+            sample_user_home_policy,
+            sample_user_system_policy,
+        )
         user_manager.resource_exists = AsyncMock(return_value=False)
 
         await user_manager.create_user("testuser")
@@ -384,28 +458,46 @@ class TestGetUser:
 
     @pytest.mark.asyncio
     async def test_gets_existing_user(
-        self, user_manager, mock_policy_manager, mock_group_manager, sample_user_home_policy, sample_user_system_policy
+        self,
+        user_manager,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
     ):
         """Test getting information for existing user."""
         user_manager.resource_exists = AsyncMock(return_value=True)
         mock_policy_manager.get_user_home_policy.return_value = sample_user_home_policy
-        mock_policy_manager.get_user_system_policy.return_value = sample_user_system_policy
+        mock_policy_manager.get_user_system_policy.return_value = (
+            sample_user_system_policy
+        )
         mock_group_manager.get_user_groups.return_value = []
 
         result = await user_manager.get_user("testuser")
 
         assert result.username == "testuser"
         assert result.secret_key == "<redacted>"  # Should be redacted
-        assert result.user_policies == [sample_user_home_policy, sample_user_system_policy]
+        assert result.user_policies == [
+            sample_user_home_policy,
+            sample_user_system_policy,
+        ]
 
     @pytest.mark.asyncio
     async def test_gets_user_with_groups(
-        self, user_manager, mock_policy_manager, mock_group_manager, sample_user_home_policy, sample_user_system_policy, sample_group_policy
+        self,
+        user_manager,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
+        sample_group_policy,
     ):
         """Test getting user with group memberships."""
         user_manager.resource_exists = AsyncMock(return_value=True)
         mock_policy_manager.get_user_home_policy.return_value = sample_user_home_policy
-        mock_policy_manager.get_user_system_policy.return_value = sample_user_system_policy
+        mock_policy_manager.get_user_system_policy.return_value = (
+            sample_user_system_policy
+        )
         mock_group_manager.get_user_groups.return_value = ["testgroup"]
         mock_policy_manager.get_group_policy.return_value = sample_group_policy
 
@@ -439,7 +531,9 @@ class TestGetOrRotateCredentials:
         user_manager.resource_exists = AsyncMock(return_value=True)
         mock_executor._execute_command.return_value = MagicMock(success=True, stderr="")
 
-        access_key, secret_key = await user_manager.get_or_rotate_user_credentials("testuser")
+        access_key, secret_key = await user_manager.get_or_rotate_user_credentials(
+            "testuser"
+        )
 
         assert access_key == "testuser"  # Access key is always username
         assert secret_key is not None
@@ -456,10 +550,14 @@ class TestGetOrRotateCredentials:
         assert "not found" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_rotate_credentials_command_failure(self, user_manager, mock_executor):
+    async def test_rotate_credentials_command_failure(
+        self, user_manager, mock_executor
+    ):
         """Test credential rotation handles command failure."""
         user_manager.resource_exists = AsyncMock(return_value=True)
-        mock_executor._execute_command.return_value = MagicMock(success=False, stderr="Update failed")
+        mock_executor._execute_command.return_value = MagicMock(
+            success=False, stderr="Update failed"
+        )
 
         with pytest.raises(UserOperationError) as exc_info:
             await user_manager.get_or_rotate_user_credentials("testuser")
@@ -477,12 +575,19 @@ class TestGetUserPolicies:
 
     @pytest.mark.asyncio
     async def test_gets_user_policies(
-        self, user_manager, mock_policy_manager, mock_group_manager, sample_user_home_policy, sample_user_system_policy
+        self,
+        user_manager,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
     ):
         """Test getting all policies for a user."""
         user_manager.resource_exists = AsyncMock(return_value=True)
         mock_policy_manager.get_user_home_policy.return_value = sample_user_home_policy
-        mock_policy_manager.get_user_system_policy.return_value = sample_user_system_policy
+        mock_policy_manager.get_user_system_policy.return_value = (
+            sample_user_system_policy
+        )
         mock_group_manager.get_user_groups.return_value = []
 
         result = await user_manager.get_user_policies("testuser")
@@ -493,12 +598,20 @@ class TestGetUserPolicies:
 
     @pytest.mark.asyncio
     async def test_gets_policies_with_groups(
-        self, user_manager, mock_policy_manager, mock_group_manager, sample_user_home_policy, sample_user_system_policy, sample_group_policy
+        self,
+        user_manager,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
+        sample_group_policy,
     ):
         """Test getting policies including group policies."""
         user_manager.resource_exists = AsyncMock(return_value=True)
         mock_policy_manager.get_user_home_policy.return_value = sample_user_home_policy
-        mock_policy_manager.get_user_system_policy.return_value = sample_user_system_policy
+        mock_policy_manager.get_user_system_policy.return_value = (
+            sample_user_system_policy
+        )
         mock_group_manager.get_user_groups.return_value = ["testgroup"]
         mock_policy_manager.get_group_policy.return_value = sample_group_policy
 
@@ -529,8 +642,7 @@ class TestCanUserSharePath:
     async def test_can_share_path_in_general_warehouse(self, user_manager):
         """Test user can share path in their general warehouse."""
         result = await user_manager.can_user_share_path(
-            "s3a://test-bucket/users-general-warehouse/testuser/data/",
-            "testuser"
+            "s3a://test-bucket/users-general-warehouse/testuser/data/", "testuser"
         )
         assert result is True
 
@@ -538,8 +650,7 @@ class TestCanUserSharePath:
     async def test_can_share_path_in_sql_warehouse(self, user_manager):
         """Test user can share path in their SQL warehouse."""
         result = await user_manager.can_user_share_path(
-            "s3a://test-bucket/users-sql-warehouse/testuser/data/",
-            "testuser"
+            "s3a://test-bucket/users-sql-warehouse/testuser/data/", "testuser"
         )
         assert result is True
 
@@ -547,8 +658,7 @@ class TestCanUserSharePath:
     async def test_cannot_share_other_user_path(self, user_manager):
         """Test user cannot share another user's path."""
         result = await user_manager.can_user_share_path(
-            "s3a://test-bucket/users-general-warehouse/otheruser/data/",
-            "testuser"
+            "s3a://test-bucket/users-general-warehouse/otheruser/data/", "testuser"
         )
         assert result is False
 
@@ -556,8 +666,7 @@ class TestCanUserSharePath:
     async def test_cannot_share_tenant_path(self, user_manager):
         """Test user cannot share tenant paths."""
         result = await user_manager.can_user_share_path(
-            "s3a://test-bucket/tenant-general-warehouse/somepath/",
-            "testuser"
+            "s3a://test-bucket/tenant-general-warehouse/somepath/", "testuser"
         )
         assert result is False
 
@@ -572,13 +681,23 @@ class TestGetUserAccessiblePaths:
 
     @pytest.mark.asyncio
     async def test_gets_accessible_paths(
-        self, user_manager, mock_policy_manager, mock_group_manager, sample_user_home_policy, sample_user_system_policy
+        self,
+        user_manager,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
     ):
         """Test getting all accessible paths for a user."""
         user_manager.resource_exists = AsyncMock(return_value=True)
         mock_policy_manager.get_user_home_policy.return_value = sample_user_home_policy
-        mock_policy_manager.get_user_system_policy.return_value = sample_user_system_policy
-        mock_policy_manager.get_accessible_paths_from_policy.return_value = ["/path1", "/path2"]
+        mock_policy_manager.get_user_system_policy.return_value = (
+            sample_user_system_policy
+        )
+        mock_policy_manager.get_accessible_paths_from_policy.return_value = [
+            "/path1",
+            "/path2",
+        ]
         mock_group_manager.get_user_groups.return_value = []
 
         result = await user_manager.get_user_accessible_paths("testuser")
@@ -687,24 +806,21 @@ class TestPrivateHelperMethods:
     def test_is_path_in_user_home_general(self, user_manager):
         """Test path detection in general warehouse."""
         result = user_manager._is_path_in_user_home(
-            "s3a://test-bucket/users-general-warehouse/testuser/data/",
-            "testuser"
+            "s3a://test-bucket/users-general-warehouse/testuser/data/", "testuser"
         )
         assert result is True
 
     def test_is_path_in_user_home_sql(self, user_manager):
         """Test path detection in SQL warehouse."""
         result = user_manager._is_path_in_user_home(
-            "s3://test-bucket/users-sql-warehouse/testuser/data/",
-            "testuser"
+            "s3://test-bucket/users-sql-warehouse/testuser/data/", "testuser"
         )
         assert result is True
 
     def test_is_path_not_in_user_home(self, user_manager):
         """Test path detection for paths outside user home."""
         result = user_manager._is_path_in_user_home(
-            "s3a://test-bucket/tenant-general-warehouse/data/",
-            "testuser"
+            "s3a://test-bucket/tenant-general-warehouse/data/", "testuser"
         )
         assert result is False
 
@@ -773,11 +889,20 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_create_user_with_minimum_length_password(
-        self, user_manager, mock_executor, mock_policy_manager, mock_group_manager, sample_user_home_policy, sample_user_system_policy
+        self,
+        user_manager,
+        mock_executor,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
     ):
         """Test creating user with minimum length password."""
         mock_executor._execute_command.return_value = MagicMock(success=True, stderr="")
-        mock_policy_manager.ensure_user_policies.return_value = (sample_user_home_policy, sample_user_system_policy)
+        mock_policy_manager.ensure_user_policies.return_value = (
+            sample_user_home_policy,
+            sample_user_system_policy,
+        )
         user_manager.resource_exists = AsyncMock(return_value=False)
 
         result = await user_manager.create_user("testuser", password="12345678")
@@ -786,12 +911,19 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_handles_empty_group_list(
-        self, user_manager, mock_policy_manager, mock_group_manager, sample_user_home_policy, sample_user_system_policy
+        self,
+        user_manager,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
     ):
         """Test handling user with no group memberships."""
         user_manager.resource_exists = AsyncMock(return_value=True)
         mock_policy_manager.get_user_home_policy.return_value = sample_user_home_policy
-        mock_policy_manager.get_user_system_policy.return_value = sample_user_system_policy
+        mock_policy_manager.get_user_system_policy.return_value = (
+            sample_user_system_policy
+        )
         mock_group_manager.get_user_groups.return_value = []
 
         result = await user_manager.get_user("testuser")

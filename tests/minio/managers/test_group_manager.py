@@ -63,8 +63,13 @@ def mock_executor():
 @pytest.fixture
 def sample_policy_document():
     """Create a valid policy document for testing."""
-    from src.minio.models.policy import PolicyDocument, PolicyStatement, PolicyEffect, PolicyAction
-    
+    from src.minio.models.policy import (
+        PolicyDocument,
+        PolicyStatement,
+        PolicyEffect,
+        PolicyAction,
+    )
+
     return PolicyDocument(
         version="2012-10-17",
         statement=[
@@ -72,9 +77,13 @@ def sample_policy_document():
                 effect=PolicyEffect.ALLOW,
                 action=PolicyAction.LIST_BUCKET,
                 resource="arn:aws:s3:::data-lake",
-                condition={"StringLike": {"s3:prefix": ["groups-general-warehouse/testgroup/*"]}}
+                condition={
+                    "StringLike": {
+                        "s3:prefix": ["groups-general-warehouse/testgroup/*"]
+                    }
+                },
             )
-        ]
+        ],
     )
 
 
@@ -121,33 +130,36 @@ def group_manager_instance(mock_minio_client, mock_minio_config, mock_executor):
 @pytest.fixture
 def sample_group_info_json():
     """Sample JSON response for group info command."""
-    return json.dumps({
-        "status": "success",
-        "groupName": "testgroup",
-        "members": ["user1", "user2", "user3"],
-        "groupStatus": "enabled",
-        "groupPolicy": "group-policy-testgroup"
-    })
+    return json.dumps(
+        {
+            "status": "success",
+            "groupName": "testgroup",
+            "members": ["user1", "user2", "user3"],
+            "groupStatus": "enabled",
+            "groupPolicy": "group-policy-testgroup",
+        }
+    )
 
 
 @pytest.fixture
 def sample_group_list_json():
     """Sample JSON response for group list command."""
-    return json.dumps({
-        "status": "success",
-        "groups": ["testgroup", "devteam", "analysts"]
-    })
+    return json.dumps(
+        {"status": "success", "groups": ["testgroup", "devteam", "analysts"]}
+    )
 
 
 @pytest.fixture
 def sample_empty_group_info_json():
     """Sample JSON response for group info with no members."""
-    return json.dumps({
-        "status": "success",
-        "groupName": "emptygroup",
-        "groupStatus": "enabled",
-        "groupPolicy": "group-policy-emptygroup"
-    })
+    return json.dumps(
+        {
+            "status": "success",
+            "groupName": "emptygroup",
+            "groupStatus": "enabled",
+            "groupPolicy": "group-policy-emptygroup",
+        }
+    )
 
 
 # =============================================================================
@@ -158,7 +170,9 @@ def sample_empty_group_info_json():
 class TestGroupManagerInit:
     """Tests for GroupManager initialization."""
 
-    def test_initialization_with_valid_config(self, mock_minio_client, mock_minio_config):
+    def test_initialization_with_valid_config(
+        self, mock_minio_client, mock_minio_config
+    ):
         """Test successful initialization with valid configuration."""
         manager = GroupManager(mock_minio_client, mock_minio_config)
 
@@ -196,25 +210,46 @@ class TestResourceManagerMethods:
 
     def test_validate_resource_name_valid(self, group_manager_instance):
         """Test _validate_resource_name with valid group names."""
-        assert group_manager_instance._validate_resource_name("testgroup") == "testgroup"
-        assert group_manager_instance._validate_resource_name("devteam123") == "devteam123"
-        assert group_manager_instance._validate_resource_name("analystsquad") == "analystsquad"
+        assert (
+            group_manager_instance._validate_resource_name("testgroup") == "testgroup"
+        )
+        assert (
+            group_manager_instance._validate_resource_name("devteam123") == "devteam123"
+        )
+        assert (
+            group_manager_instance._validate_resource_name("analystsquad")
+            == "analystsquad"
+        )
 
     def test_validate_resource_name_invalid_uppercase(self, group_manager_instance):
         """Test _validate_resource_name rejects uppercase characters."""
         with pytest.raises(GroupOperationError) as exc_info:
             group_manager_instance._validate_resource_name("TestGroup")
-        assert "lowercase" in str(exc_info.value).lower() or "uppercase" in str(exc_info.value).lower()
+        assert (
+            "lowercase" in str(exc_info.value).lower()
+            or "uppercase" in str(exc_info.value).lower()
+        )
 
     def test_validate_resource_name_invalid_underscore(self, group_manager_instance):
         """Test _validate_resource_name rejects underscores."""
         with pytest.raises(GroupOperationError) as exc_info:
             group_manager_instance._validate_resource_name("test_group")
-        assert "underscore" in str(exc_info.value).lower() or "lowercase letters and numbers" in str(exc_info.value).lower()
+        assert (
+            "underscore" in str(exc_info.value).lower()
+            or "lowercase letters and numbers" in str(exc_info.value).lower()
+        )
 
     def test_validate_resource_name_reserved(self, group_manager_instance):
         """Test _validate_resource_name rejects reserved group names."""
-        reserved_names = ["admin", "root", "system", "all", "everyone", "public", "default"]
+        reserved_names = [
+            "admin",
+            "root",
+            "system",
+            "all",
+            "everyone",
+            "public",
+            "default",
+        ]
         for name in reserved_names:
             with pytest.raises(GroupOperationError) as exc_info:
                 group_manager_instance._validate_resource_name(name)
@@ -226,7 +261,9 @@ class TestResourceManagerMethods:
             group_manager_instance._validate_resource_name("a")
         assert "2" in str(exc_info.value) or "character" in str(exc_info.value).lower()
 
-    def test_validate_resource_name_must_start_with_letter(self, group_manager_instance):
+    def test_validate_resource_name_must_start_with_letter(
+        self, group_manager_instance
+    ):
         """Test _validate_resource_name requires names to start with letter."""
         with pytest.raises(GroupOperationError) as exc_info:
             group_manager_instance._validate_resource_name("123group")
@@ -251,7 +288,9 @@ class TestResourceManagerMethods:
         assert isinstance(cmd, list)
         assert "testgroup" in cmd
 
-    def test_parse_list_output_valid_json(self, group_manager_instance, sample_group_list_json):
+    def test_parse_list_output_valid_json(
+        self, group_manager_instance, sample_group_list_json
+    ):
         """Test _parse_list_output parses valid JSON correctly."""
         result = group_manager_instance._parse_list_output(sample_group_list_json)
         assert result == ["testgroup", "devteam", "analysts"]
@@ -277,14 +316,16 @@ class TestLazyManagerInit:
 
         # Access the property - should trigger lazy init
         # The import is done inside the property method, so we need to patch at the module level
-        with patch.object(group_manager_instance, '_policy_manager', None):
-            with patch("src.minio.managers.policy_manager.PolicyManager") as mock_pm_class:
+        with patch.object(group_manager_instance, "_policy_manager", None):
+            with patch(
+                "src.minio.managers.policy_manager.PolicyManager"
+            ) as mock_pm_class:
                 mock_pm_instance = MagicMock()
                 mock_pm_class.return_value = mock_pm_instance
 
                 # Reset and trigger lazy init
                 group_manager_instance._policy_manager = None
-                pm = group_manager_instance.policy_manager
+                _ = group_manager_instance.policy_manager
 
                 # After access, _policy_manager should no longer be None
                 assert group_manager_instance._policy_manager is not None
@@ -306,14 +347,14 @@ class TestLazyManagerInit:
         assert group_manager_instance._user_manager is None
 
         # Access the property - should trigger lazy init
-        with patch.object(group_manager_instance, '_user_manager', None):
+        with patch.object(group_manager_instance, "_user_manager", None):
             with patch("src.minio.managers.user_manager.UserManager") as mock_um_class:
                 mock_um_instance = MagicMock()
                 mock_um_class.return_value = mock_um_instance
 
                 # Reset and trigger lazy init
                 group_manager_instance._user_manager = None
-                um = group_manager_instance.user_manager
+                _ = group_manager_instance.user_manager
 
                 # After access, _user_manager should no longer be None
                 assert group_manager_instance._user_manager is not None
@@ -351,8 +392,14 @@ class TestCreateGroup:
             group_manager_instance, "resource_exists", AsyncMock(return_value=False)
         ):
             # Mock command execution
-            group_manager_instance._executor._execute_command.return_value = CommandResult(
-                success=True, stdout="", stderr="", return_code=0, command="mc admin group add"
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout="",
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group add",
+                )
             )
 
             result = await group_manager_instance.create_group("testgroup", "creator")
@@ -406,8 +453,14 @@ class TestCreateGroup:
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=False)
         ):
-            group_manager_instance._executor._execute_command.return_value = CommandResult(
-                success=True, stdout="", stderr="", return_code=0, command="mc admin group add"
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout="",
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group add",
+                )
             )
 
             await group_manager_instance.create_group("testgroup", "creator")
@@ -426,8 +479,14 @@ class TestCreateGroup:
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=False)
         ):
-            group_manager_instance._executor._execute_command.return_value = CommandResult(
-                success=False, stdout="", stderr="Group creation failed", return_code=1, command="mc admin group add"
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=False,
+                    stdout="",
+                    stderr="Group creation failed",
+                    return_code=1,
+                    command="mc admin group add",
+                )
             )
 
             with pytest.raises(GroupOperationError) as exc_info:
@@ -448,8 +507,14 @@ class TestCreateGroup:
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=False)
         ):
-            group_manager_instance._executor._execute_command.return_value = CommandResult(
-                success=True, stdout="", stderr="", return_code=0, command="mc admin group add"
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout="",
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group add",
+                )
             )
 
             await group_manager_instance.create_group("testgroup", "creator")
@@ -476,8 +541,14 @@ class TestAddUserToGroup:
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=True)
         ):
-            group_manager_instance._executor._execute_command.return_value = CommandResult(
-                success=True, stdout="", stderr="", return_code=0, command="mc admin group add"
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout="",
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group add",
+                )
             )
 
             await group_manager_instance.add_user_to_group("testuser", "testgroup")
@@ -496,7 +567,9 @@ class TestAddUserToGroup:
             group_manager_instance, "resource_exists", AsyncMock(return_value=False)
         ):
             with pytest.raises(GroupOperationError) as exc_info:
-                await group_manager_instance.add_user_to_group("testuser", "nonexistent")
+                await group_manager_instance.add_user_to_group(
+                    "testuser", "nonexistent"
+                )
 
             assert "Group" in str(exc_info.value)
             assert "not found" in str(exc_info.value)
@@ -513,7 +586,9 @@ class TestAddUserToGroup:
             group_manager_instance, "resource_exists", AsyncMock(return_value=True)
         ):
             with pytest.raises(GroupOperationError) as exc_info:
-                await group_manager_instance.add_user_to_group("nonexistent", "testgroup")
+                await group_manager_instance.add_user_to_group(
+                    "nonexistent", "testgroup"
+                )
 
             assert "User" in str(exc_info.value)
             assert "does not exist" in str(exc_info.value)
@@ -528,8 +603,14 @@ class TestAddUserToGroup:
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=True)
         ):
-            group_manager_instance._executor._execute_command.return_value = CommandResult(
-                success=False, stdout="", stderr="Add failed", return_code=1, command="mc admin group add"
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=False,
+                    stdout="",
+                    stderr="Add failed",
+                    return_code=1,
+                    command="mc admin group add",
+                )
             )
 
             with pytest.raises(GroupOperationError) as exc_info:
@@ -552,8 +633,14 @@ class TestRemoveUserFromGroup:
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=True)
         ):
-            group_manager_instance._executor._execute_command.return_value = CommandResult(
-                success=True, stdout="", stderr="", return_code=0, command="mc admin group rm"
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout="",
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group rm",
+                )
             )
 
             await group_manager_instance.remove_user_from_group("testuser", "testgroup")
@@ -561,13 +648,17 @@ class TestRemoveUserFromGroup:
             group_manager_instance._executor._execute_command.assert_called()
 
     @pytest.mark.asyncio
-    async def test_remove_user_from_group_group_not_exists(self, group_manager_instance):
+    async def test_remove_user_from_group_group_not_exists(
+        self, group_manager_instance
+    ):
         """Test remove_user_from_group fails when group doesn't exist."""
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=False)
         ):
             with pytest.raises(GroupOperationError) as exc_info:
-                await group_manager_instance.remove_user_from_group("testuser", "nonexistent")
+                await group_manager_instance.remove_user_from_group(
+                    "testuser", "nonexistent"
+                )
 
             assert "Group" in str(exc_info.value)
             assert "not found" in str(exc_info.value)
@@ -578,12 +669,20 @@ class TestRemoveUserFromGroup:
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=True)
         ):
-            group_manager_instance._executor._execute_command.return_value = CommandResult(
-                success=False, stdout="", stderr="Remove failed", return_code=1, command="mc admin group rm"
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=False,
+                    stdout="",
+                    stderr="Remove failed",
+                    return_code=1,
+                    command="mc admin group rm",
+                )
             )
 
             with pytest.raises(GroupOperationError) as exc_info:
-                await group_manager_instance.remove_user_from_group("testuser", "testgroup")
+                await group_manager_instance.remove_user_from_group(
+                    "testuser", "testgroup"
+                )
 
             assert "Failed to remove user" in str(exc_info.value)
 
@@ -604,12 +703,14 @@ class TestGetGroupMembers:
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=True)
         ):
-            group_manager_instance._executor._execute_command.return_value = CommandResult(
-                success=True,
-                stdout=sample_group_info_json,
-                stderr="",
-                return_code=0,
-                command="mc admin group info"
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout=sample_group_info_json,
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group info",
+                )
             )
 
             members = await group_manager_instance.get_group_members("testgroup")
@@ -624,12 +725,14 @@ class TestGetGroupMembers:
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=True)
         ):
-            group_manager_instance._executor._execute_command.return_value = CommandResult(
-                success=True,
-                stdout=sample_empty_group_info_json,
-                stderr="",
-                return_code=0,
-                command="mc admin group info"
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout=sample_empty_group_info_json,
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group info",
+                )
             )
 
             members = await group_manager_instance.get_group_members("emptygroup")
@@ -653,12 +756,14 @@ class TestGetGroupMembers:
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=True)
         ):
-            group_manager_instance._executor._execute_command.return_value = CommandResult(
-                success=False,
-                stdout="",
-                stderr="Command failed",
-                return_code=1,
-                command="mc admin group info"
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=False,
+                    stdout="",
+                    stderr="Command failed",
+                    return_code=1,
+                    command="mc admin group info",
+                )
             )
 
             with pytest.raises(GroupOperationError) as exc_info:
@@ -688,7 +793,7 @@ class TestGetGroupInfo:
             with patch.object(
                 group_manager_instance,
                 "get_group_members",
-                AsyncMock(return_value=["user1", "user2", "user3"])
+                AsyncMock(return_value=["user1", "user2", "user3"]),
             ):
                 result = await group_manager_instance.get_group_info("testgroup")
 
@@ -727,7 +832,7 @@ class TestIsUserInGroup:
         with patch.object(
             group_manager_instance,
             "get_group_members",
-            AsyncMock(return_value=["user1", "user2", "user3"])
+            AsyncMock(return_value=["user1", "user2", "user3"]),
         ):
             result = await group_manager_instance.is_user_in_group("user2", "testgroup")
 
@@ -739,7 +844,7 @@ class TestIsUserInGroup:
         with patch.object(
             group_manager_instance,
             "get_group_members",
-            AsyncMock(return_value=["user1", "user2", "user3"])
+            AsyncMock(return_value=["user1", "user2", "user3"]),
         ):
             result = await group_manager_instance.is_user_in_group("user4", "testgroup")
 
@@ -751,7 +856,7 @@ class TestIsUserInGroup:
         with patch.object(
             group_manager_instance,
             "get_group_members",
-            AsyncMock(side_effect=Exception("Get members failed"))
+            AsyncMock(side_effect=Exception("Get members failed")),
         ):
             with pytest.raises(GroupOperationError) as exc_info:
                 await group_manager_instance.is_user_in_group("testuser", "testgroup")
@@ -773,12 +878,14 @@ class TestGetUserGroups:
         with patch.object(
             group_manager_instance,
             "list_resources",
-            AsyncMock(return_value=["group1", "group2", "group3"])
+            AsyncMock(return_value=["group1", "group2", "group3"]),
         ):
             with patch.object(
                 group_manager_instance,
                 "is_user_in_group",
-                AsyncMock(side_effect=[True, False, True])  # user is in group1 and group3
+                AsyncMock(
+                    side_effect=[True, False, True]
+                ),  # user is in group1 and group3
             ):
                 result = await group_manager_instance.get_user_groups("testuser")
 
@@ -791,12 +898,12 @@ class TestGetUserGroups:
         with patch.object(
             group_manager_instance,
             "list_resources",
-            AsyncMock(return_value=["group1", "group2"])
+            AsyncMock(return_value=["group1", "group2"]),
         ):
             with patch.object(
                 group_manager_instance,
                 "is_user_in_group",
-                AsyncMock(return_value=False)
+                AsyncMock(return_value=False),
             ):
                 result = await group_manager_instance.get_user_groups("testuser")
 
@@ -806,9 +913,7 @@ class TestGetUserGroups:
     async def test_get_user_groups_empty_system(self, group_manager_instance):
         """Test get_user_groups when no groups exist."""
         with patch.object(
-            group_manager_instance,
-            "list_resources",
-            AsyncMock(return_value=[])
+            group_manager_instance, "list_resources", AsyncMock(return_value=[])
         ):
             result = await group_manager_instance.get_user_groups("testuser")
 
@@ -840,7 +945,9 @@ class TestDeleteCleanup:
         self, group_manager_instance, mock_policy_manager
     ):
         """Test _pre_delete_cleanup continues if detach fails."""
-        mock_policy_manager.detach_policy_from_group.side_effect = Exception("Detach failed")
+        mock_policy_manager.detach_policy_from_group.side_effect = Exception(
+            "Detach failed"
+        )
         group_manager_instance._policy_manager = mock_policy_manager
 
         # Should not raise
@@ -941,7 +1048,9 @@ class TestDirectoryCreation:
         self, group_manager_instance, mock_minio_client
     ):
         """Test _create_group_welcome_file creates correct content."""
-        await group_manager_instance._create_group_welcome_file("testgroup", "data-lake")
+        await group_manager_instance._create_group_welcome_file(
+            "testgroup", "data-lake"
+        )
 
         mock_minio_client.put_object.assert_called_once()
         call_args = mock_minio_client.put_object.call_args
@@ -961,12 +1070,14 @@ class TestPrivateHelperMethods:
     @pytest.mark.asyncio
     async def test_parse_group_members_with_members(self, group_manager_instance):
         """Test _parse_group_members extracts members correctly."""
-        json_output = json.dumps({
-            "status": "success",
-            "groupName": "testgroup",
-            "members": ["user1", "user2"],
-            "groupStatus": "enabled"
-        })
+        json_output = json.dumps(
+            {
+                "status": "success",
+                "groupName": "testgroup",
+                "members": ["user1", "user2"],
+                "groupStatus": "enabled",
+            }
+        )
 
         result = await group_manager_instance._parse_group_members(json_output)
 
@@ -975,11 +1086,9 @@ class TestPrivateHelperMethods:
     @pytest.mark.asyncio
     async def test_parse_group_members_no_members_key(self, group_manager_instance):
         """Test _parse_group_members returns empty list when no members key."""
-        json_output = json.dumps({
-            "status": "success",
-            "groupName": "emptygroup",
-            "groupStatus": "enabled"
-        })
+        json_output = json.dumps(
+            {"status": "success", "groupName": "emptygroup", "groupStatus": "enabled"}
+        )
 
         result = await group_manager_instance._parse_group_members(json_output)
 
@@ -1029,11 +1138,19 @@ class TestEdgeCases:
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=False)
         ):
-            group_manager_instance._executor._execute_command.return_value = CommandResult(
-                success=True, stdout="", stderr="", return_code=0, command="mc admin group add"
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout="",
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group add",
+                )
             )
 
-            result = await group_manager_instance.create_group("  testgroup  ", "creator")
+            result = await group_manager_instance.create_group(
+                "  testgroup  ", "creator"
+            )
             assert result.group_name == "testgroup"
 
     @pytest.mark.asyncio
@@ -1066,8 +1183,14 @@ class TestEdgeCases:
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=True)
         ):
-            group_manager_instance._executor._execute_command.return_value = CommandResult(
-                success=True, stdout="", stderr="", return_code=0, command="mc admin group"
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout="",
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group",
+                )
             )
 
             # Add user twice - should not fail
@@ -1084,12 +1207,10 @@ class TestEdgeCases:
         with patch.object(
             group_manager_instance,
             "list_resources",
-            AsyncMock(return_value=["zebra", "alpha", "middle"])
+            AsyncMock(return_value=["zebra", "alpha", "middle"]),
         ):
             with patch.object(
-                group_manager_instance,
-                "is_user_in_group",
-                AsyncMock(return_value=True)
+                group_manager_instance, "is_user_in_group", AsyncMock(return_value=True)
             ):
                 result = await group_manager_instance.get_user_groups("testuser")
 
@@ -1100,16 +1221,14 @@ class TestEdgeCases:
         group = GroupModel(
             group_name="testgroup",
             members=["user1", "user2"],
-            policy_name="group-policy-testgroup"
+            policy_name="group-policy-testgroup",
         )
 
         assert group.member_count == 2
         assert group.is_empty is False
 
         empty_group = GroupModel(
-            group_name="emptygroup",
-            members=[],
-            policy_name="group-policy-emptygroup"
+            group_name="emptygroup", members=[], policy_name="group-policy-emptygroup"
         )
 
         assert empty_group.member_count == 0
@@ -1120,7 +1239,9 @@ class TestEdgeCases:
         self, group_manager_instance
     ):
         """Test resource_exists returns False when exception occurs."""
-        group_manager_instance._executor._execute_command.side_effect = Exception("Error")
+        group_manager_instance._executor._execute_command.side_effect = Exception(
+            "Error"
+        )
 
         result = await group_manager_instance.resource_exists("testgroup")
 
@@ -1136,7 +1257,7 @@ class TestEdgeCases:
             stdout="",
             stderr="Failed",
             return_code=1,
-            command="mc admin group list"
+            command="mc admin group list",
         )
 
         result = await group_manager_instance.list_resources()
@@ -1153,7 +1274,7 @@ class TestEdgeCases:
             stdout=sample_group_list_json,
             stderr="",
             return_code=0,
-            command="mc admin group list"
+            command="mc admin group list",
         )
 
         result = await group_manager_instance.list_resources(name_filter="test")
@@ -1181,12 +1302,14 @@ class TestEdgeCases:
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=True)
         ):
-            group_manager_instance._executor._execute_command.return_value = CommandResult(
-                success=False,
-                stdout="",
-                stderr="Delete failed",
-                return_code=1,
-                command="mc admin group rm"
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=False,
+                    stdout="",
+                    stderr="Delete failed",
+                    return_code=1,
+                    command="mc admin group rm",
+                )
             )
 
             result = await group_manager_instance.delete_resource("testgroup")

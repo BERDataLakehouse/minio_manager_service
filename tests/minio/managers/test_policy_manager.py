@@ -92,7 +92,9 @@ def mock_executor():
 
 
 @pytest.fixture
-def policy_manager(mock_minio_client, mock_minio_config, mock_lock_manager, mock_executor):
+def policy_manager(
+    mock_minio_client, mock_minio_config, mock_lock_manager, mock_executor
+):
     """Create a PolicyManager with mocked dependencies."""
     manager = PolicyManager(
         client=mock_minio_client,
@@ -160,12 +162,16 @@ def sample_user_home_policy():
                     effect=PolicyEffect.ALLOW,
                     action=PolicyAction.LIST_BUCKET,
                     resource=["arn:aws:s3:::test-bucket"],
-                    condition={"StringLike": {"s3:prefix": ["users-sql-warehouse/testuser/*"]}},
+                    condition={
+                        "StringLike": {"s3:prefix": ["users-sql-warehouse/testuser/*"]}
+                    },
                 ),
                 PolicyStatement(
                     effect=PolicyEffect.ALLOW,
                     action=PolicyAction.GET_OBJECT,
-                    resource=["arn:aws:s3:::test-bucket/users-sql-warehouse/testuser/*"],
+                    resource=[
+                        "arn:aws:s3:::test-bucket/users-sql-warehouse/testuser/*"
+                    ],
                 ),
             ],
         ),
@@ -189,12 +195,18 @@ def sample_group_policy():
                     effect=PolicyEffect.ALLOW,
                     action=PolicyAction.LIST_BUCKET,
                     resource=["arn:aws:s3:::test-bucket"],
-                    condition={"StringLike": {"s3:prefix": ["tenant-sql-warehouse/testgroup/*"]}},
+                    condition={
+                        "StringLike": {
+                            "s3:prefix": ["tenant-sql-warehouse/testgroup/*"]
+                        }
+                    },
                 ),
                 PolicyStatement(
                     effect=PolicyEffect.ALLOW,
                     action=PolicyAction.GET_OBJECT,
-                    resource=["arn:aws:s3:::test-bucket/tenant-sql-warehouse/testgroup/*"],
+                    resource=[
+                        "arn:aws:s3:::test-bucket/tenant-sql-warehouse/testgroup/*"
+                    ],
                 ),
             ],
         ),
@@ -319,43 +331,56 @@ class TestEnsureUserPolicies:
     """Tests for ensure_user_policies method."""
 
     @pytest.mark.asyncio
-    async def test_creates_both_policies_when_not_exist(self, policy_manager, mock_executor):
+    async def test_creates_both_policies_when_not_exist(
+        self, policy_manager, mock_executor
+    ):
         """Test creating both home and system policies when they don't exist."""
-        from src.minio.models.command import CommandResult
 
         # Mock resource_exists to return False (policies don't exist)
         policy_manager.resource_exists = AsyncMock(return_value=False)
-        
+
         # Mock _create_minio_policy
         policy_manager._create_minio_policy = AsyncMock()
 
-        home_policy, system_policy = await policy_manager.ensure_user_policies("testuser")
+        home_policy, system_policy = await policy_manager.ensure_user_policies(
+            "testuser"
+        )
 
         assert home_policy.policy_name == "user-home-policy-testuser"
         assert system_policy.policy_name == "user-system-policy-testuser"
         assert policy_manager._create_minio_policy.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_returns_existing_policies_when_exist(self, policy_manager, sample_user_home_policy):
+    async def test_returns_existing_policies_when_exist(
+        self, policy_manager, sample_user_home_policy
+    ):
         """Test returning existing policies when they already exist."""
         # Mock resource_exists to return True (policies exist)
         policy_manager.resource_exists = AsyncMock(return_value=True)
-        
-        # Mock _load_minio_policy to return existing policy
-        policy_manager._load_minio_policy = AsyncMock(return_value=sample_user_home_policy)
 
-        home_policy, system_policy = await policy_manager.ensure_user_policies("testuser")
+        # Mock _load_minio_policy to return existing policy
+        policy_manager._load_minio_policy = AsyncMock(
+            return_value=sample_user_home_policy
+        )
+
+        home_policy, system_policy = await policy_manager.ensure_user_policies(
+            "testuser"
+        )
 
         # Should not create policies, only load existing ones
         assert policy_manager._load_minio_policy.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_creates_home_but_loads_existing_system(self, policy_manager, sample_user_home_policy):
+    async def test_creates_home_but_loads_existing_system(
+        self, policy_manager, sample_user_home_policy
+    ):
         """Test creating home policy while system policy exists."""
         # First call for home returns False, second for system returns True
         policy_manager.resource_exists = AsyncMock(side_effect=[False, True])
         policy_manager._create_minio_policy = AsyncMock()
-        policy_manager._load_minio_policy = AsyncMock(return_value=sample_user_home_policy)
+        policy_manager._load_minio_policy = AsyncMock(
+            return_value=sample_user_home_policy
+        )
 
         await policy_manager.ensure_user_policies("testuser")
 
@@ -368,14 +393,20 @@ class TestGetUserPolicies:
     """Tests for get_user_home_policy and get_user_system_policy methods."""
 
     @pytest.mark.asyncio
-    async def test_get_user_home_policy_success(self, policy_manager, sample_user_home_policy):
+    async def test_get_user_home_policy_success(
+        self, policy_manager, sample_user_home_policy
+    ):
         """Test successfully getting user home policy."""
-        policy_manager._load_minio_policy = AsyncMock(return_value=sample_user_home_policy)
+        policy_manager._load_minio_policy = AsyncMock(
+            return_value=sample_user_home_policy
+        )
 
         result = await policy_manager.get_user_home_policy("testuser")
 
         assert result.policy_name == "user-home-policy-testuser"
-        policy_manager._load_minio_policy.assert_called_once_with("user-home-policy-testuser")
+        policy_manager._load_minio_policy.assert_called_once_with(
+            "user-home-policy-testuser"
+        )
 
     @pytest.mark.asyncio
     async def test_get_user_home_policy_not_found(self, policy_manager):
@@ -386,7 +417,9 @@ class TestGetUserPolicies:
             await policy_manager.get_user_home_policy("testuser")
 
     @pytest.mark.asyncio
-    async def test_get_user_system_policy_success(self, policy_manager, sample_user_home_policy):
+    async def test_get_user_system_policy_success(
+        self, policy_manager, sample_user_home_policy
+    ):
         """Test successfully getting user system policy."""
         system_policy = sample_user_home_policy.model_copy(
             update={"policy_name": "user-system-policy-testuser"}
@@ -447,7 +480,9 @@ class TestDeleteUserPolicies:
             await policy_manager.delete_user_policies("testuser")
 
         # Should mention both failures
-        assert "home policy" in str(exc_info.value) or "system policy" in str(exc_info.value)
+        assert "home policy" in str(exc_info.value) or "system policy" in str(
+            exc_info.value
+        )
 
 
 # =============================================================================
@@ -470,7 +505,9 @@ class TestEnsureGroupPolicy:
         policy_manager._create_minio_policy.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_returns_existing_group_policy(self, policy_manager, sample_group_policy):
+    async def test_returns_existing_group_policy(
+        self, policy_manager, sample_group_policy
+    ):
         """Test returning existing group policy."""
         policy_manager.resource_exists = AsyncMock(return_value=True)
         policy_manager._load_minio_policy = AsyncMock(return_value=sample_group_policy)
@@ -532,10 +569,14 @@ class TestAttachUserPolicies:
     """Tests for attach_user_policies method."""
 
     @pytest.mark.asyncio
-    async def test_attaches_both_policies_successfully(self, policy_manager, sample_user_home_policy):
+    async def test_attaches_both_policies_successfully(
+        self, policy_manager, sample_user_home_policy
+    ):
         """Test successfully attaching both user policies."""
         policy_manager._is_policy_attached_to_target = AsyncMock(return_value=False)
-        policy_manager._load_minio_policy = AsyncMock(return_value=sample_user_home_policy)
+        policy_manager._load_minio_policy = AsyncMock(
+            return_value=sample_user_home_policy
+        )
         policy_manager.attach_policy_to_user = AsyncMock()
 
         await policy_manager.attach_user_policies("testuser")
@@ -543,7 +584,9 @@ class TestAttachUserPolicies:
         assert policy_manager.attach_policy_to_user.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_skips_already_attached_policies(self, policy_manager, sample_user_home_policy):
+    async def test_skips_already_attached_policies(
+        self, policy_manager, sample_user_home_policy
+    ):
         """Test skipping policies that are already attached."""
         policy_manager._is_policy_attached_to_target = AsyncMock(return_value=True)
         policy_manager.attach_policy_to_user = AsyncMock()
@@ -600,7 +643,9 @@ class TestAttachDetachPolicy:
             )
         )
 
-        await policy_manager.attach_policy_to_user("user-home-policy-testuser", "testuser")
+        await policy_manager.attach_policy_to_user(
+            "user-home-policy-testuser", "testuser"
+        )
 
         mock_executor._execute_command.assert_called_once()
 
@@ -611,12 +656,18 @@ class TestAttachDetachPolicy:
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
-                success=False, stdout="", stderr="attach failed", return_code=1, command=""
+                success=False,
+                stdout="",
+                stderr="attach failed",
+                return_code=1,
+                command="",
             )
         )
 
         with pytest.raises(PolicyOperationError, match="Failed to attach"):
-            await policy_manager.attach_policy_to_user("user-home-policy-testuser", "testuser")
+            await policy_manager.attach_policy_to_user(
+                "user-home-policy-testuser", "testuser"
+            )
 
     @pytest.mark.asyncio
     async def test_detach_policy_from_user(self, policy_manager, mock_executor):
@@ -629,7 +680,9 @@ class TestAttachDetachPolicy:
             )
         )
 
-        await policy_manager.detach_policy_from_user("user-home-policy-testuser", "testuser")
+        await policy_manager.detach_policy_from_user(
+            "user-home-policy-testuser", "testuser"
+        )
 
         mock_executor._execute_command.assert_called_once()
 
@@ -644,7 +697,9 @@ class TestAttachDetachPolicy:
             )
         )
 
-        await policy_manager.attach_policy_to_group("group-policy-testgroup", "testgroup")
+        await policy_manager.attach_policy_to_group(
+            "group-policy-testgroup", "testgroup"
+        )
 
         mock_executor._execute_command.assert_called_once()
 
@@ -659,7 +714,9 @@ class TestAttachDetachPolicy:
             )
         )
 
-        await policy_manager.detach_policy_from_group("group-policy-testgroup", "testgroup")
+        await policy_manager.detach_policy_from_group(
+            "group-policy-testgroup", "testgroup"
+        )
 
         mock_executor._execute_command.assert_called_once()
 
@@ -673,7 +730,9 @@ class TestPolicyAttachmentStatus:
     """Tests for policy attachment status check methods."""
 
     @pytest.mark.asyncio
-    async def test_is_policy_attached_to_group_true(self, policy_manager, mock_executor):
+    async def test_is_policy_attached_to_group_true(
+        self, policy_manager, mock_executor
+    ):
         """Test checking if policy is attached to group - true case."""
         from src.minio.models.command import CommandResult
 
@@ -686,7 +745,11 @@ class TestPolicyAttachmentStatus:
         }
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
-                success=True, stdout=json.dumps(response), stderr="", return_code=0, command=""
+                success=True,
+                stdout=json.dumps(response),
+                stderr="",
+                return_code=0,
+                command="",
             )
         )
 
@@ -695,14 +758,20 @@ class TestPolicyAttachmentStatus:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_is_policy_attached_to_group_false(self, policy_manager, mock_executor):
+    async def test_is_policy_attached_to_group_false(
+        self, policy_manager, mock_executor
+    ):
         """Test checking if policy is attached to group - false case."""
         from src.minio.models.command import CommandResult
 
         response = {"result": {"policyMappings": []}}
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
-                success=True, stdout=json.dumps(response), stderr="", return_code=0, command=""
+                success=True,
+                stdout=json.dumps(response),
+                stderr="",
+                return_code=0,
+                command="",
             )
         )
 
@@ -711,7 +780,9 @@ class TestPolicyAttachmentStatus:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_is_policies_attached_to_user_both_attached(self, policy_manager, mock_executor):
+    async def test_is_policies_attached_to_user_both_attached(
+        self, policy_manager, mock_executor
+    ):
         """Test checking if both user policies are attached."""
         from src.minio.models.command import CommandResult
 
@@ -725,7 +796,11 @@ class TestPolicyAttachmentStatus:
         }
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
-                success=True, stdout=json.dumps(response), stderr="", return_code=0, command=""
+                success=True,
+                stdout=json.dumps(response),
+                stderr="",
+                return_code=0,
+                command="",
             )
         )
 
@@ -734,13 +809,21 @@ class TestPolicyAttachmentStatus:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_is_policies_attached_to_user_one_missing(self, policy_manager, mock_executor):
+    async def test_is_policies_attached_to_user_one_missing(
+        self, policy_manager, mock_executor
+    ):
         """Test checking if user policies attached when one is missing."""
         from src.minio.models.command import CommandResult
 
         # First call returns attached, second returns not attached
         responses = [
-            {"result": {"policyMappings": [{"policy": "user-home-policy-testuser", "users": ["testuser"]}]}},
+            {
+                "result": {
+                    "policyMappings": [
+                        {"policy": "user-home-policy-testuser", "users": ["testuser"]}
+                    ]
+                }
+            },
             {"result": {"policyMappings": []}},
         ]
         call_count = [0]
@@ -749,7 +832,11 @@ class TestPolicyAttachmentStatus:
             result = responses[call_count[0] % 2]
             call_count[0] += 1
             return CommandResult(
-                success=True, stdout=json.dumps(result), stderr="", return_code=0, command=""
+                success=True,
+                stdout=json.dumps(result),
+                stderr="",
+                return_code=0,
+                command="",
             )
 
         mock_executor._execute_command = mock_execute
@@ -768,9 +855,13 @@ class TestAddPathAccessForTarget:
     """Tests for add_path_access_for_target method."""
 
     @pytest.mark.asyncio
-    async def test_adds_path_access_for_user(self, policy_manager, sample_user_home_policy, mock_lock_manager):
+    async def test_adds_path_access_for_user(
+        self, policy_manager, sample_user_home_policy, mock_lock_manager
+    ):
         """Test adding path access for user."""
-        policy_manager._load_policy_for_target = AsyncMock(return_value=sample_user_home_policy)
+        policy_manager._load_policy_for_target = AsyncMock(
+            return_value=sample_user_home_policy
+        )
         policy_manager._update_minio_policy = AsyncMock()
 
         await policy_manager.add_path_access_for_target(
@@ -783,9 +874,13 @@ class TestAddPathAccessForTarget:
         policy_manager._update_minio_policy.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_adds_path_access_for_group(self, policy_manager, sample_group_policy, mock_lock_manager):
+    async def test_adds_path_access_for_group(
+        self, policy_manager, sample_group_policy, mock_lock_manager
+    ):
         """Test adding path access for group."""
-        policy_manager._load_policy_for_target = AsyncMock(return_value=sample_group_policy)
+        policy_manager._load_policy_for_target = AsyncMock(
+            return_value=sample_group_policy
+        )
         policy_manager._update_minio_policy = AsyncMock()
 
         await policy_manager.add_path_access_for_target(
@@ -798,7 +893,9 @@ class TestAddPathAccessForTarget:
         policy_manager._update_minio_policy.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_raises_error_without_lock_manager(self, mock_minio_client, mock_minio_config, mock_executor):
+    async def test_raises_error_without_lock_manager(
+        self, mock_minio_client, mock_minio_config, mock_executor
+    ):
         """Test that operations fail without lock manager."""
         manager = PolicyManager(
             client=mock_minio_client,
@@ -820,9 +917,13 @@ class TestRemovePathAccessForTarget:
     """Tests for remove_path_access_for_target method."""
 
     @pytest.mark.asyncio
-    async def test_removes_path_access_for_user(self, policy_manager, sample_user_home_policy, mock_lock_manager):
+    async def test_removes_path_access_for_user(
+        self, policy_manager, sample_user_home_policy, mock_lock_manager
+    ):
         """Test removing path access for user."""
-        policy_manager._load_policy_for_target = AsyncMock(return_value=sample_user_home_policy)
+        policy_manager._load_policy_for_target = AsyncMock(
+            return_value=sample_user_home_policy
+        )
         policy_manager._update_minio_policy = AsyncMock()
 
         await policy_manager.remove_path_access_for_target(
@@ -834,9 +935,13 @@ class TestRemovePathAccessForTarget:
         policy_manager._update_minio_policy.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_removes_path_access_for_group(self, policy_manager, sample_group_policy, mock_lock_manager):
+    async def test_removes_path_access_for_group(
+        self, policy_manager, sample_group_policy, mock_lock_manager
+    ):
         """Test removing path access for group."""
-        policy_manager._load_policy_for_target = AsyncMock(return_value=sample_group_policy)
+        policy_manager._load_policy_for_target = AsyncMock(
+            return_value=sample_group_policy
+        )
         policy_manager._update_minio_policy = AsyncMock()
 
         await policy_manager.remove_path_access_for_target(
@@ -858,12 +963,16 @@ class TestGetPolicyNameForTarget:
 
     def test_returns_user_home_policy_name(self, policy_manager):
         """Test getting policy name for user target."""
-        result = policy_manager._get_policy_name_for_target(PolicyTarget.USER, "testuser")
+        result = policy_manager._get_policy_name_for_target(
+            PolicyTarget.USER, "testuser"
+        )
         assert result == "user-home-policy-testuser"
 
     def test_returns_group_policy_name(self, policy_manager):
         """Test getting policy name for group target."""
-        result = policy_manager._get_policy_name_for_target(PolicyTarget.GROUP, "testgroup")
+        result = policy_manager._get_policy_name_for_target(
+            PolicyTarget.GROUP, "testgroup"
+        )
         assert result == "group-policy-testgroup"
 
 
@@ -984,7 +1093,9 @@ class TestShadowPolicyPattern:
         """Test creating shadow policy."""
         policy_manager._create_minio_policy = AsyncMock()
 
-        shadow_name = await policy_manager._create_shadow_policy(sample_user_home_policy)
+        shadow_name = await policy_manager._create_shadow_policy(
+            sample_user_home_policy
+        )
 
         assert "shadow" in shadow_name
         policy_manager._create_minio_policy.assert_called_once()
@@ -1034,16 +1145,22 @@ class TestUpdateMiniOPolicy:
     """Tests for _update_minio_policy method."""
 
     @pytest.mark.asyncio
-    async def test_update_user_home_policy(self, policy_manager, sample_user_home_policy):
+    async def test_update_user_home_policy(
+        self, policy_manager, sample_user_home_policy
+    ):
         """Test updating user home policy using shadow pattern."""
-        policy_manager._execute_shadow_policy_update = AsyncMock(return_value="shadow-name")
+        policy_manager._execute_shadow_policy_update = AsyncMock(
+            return_value="shadow-name"
+        )
 
         await policy_manager._update_minio_policy(sample_user_home_policy)
 
         policy_manager._execute_shadow_policy_update.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_update_handles_failure_with_cleanup(self, policy_manager, sample_user_home_policy):
+    async def test_update_handles_failure_with_cleanup(
+        self, policy_manager, sample_user_home_policy
+    ):
         """Test that update cleans up shadow policy on failure."""
         policy_manager._execute_shadow_policy_update = AsyncMock(
             side_effect=Exception("Update failed")
@@ -1059,21 +1176,27 @@ class TestParsePolicyInfo:
 
     def test_parses_user_home_policy(self, policy_manager):
         """Test parsing user home policy name."""
-        target_name, policy_type = policy_manager._parse_policy_info("user-home-policy-testuser")
+        target_name, policy_type = policy_manager._parse_policy_info(
+            "user-home-policy-testuser"
+        )
 
         assert target_name == "testuser"
         assert policy_type == PolicyType.USER_HOME
 
     def test_parses_user_system_policy(self, policy_manager):
         """Test parsing user system policy name."""
-        target_name, policy_type = policy_manager._parse_policy_info("user-system-policy-testuser")
+        target_name, policy_type = policy_manager._parse_policy_info(
+            "user-system-policy-testuser"
+        )
 
         assert target_name == "testuser"
         assert policy_type == PolicyType.USER_SYSTEM
 
     def test_parses_group_policy(self, policy_manager):
         """Test parsing group policy name."""
-        target_name, policy_type = policy_manager._parse_policy_info("group-policy-testgroup")
+        target_name, policy_type = policy_manager._parse_policy_info(
+            "group-policy-testgroup"
+        )
 
         assert target_name == "testgroup"
         assert policy_type == PolicyType.GROUP_HOME
@@ -1093,7 +1216,9 @@ class TestCreateMinIOPolicy:
     """Tests for _create_minio_policy method."""
 
     @pytest.mark.asyncio
-    async def test_creates_policy_with_temp_file(self, policy_manager, sample_policy_model, mock_executor):
+    async def test_creates_policy_with_temp_file(
+        self, policy_manager, sample_policy_model, mock_executor
+    ):
         """Test creating policy writes JSON to temp file."""
         from src.minio.models.command import CommandResult
 
@@ -1108,13 +1233,19 @@ class TestCreateMinIOPolicy:
         mock_executor._execute_command.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_raises_error_on_failure(self, policy_manager, sample_policy_model, mock_executor):
+    async def test_raises_error_on_failure(
+        self, policy_manager, sample_policy_model, mock_executor
+    ):
         """Test raises error when policy creation fails."""
         from src.minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
-                success=False, stdout="", stderr="creation failed", return_code=1, command=""
+                success=False,
+                stdout="",
+                stderr="creation failed",
+                return_code=1,
+                command="",
             )
         )
 
@@ -1144,7 +1275,11 @@ class TestLoadMinIOPolicy:
         }
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
-                success=True, stdout=json.dumps(policy_response), stderr="", return_code=0, command=""
+                success=True,
+                stdout=json.dumps(policy_response),
+                stderr="",
+                return_code=0,
+                command="",
             )
         )
 
@@ -1167,7 +1302,11 @@ class TestLoadMinIOPolicy:
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
-                success=False, stdout="", stderr="info failed", return_code=1, command=""
+                success=False,
+                stdout="",
+                stderr="info failed",
+                return_code=1,
+                command="",
             )
         )
 
@@ -1185,11 +1324,15 @@ class TestPolicyTypeChecks:
 
     def test_is_user_system_policy_true(self, policy_manager):
         """Test is_user_system_policy returns True for system policy."""
-        assert policy_manager.is_user_system_policy("user-system-policy-testuser") is True
+        assert (
+            policy_manager.is_user_system_policy("user-system-policy-testuser") is True
+        )
 
     def test_is_user_system_policy_false(self, policy_manager):
         """Test is_user_system_policy returns False for non-system policy."""
-        assert policy_manager.is_user_system_policy("user-home-policy-testuser") is False
+        assert (
+            policy_manager.is_user_system_policy("user-home-policy-testuser") is False
+        )
 
     def test_is_user_home_policy_true(self, policy_manager):
         """Test is_user_home_policy returns True for home policy."""
@@ -1222,7 +1365,9 @@ class TestListAllPolicies:
         policy_manager.list_resources = AsyncMock(
             return_value=["user-home-policy-testuser", "group-policy-testgroup"]
         )
-        policy_manager._load_minio_policy = AsyncMock(return_value=sample_user_home_policy)
+        policy_manager._load_minio_policy = AsyncMock(
+            return_value=sample_user_home_policy
+        )
 
         result = await policy_manager.list_all_policies()
 
@@ -1248,13 +1393,19 @@ class TestParsePolicyEntitiesOutput:
 
     def test_parses_users_and_groups(self, policy_manager):
         """Test parsing policy entities with users and groups."""
-        output = json.dumps({
-            "result": {
-                "policyMappings": [
-                    {"policy": "test-policy", "users": ["user1", "user2"], "groups": ["group1"]}
-                ]
+        output = json.dumps(
+            {
+                "result": {
+                    "policyMappings": [
+                        {
+                            "policy": "test-policy",
+                            "users": ["user1", "user2"],
+                            "groups": ["group1"],
+                        }
+                    ]
+                }
             }
-        })
+        )
 
         result = policy_manager._parse_policy_entities_output(output)
 
@@ -1275,11 +1426,7 @@ class TestParsePolicyEntitiesOutput:
 
     def test_handles_missing_users_groups(self, policy_manager):
         """Test parsing mappings without users/groups keys."""
-        output = json.dumps({
-            "result": {
-                "policyMappings": [{"policy": "test-policy"}]
-            }
-        })
+        output = json.dumps({"result": {"policyMappings": [{"policy": "test-policy"}]}})
 
         result = policy_manager._parse_policy_entities_output(output)
 
@@ -1296,7 +1443,9 @@ class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
     @pytest.mark.asyncio
-    async def test_handles_concurrent_policy_updates(self, policy_manager, sample_user_home_policy, mock_lock_manager):
+    async def test_handles_concurrent_policy_updates(
+        self, policy_manager, sample_user_home_policy, mock_lock_manager
+    ):
         """Test that concurrent updates are serialized through lock."""
         call_count = [0]
 
@@ -1305,14 +1454,20 @@ class TestEdgeCases:
             if call_count[0] == 1:
                 # Simulate delay in first update
                 import asyncio
+
                 await asyncio.sleep(0.1)
 
-        policy_manager._load_policy_for_target = AsyncMock(return_value=sample_user_home_policy)
+        policy_manager._load_policy_for_target = AsyncMock(
+            return_value=sample_user_home_policy
+        )
         policy_manager._update_minio_policy = mock_update
 
         # Both should succeed as lock serializes them
         await policy_manager.add_path_access_for_target(
-            PolicyTarget.USER, "testuser", "s3a://test-bucket/path1/", PolicyPermissionLevel.READ
+            PolicyTarget.USER,
+            "testuser",
+            "s3a://test-bucket/path1/",
+            PolicyPermissionLevel.READ,
         )
 
         assert call_count[0] == 1
@@ -1400,7 +1555,11 @@ class TestResourceExists:
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
-                success=True, stdout='{"policy": "test"}', stderr="", return_code=0, command=""
+                success=True,
+                stdout='{"policy": "test"}',
+                stderr="",
+                return_code=0,
+                command="",
             )
         )
 
@@ -1415,7 +1574,11 @@ class TestResourceExists:
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
-                success=False, stdout="", stderr="policy not found", return_code=1, command=""
+                success=False,
+                stdout="",
+                stderr="policy not found",
+                return_code=1,
+                command="",
             )
         )
 

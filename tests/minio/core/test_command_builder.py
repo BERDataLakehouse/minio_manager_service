@@ -1,6 +1,5 @@
 """Comprehensive tests for the minio.core.command_builder module."""
 
-
 import pytest
 
 from src.minio.core.command_builder import MinIOCommandBuilder
@@ -55,15 +54,18 @@ class TestAliasCommands:
     def test_build_alias_set_command(self, command_builder):
         """Test building alias set command."""
         cmd = command_builder.build_alias_set_command(
-            endpoint="http://minio:9000",
-            access_key="admin",
-            secret_key="password"
+            endpoint="http://minio:9000", access_key="admin", secret_key="password"
         )
-        
+
         assert cmd == [
-            "alias", "set", "minio_api",
-            "http://minio:9000", "admin", "password",
-            "--api", "S3v4"
+            "alias",
+            "set",
+            "minio_api",
+            "http://minio:9000",
+            "admin",
+            "password",
+            "--api",
+            "S3v4",
         ]
 
     def test_build_alias_set_command_with_https(self, command_builder):
@@ -71,9 +73,9 @@ class TestAliasCommands:
         cmd = command_builder.build_alias_set_command(
             endpoint="https://minio.example.com:9000",
             access_key="admin",
-            secret_key="password"
+            secret_key="password",
         )
-        
+
         assert "https://minio.example.com:9000" in cmd
 
 
@@ -88,40 +90,33 @@ class TestUserCommands:
     def test_build_user_add_command(self, command_builder):
         """Test building user add command."""
         cmd = command_builder.build_user_command(
-            action=UserAction.ADD,
-            username="testuser",
-            password="testpassword"
+            action=UserAction.ADD, username="testuser", password="testpassword"
         )
-        
-        assert cmd == [
-            "admin", "user", "add", "minio_api", "testuser", "testpassword"
-        ]
+
+        assert cmd == ["admin", "user", "add", "minio_api", "testuser", "testpassword"]
 
     def test_build_user_add_command_without_password(self, command_builder):
         """Test building user add command without password."""
         cmd = command_builder.build_user_command(
-            action=UserAction.ADD,
-            username="testuser"
+            action=UserAction.ADD, username="testuser"
         )
-        
+
         assert cmd == ["admin", "user", "add", "minio_api", "testuser"]
 
     def test_build_user_remove_command(self, command_builder):
         """Test building user remove command."""
         cmd = command_builder.build_user_command(
-            action=UserAction.REMOVE,
-            username="testuser"
+            action=UserAction.REMOVE, username="testuser"
         )
-        
+
         assert cmd == ["admin", "user", "remove", "minio_api", "testuser"]
 
     def test_build_user_info_command(self, command_builder):
         """Test building user info command."""
         cmd = command_builder.build_user_command(
-            action=UserAction.INFO,
-            username="testuser"
+            action=UserAction.INFO, username="testuser"
         )
-        
+
         assert cmd == ["admin", "user", "info", "minio_api", "testuser"]
 
     def test_build_user_command_validates_username(self, command_builder):
@@ -130,19 +125,19 @@ class TestUserCommands:
         with pytest.raises(UserOperationError):
             command_builder.build_user_command(
                 action=UserAction.INFO,
-                username="admin"  # Reserved username
+                username="admin",  # Reserved username
             )
 
     def test_build_user_list_command(self, command_builder):
         """Test building user list command."""
         cmd = command_builder.build_user_list_command()
-        
+
         assert cmd == ["admin", "user", "list", "minio_api", "--json"]
 
     def test_build_user_list_command_without_json(self, command_builder):
         """Test building user list command without JSON format."""
         cmd = command_builder.build_user_list_command(json_format=False)
-        
+
         assert cmd == ["admin", "user", "list", "minio_api"]
         assert "--json" not in cmd
 
@@ -160,57 +155,57 @@ class TestPolicyCommands:
         cmd = command_builder.build_policy_command(
             action=PolicyAction.CREATE,
             policy_name="test-policy",
-            file_path="/tmp/policy.json"
+            file_path="/tmp/policy.json",
         )
-        
+
         assert cmd == [
-            "admin", "policy", "create", "minio_api", "test-policy", "/tmp/policy.json"
+            "admin",
+            "policy",
+            "create",
+            "minio_api",
+            "test-policy",
+            "/tmp/policy.json",
         ]
 
     def test_build_policy_create_without_file_raises_error(self, command_builder):
         """Test policy create without file path raises error."""
         with pytest.raises(ValueError) as exc_info:
             command_builder.build_policy_command(
-                action=PolicyAction.CREATE,
-                policy_name="test-policy"
+                action=PolicyAction.CREATE, policy_name="test-policy"
             )
-        
+
         assert "File path is required" in str(exc_info.value)
 
     def test_build_policy_delete_command(self, command_builder):
         """Test building policy delete command."""
         cmd = command_builder.build_policy_command(
-            action=PolicyAction.DELETE,
-            policy_name="test-policy"
+            action=PolicyAction.DELETE, policy_name="test-policy"
         )
-        
+
         assert cmd == ["admin", "policy", "remove", "minio_api", "test-policy"]
 
     def test_build_policy_info_command(self, command_builder):
         """Test building policy info command."""
         cmd = command_builder.build_policy_command(
-            action=PolicyAction.INFO,
-            policy_name="test-policy"
+            action=PolicyAction.INFO, policy_name="test-policy"
         )
-        
+
         assert cmd == ["admin", "policy", "info", "minio_api", "test-policy"]
 
     def test_build_policy_list_command(self, command_builder):
         """Test building policy list command."""
         cmd = command_builder.build_policy_command(
-            action=PolicyAction.LIST,
-            json_format=True
+            action=PolicyAction.LIST, json_format=True
         )
-        
+
         assert cmd == ["admin", "policy", "list", "minio_api", "--json"]
 
     def test_build_policy_list_without_json(self, command_builder):
         """Test building policy list command without JSON."""
         cmd = command_builder.build_policy_command(
-            action=PolicyAction.LIST,
-            json_format=False
+            action=PolicyAction.LIST, json_format=False
         )
-        
+
         assert cmd == ["admin", "policy", "list", "minio_api"]
         assert "--json" not in cmd
 
@@ -218,70 +213,85 @@ class TestPolicyCommands:
         """Test policy command without name raises error (except LIST)."""
         with pytest.raises(ValueError) as exc_info:
             command_builder.build_policy_command(action=PolicyAction.INFO)
-        
+
         assert "Policy name is required" in str(exc_info.value)
 
     def test_build_policy_attach_command(self, command_builder):
         """Test building policy attach command."""
         cmd = command_builder.build_policy_attach_command(
-            policy_name="test-policy",
-            target_type="user",
-            target_name="testuser"
+            policy_name="test-policy", target_type="user", target_name="testuser"
         )
-        
+
         assert cmd == [
-            "admin", "policy", "attach", "minio_api",
-            "test-policy", "--user", "testuser"
+            "admin",
+            "policy",
+            "attach",
+            "minio_api",
+            "test-policy",
+            "--user",
+            "testuser",
         ]
 
     def test_build_policy_attach_to_group(self, command_builder):
         """Test building policy attach command for group."""
         cmd = command_builder.build_policy_attach_command(
-            policy_name="test-policy",
-            target_type="group",
-            target_name="testgroup"
+            policy_name="test-policy", target_type="group", target_name="testgroup"
         )
-        
+
         assert cmd == [
-            "admin", "policy", "attach", "minio_api",
-            "test-policy", "--group", "testgroup"
+            "admin",
+            "policy",
+            "attach",
+            "minio_api",
+            "test-policy",
+            "--group",
+            "testgroup",
         ]
 
     def test_build_policy_detach_command(self, command_builder):
         """Test building policy detach command."""
         cmd = command_builder.build_policy_detach_command(
-            policy_name="test-policy",
-            target_type="user",
-            target_name="testuser"
+            policy_name="test-policy", target_type="user", target_name="testuser"
         )
-        
+
         assert cmd == [
-            "admin", "policy", "detach", "minio_api",
-            "test-policy", "--user", "testuser"
+            "admin",
+            "policy",
+            "detach",
+            "minio_api",
+            "test-policy",
+            "--user",
+            "testuser",
         ]
 
     def test_build_policy_detach_from_group(self, command_builder):
         """Test building policy detach command for group."""
         cmd = command_builder.build_policy_detach_command(
-            policy_name="test-policy",
-            target_type="group",
-            target_name="testgroup"
+            policy_name="test-policy", target_type="group", target_name="testgroup"
         )
-        
+
         assert cmd == [
-            "admin", "policy", "detach", "minio_api",
-            "test-policy", "--group", "testgroup"
+            "admin",
+            "policy",
+            "detach",
+            "minio_api",
+            "test-policy",
+            "--group",
+            "testgroup",
         ]
 
     def test_build_policy_entities_command(self, command_builder):
         """Test building policy entities command."""
-        cmd = command_builder.build_policy_entities_command(
-            policy_name="test-policy"
-        )
-        
+        cmd = command_builder.build_policy_entities_command(policy_name="test-policy")
+
         assert cmd == [
-            "admin", "policy", "entities", "minio_api",
-            "--policy", "test-policy", "--json"
+            "admin",
+            "policy",
+            "entities",
+            "minio_api",
+            "--policy",
+            "test-policy",
+            "--json",
         ]
 
 
@@ -296,53 +306,49 @@ class TestGroupCommands:
     def test_build_group_add_command(self, command_builder):
         """Test building group add command."""
         cmd = command_builder.build_group_command(
-            action=GroupAction.ADD,
-            group_name="testgroup",
-            members=["user1", "user2"]
+            action=GroupAction.ADD, group_name="testgroup", members=["user1", "user2"]
         )
-        
+
         assert cmd == [
-            "admin", "group", "add", "minio_api", "testgroup", "user1", "user2"
+            "admin",
+            "group",
+            "add",
+            "minio_api",
+            "testgroup",
+            "user1",
+            "user2",
         ]
 
     def test_build_group_add_without_members(self, command_builder):
         """Test building group add command without members."""
         cmd = command_builder.build_group_command(
-            action=GroupAction.ADD,
-            group_name="testgroup"
+            action=GroupAction.ADD, group_name="testgroup"
         )
-        
+
         assert cmd == ["admin", "group", "add", "minio_api", "testgroup"]
 
     def test_build_group_rm_command(self, command_builder):
         """Test building group remove command."""
         cmd = command_builder.build_group_command(
-            action=GroupAction.RM,
-            group_name="testgroup",
-            members=["user1"]
+            action=GroupAction.RM, group_name="testgroup", members=["user1"]
         )
-        
-        assert cmd == [
-            "admin", "group", "rm", "minio_api", "testgroup", "user1"
-        ]
+
+        assert cmd == ["admin", "group", "rm", "minio_api", "testgroup", "user1"]
 
     def test_build_group_info_command(self, command_builder):
         """Test building group info command."""
         cmd = command_builder.build_group_command(
-            action=GroupAction.INFO,
-            group_name="testgroup"
+            action=GroupAction.INFO, group_name="testgroup"
         )
-        
+
         assert cmd == ["admin", "group", "info", "minio_api", "testgroup"]
 
     def test_build_group_info_with_json(self, command_builder):
         """Test building group info command with JSON format."""
         cmd = command_builder.build_group_command(
-            action=GroupAction.INFO,
-            group_name="testgroup",
-            json_format=True
+            action=GroupAction.INFO, group_name="testgroup", json_format=True
         )
-        
+
         assert cmd == ["admin", "group", "info", "minio_api", "testgroup", "--json"]
 
     def test_build_group_command_validates_name(self, command_builder):
@@ -351,21 +357,20 @@ class TestGroupCommands:
         with pytest.raises(GroupOperationError):
             command_builder.build_group_command(
                 action=GroupAction.INFO,
-                group_name="admin"  # Reserved group name
+                group_name="admin",  # Reserved group name
             )
 
     def test_build_group_command_validates_uppercase(self, command_builder):
         """Test group command rejects uppercase names."""
         with pytest.raises(GroupOperationError):
             command_builder.build_group_command(
-                action=GroupAction.INFO,
-                group_name="TestGroup"
+                action=GroupAction.INFO, group_name="TestGroup"
             )
 
     def test_build_group_list_command(self, command_builder):
         """Test building group list command."""
         cmd = command_builder.build_group_list_command()
-        
+
         assert cmd == ["admin", "group", "ls", "minio_api", "--json"]
 
 
@@ -384,13 +389,13 @@ class TestCustomAlias:
             action=UserAction.INFO, username="testuser"
         )
         assert "custom_alias" in user_cmd
-        
+
         # Policy command
         policy_cmd = custom_alias_builder.build_policy_command(
             action=PolicyAction.LIST, json_format=True
         )
         assert "custom_alias" in policy_cmd
-        
+
         # Group command
         group_cmd = custom_alias_builder.build_group_command(
             action=GroupAction.INFO, group_name="testgroup"
@@ -409,74 +414,65 @@ class TestEdgeCases:
     def test_empty_members_list(self, command_builder):
         """Test group command with empty members list."""
         cmd = command_builder.build_group_command(
-            action=GroupAction.ADD,
-            group_name="testgroup",
-            members=[]
+            action=GroupAction.ADD, group_name="testgroup", members=[]
         )
-        
+
         # Empty list should not add any members
         assert cmd == ["admin", "group", "add", "minio_api", "testgroup"]
 
     def test_policy_name_with_hyphens(self, command_builder):
         """Test policy command with hyphenated policy name."""
         cmd = command_builder.build_policy_command(
-            action=PolicyAction.INFO,
-            policy_name="user-home-policy-testuser"
+            action=PolicyAction.INFO, policy_name="user-home-policy-testuser"
         )
-        
+
         assert "user-home-policy-testuser" in cmd
 
     def test_policy_name_with_underscores(self, command_builder):
         """Test policy command with underscored policy name."""
         cmd = command_builder.build_policy_command(
-            action=PolicyAction.INFO,
-            policy_name="user_home_policy_testuser"
+            action=PolicyAction.INFO, policy_name="user_home_policy_testuser"
         )
-        
+
         assert "user_home_policy_testuser" in cmd
 
     def test_username_with_dots(self, command_builder):
         """Test user command with dots in username."""
         cmd = command_builder.build_user_command(
-            action=UserAction.INFO,
-            username="user.name"
+            action=UserAction.INFO, username="user.name"
         )
-        
+
         assert "user.name" in cmd
 
     def test_username_with_hyphens(self, command_builder):
         """Test user command with hyphens in username."""
         cmd = command_builder.build_user_command(
-            action=UserAction.INFO,
-            username="user-name"
+            action=UserAction.INFO, username="user-name"
         )
-        
+
         assert "user-name" in cmd
 
     def test_group_name_all_lowercase(self, command_builder):
         """Test group name must be all lowercase."""
         # Valid lowercase name
         cmd = command_builder.build_group_command(
-            action=GroupAction.INFO,
-            group_name="testgroup123"
+            action=GroupAction.INFO, group_name="testgroup123"
         )
-        
+
         assert "testgroup123" in cmd
 
     def test_json_flag_only_for_appropriate_actions(self, command_builder):
         """Test JSON flag is only added for appropriate actions."""
         # JSON flag for INFO action in groups
         info_cmd = command_builder.build_group_command(
-            action=GroupAction.INFO,
-            group_name="testgroup",
-            json_format=True
+            action=GroupAction.INFO, group_name="testgroup", json_format=True
         )
         assert "--json" in info_cmd
-        
+
         # JSON flag should NOT be added for ADD action even if requested
         add_cmd = command_builder.build_group_command(
             action=GroupAction.ADD,
             group_name="testgroup",
-            json_format=True  # This should be ignored
+            json_format=True,  # This should be ignored
         )
         assert "--json" not in add_cmd

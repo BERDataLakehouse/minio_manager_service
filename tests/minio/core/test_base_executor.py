@@ -19,11 +19,14 @@ from src.service.exceptions import MinIOManagerError
 @pytest.fixture(autouse=True)
 def mock_env_vars():
     """Mock required environment variables."""
-    with patch.dict(os.environ, {
-        "MC_PATH": "/usr/local/bin/mc",
-        "MINIO_ROOT_USER": "admin",
-        "MINIO_ROOT_PASSWORD": "password123"
-    }):
+    with patch.dict(
+        os.environ,
+        {
+            "MC_PATH": "/usr/local/bin/mc",
+            "MINIO_ROOT_USER": "admin",
+            "MINIO_ROOT_PASSWORD": "password123",
+        },
+    ):
         yield
 
 
@@ -61,7 +64,7 @@ class TestBaseMinIOExecutorInit:
     def test_init_with_defaults(self, mock_minio_config):
         """Test initialization with default parameters."""
         executor = BaseMinIOExecutor(mock_minio_config)
-        
+
         assert executor.config == mock_minio_config
         assert executor.alias == "minio_api"
         assert executor._mc_path == "/usr/local/bin/mc"
@@ -70,14 +73,14 @@ class TestBaseMinIOExecutorInit:
     def test_init_with_custom_alias(self, mock_minio_config):
         """Test initialization with custom alias."""
         executor = BaseMinIOExecutor(mock_minio_config, alias="custom")
-        
+
         assert executor.alias == "custom"
 
     def test_init_without_mc_path_raises_error(self, mock_minio_config):
         """Test initialization fails without MC_PATH."""
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("MC_PATH", None)
-            
+
             with pytest.raises(KeyError):
                 BaseMinIOExecutor(mock_minio_config)
 
@@ -104,71 +107,79 @@ class TestSetup:
     @pytest.mark.asyncio
     async def test_setup_success(self, executor):
         """Test successful setup."""
-        with patch.object(executor, '_execute_command') as mock_execute:
+        with patch.object(executor, "_execute_command") as mock_execute:
             mock_execute.return_value = CommandResult(
                 success=True,
                 stdout="Alias set successfully",
                 stderr="",
                 return_code=0,
-                command="mc alias set"
+                command="mc alias set",
             )
-            
+
             await executor.setup()
-            
+
             assert executor._setup_complete is True
             mock_execute.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_setup_idempotent(self, executor):
         """Test setup is idempotent - only runs once."""
-        with patch.object(executor, '_execute_command') as mock_execute:
+        with patch.object(executor, "_execute_command") as mock_execute:
             mock_execute.return_value = CommandResult(
-                success=True, stdout="", stderr="", return_code=0, command="mc alias set"
+                success=True,
+                stdout="",
+                stderr="",
+                return_code=0,
+                command="mc alias set",
             )
-            
+
             await executor.setup()
             await executor.setup()  # Second call should be no-op
-            
+
             # Should only be called once
             mock_execute.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_setup_command_failure(self, executor):
         """Test setup handles command failure."""
-        with patch.object(executor, '_execute_command') as mock_execute:
+        with patch.object(executor, "_execute_command") as mock_execute:
             mock_execute.return_value = CommandResult(
                 success=False,
                 stdout="",
                 stderr="Access denied",
                 return_code=1,
-                command="mc alias set"
+                command="mc alias set",
             )
-            
+
             with pytest.raises(MinIOManagerError) as exc_info:
                 await executor.setup()
-            
+
             assert "Failed to configure MinIO" in str(exc_info.value)
             assert executor._setup_complete is False
 
     @pytest.mark.asyncio
     async def test_setup_without_minio_root_user(self, mock_minio_config):
         """Test setup fails without MINIO_ROOT_USER."""
-        with patch.dict(os.environ, {"MC_PATH": "/usr/local/bin/mc", "MINIO_ROOT_PASSWORD": "pass"}):
+        with patch.dict(
+            os.environ, {"MC_PATH": "/usr/local/bin/mc", "MINIO_ROOT_PASSWORD": "pass"}
+        ):
             os.environ.pop("MINIO_ROOT_USER", None)
-            
+
             executor = BaseMinIOExecutor(mock_minio_config)
-            
+
             with pytest.raises((MinIOManagerError, ValueError)):
                 await executor.setup()
 
     @pytest.mark.asyncio
     async def test_setup_without_minio_root_password(self, mock_minio_config):
         """Test setup fails without MINIO_ROOT_PASSWORD."""
-        with patch.dict(os.environ, {"MC_PATH": "/usr/local/bin/mc", "MINIO_ROOT_USER": "admin"}):
+        with patch.dict(
+            os.environ, {"MC_PATH": "/usr/local/bin/mc", "MINIO_ROOT_USER": "admin"}
+        ):
             os.environ.pop("MINIO_ROOT_PASSWORD", None)
-            
+
             executor = BaseMinIOExecutor(mock_minio_config)
-            
+
             with pytest.raises((MinIOManagerError, ValueError)):
                 await executor.setup()
 
@@ -187,10 +198,10 @@ class TestExecuteCommand:
         mock_process = AsyncMock()
         mock_process.communicate.return_value = (b"success output", b"")
         mock_process.returncode = 0
-        
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process):
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             result = await executor._execute_command(["admin", "user", "list"])
-            
+
             assert result.success is True
             assert result.stdout == "success output"
             assert result.stderr == ""
@@ -202,10 +213,12 @@ class TestExecuteCommand:
         mock_process = AsyncMock()
         mock_process.communicate.return_value = (b"", b"error message")
         mock_process.returncode = 1
-        
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process):
-            result = await executor._execute_command(["admin", "user", "info", "nonexistent"])
-            
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            result = await executor._execute_command(
+                ["admin", "user", "info", "nonexistent"]
+            )
+
             assert result.success is False
             assert result.stderr == "error message"
             assert result.return_code == 1
@@ -217,10 +230,12 @@ class TestExecuteCommand:
         mock_process.communicate.side_effect = asyncio.TimeoutError()
         mock_process.kill = AsyncMock()
         mock_process.wait = AsyncMock()
-        
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process):
-            result = await executor._execute_command(["admin", "user", "list"], timeout=1)
-            
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            result = await executor._execute_command(
+                ["admin", "user", "list"], timeout=1
+            )
+
             assert result.success is False
             assert "timed out" in result.stderr.lower()
             assert result.return_code == -1
@@ -232,13 +247,12 @@ class TestExecuteCommand:
         mock_process = AsyncMock()
         mock_process.communicate.return_value = (b"output", b"")
         mock_process.returncode = 0
-        
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process) as mock_exec:
-            result = await executor._execute_command(
-                ["admin", "policy", "create"],
-                input_data='{"Version": "2012-10-17"}'
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            await executor._execute_command(
+                ["admin", "policy", "create"], input_data='{"Version": "2012-10-17"}'
             )
-            
+
             # Verify stdin was passed
             mock_process.communicate.assert_called_once()
             call_args = mock_process.communicate.call_args
@@ -247,10 +261,12 @@ class TestExecuteCommand:
     @pytest.mark.asyncio
     async def test_execute_command_exception(self, executor):
         """Test command execution raises MinIOManagerError on exception."""
-        with patch('asyncio.create_subprocess_exec', side_effect=Exception("Unexpected error")):
+        with patch(
+            "asyncio.create_subprocess_exec", side_effect=Exception("Unexpected error")
+        ):
             with pytest.raises(MinIOManagerError) as exc_info:
                 await executor._execute_command(["admin", "user", "list"])
-            
+
             assert "Unexpected error" in str(exc_info.value)
 
     @pytest.mark.asyncio
@@ -259,13 +275,13 @@ class TestExecuteCommand:
         mock_process = AsyncMock()
         mock_process.communicate.return_value = (b"output", b"")
         mock_process.returncode = 0
-        
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process):
-            with patch('asyncio.wait_for', new_callable=AsyncMock) as mock_wait_for:
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch("asyncio.wait_for", new_callable=AsyncMock) as mock_wait_for:
                 mock_wait_for.return_value = (b"output", b"")
-                
+
                 await executor._execute_command(["admin", "user", "list"], timeout=60)
-                
+
                 # Verify custom timeout was used
                 mock_wait_for.assert_called_once()
                 call_args = mock_wait_for.call_args
@@ -277,10 +293,12 @@ class TestExecuteCommand:
         mock_process = AsyncMock()
         mock_process.communicate.return_value = (b"output", b"")
         mock_process.returncode = 0
-        
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process) as mock_exec:
+
+        with patch(
+            "asyncio.create_subprocess_exec", return_value=mock_process
+        ) as mock_exec:
             await executor._execute_command(["admin", "user", "list", "minio_api"])
-            
+
             # Verify MC path is prepended
             call_args = mock_exec.call_args[0]
             assert call_args[0] == "/usr/local/bin/mc"
@@ -294,10 +312,10 @@ class TestExecuteCommand:
         mock_process = AsyncMock()
         mock_process.communicate.return_value = (b"", b"")
         mock_process.returncode = 0
-        
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process):
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             result = await executor._execute_command(["admin", "user", "list"])
-            
+
             assert "admin" in result.command
             assert "user" in result.command
             assert "list" in result.command
@@ -306,12 +324,15 @@ class TestExecuteCommand:
     async def test_execute_command_strips_output(self, executor):
         """Test command output is stripped of whitespace."""
         mock_process = AsyncMock()
-        mock_process.communicate.return_value = (b"  output with spaces  \n", b"  error  \n")
+        mock_process.communicate.return_value = (
+            b"  output with spaces  \n",
+            b"  error  \n",
+        )
         mock_process.returncode = 0
-        
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process):
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             result = await executor._execute_command(["admin", "user", "list"])
-            
+
             assert result.stdout == "output with spaces"
             assert result.stderr == "error"
 
@@ -319,12 +340,12 @@ class TestExecuteCommand:
     async def test_execute_command_handles_unicode(self, executor):
         """Test command handles unicode output."""
         mock_process = AsyncMock()
-        mock_process.communicate.return_value = ("日本語output".encode('utf-8'), b"")
+        mock_process.communicate.return_value = ("日本語output".encode("utf-8"), b"")
         mock_process.returncode = 0
-        
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process):
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             result = await executor._execute_command(["admin", "user", "list"])
-            
+
             assert "日本語output" in result.stdout
 
 
@@ -343,9 +364,9 @@ class TestCommandResult:
             stdout="output",
             stderr="",
             return_code=0,
-            command="mc admin user list"
+            command="mc admin user list",
         )
-        
+
         assert result.success is True
         assert result.failed is False
         assert result.has_output is True
@@ -358,9 +379,9 @@ class TestCommandResult:
             stdout="",
             stderr="error message",
             return_code=1,
-            command="mc admin user info nonexistent"
+            command="mc admin user info nonexistent",
         )
-        
+
         assert result.success is False
         assert result.failed is True
         assert result.has_output is False
@@ -373,9 +394,9 @@ class TestCommandResult:
             stdout="",
             stderr="",
             return_code=0,
-            command="mc admin user list"
+            command="mc admin user list",
         )
-        
+
         assert result.has_output is False
         assert result.has_error is False
 
@@ -386,9 +407,9 @@ class TestCommandResult:
             stdout="   ",
             stderr="   ",
             return_code=0,
-            command="mc admin user list"
+            command="mc admin user list",
         )
-        
+
         # Whitespace-only should not count as output
         assert result.has_output is False
         assert result.has_error is False
@@ -409,11 +430,13 @@ class TestEdgeCases:
         mock_process.communicate.side_effect = asyncio.TimeoutError()
         mock_process.kill.side_effect = ProcessLookupError()
         mock_process.wait = AsyncMock()
-        
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process):
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             # Should not raise even if process already terminated
-            result = await executor._execute_command(["admin", "user", "list"], timeout=1)
-            
+            result = await executor._execute_command(
+                ["admin", "user", "list"], timeout=1
+            )
+
             assert result.success is False
 
     @pytest.mark.asyncio
@@ -422,10 +445,10 @@ class TestEdgeCases:
         mock_process = AsyncMock()
         mock_process.communicate.return_value = (b"output", b"")
         mock_process.returncode = None
-        
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process):
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             result = await executor._execute_command(["admin", "user", "list"])
-            
+
             # None should be treated as 0 (success)
             assert result.return_code == 0
             assert result.success is True
@@ -437,10 +460,10 @@ class TestEdgeCases:
         # Invalid UTF-8 bytes
         mock_process.communicate.return_value = (b"\xff\xfe invalid", b"")
         mock_process.returncode = 0
-        
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process):
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             result = await executor._execute_command(["admin", "user", "list"])
-            
+
             # Should handle gracefully with errors='replace'
             assert result.success is True
 
@@ -463,12 +486,12 @@ class TestIntegrationScenarios:
         mock_process = AsyncMock()
         mock_process.communicate.return_value = (b"success", b"")
         mock_process.returncode = 0
-        
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process):
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             # Setup
             await executor.setup()
             assert executor._setup_complete is True
-            
+
             # Execute command after setup
             result = await executor._execute_command(["admin", "user", "list"])
             assert result.success is True
@@ -477,22 +500,22 @@ class TestIntegrationScenarios:
     async def test_multiple_commands_after_setup(self, executor):
         """Test executing multiple commands after setup."""
         call_count = 0
-        
+
         async def mock_communicate(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             return (f"output{call_count}".encode(), b"")
-        
+
         mock_process = AsyncMock()
         mock_process.communicate = mock_communicate
         mock_process.returncode = 0
-        
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process):
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
             await executor.setup()
-            
+
             result1 = await executor._execute_command(["admin", "user", "list"])
             result2 = await executor._execute_command(["admin", "group", "list"])
-            
+
             # Each command should have different output
             assert "output" in result1.stdout
             assert "output" in result2.stdout
