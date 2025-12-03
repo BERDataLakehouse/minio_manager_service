@@ -1,37 +1,69 @@
-name: Run Tests
+name: Lint and Test
 
 on:
   push:
     branches: [ main, master, develop ]
   pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
     branches: [ main, master, develop ]
 
 jobs:
-  minio-manager-service-tests:
-    runs-on: ubuntu-22.04
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     strategy:
       matrix:
-        include:
-          - python-version: "3.13"
-
+        python-version: ["3.13"]
     steps:
-    - name: Repo checkout
-      uses: actions/checkout@v4
-    
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-        
+    - uses: actions/checkout@v4
+
     - name: Install uv
-      uses: astral-sh/setup-uv@v6
+      uses: astral-sh/setup-uv@v3
+      with:
+        version: "latest"
+
+    - name: Set up Python ${{ matrix.python-version }}
+      run: uv python install ${{ matrix.python-version }}
 
     - name: Install dependencies
-      shell: bash
       run: |
-        export UV_PROJECT_ENVIRONMENT="${pythonLocation}"
-        uv sync --locked
+        uv sync --group dev
 
-    - name: Run tests
-      shell: bash
-      run: PYTHONPATH=. uv run pytest --cov=src --cov-report=xml tests
+    - name: Run linting
+      run: |
+        uv run ruff check .
+
+    - name: Check formatting
+      run: |
+        uv run ruff format --check .
+
+    - name: Run tests with coverage
+      run: |
+        PYTHONPATH=. uv run pytest tests/ -v \
+          --cov=src \
+          --cov-report=term-missing \
+          --cov-report=xml \
+          --cov-fail-under=80
+
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        slug: BERDataLakehouse/minio_manager_service
+        files: ./coverage.xml
+        fail_ci_if_error: false
+        verbose: true
+
+    - name: Create Coverage Comment
+      if: github.event_name == 'pull_request'
+      uses: py-cov-action/python-coverage-comment-action@v3
+      with:
+        GITHUB_TOKEN: ${{ github.token }}
+        MINIMUM_GREEN: 80
+        MINIMUM_ORANGE: 70

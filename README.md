@@ -1,5 +1,7 @@
 # MinIO Manager Service
 
+[![codecov](https://codecov.io/gh/BERDataLakehouse/minio_manager_service/branch/main/graph/badge.svg)](https://codecov.io/gh/BERDataLakehouse/minio_manager_service)
+
 A centralized FastAPI-based microservice that manages MinIO users, groups, and policies for data governance within the BERDL platform. It provides dynamic credential management and policy enforcement for Spark applications without requiring code changes.
 
 ## Overview
