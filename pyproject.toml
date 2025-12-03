@@ -15,6 +15,7 @@ dependencies = [
     "cacheout==0.16.0",
     "aiobotocore==2.24.2",
     "redis==6.4.0",
+    "ruff==0.14.4",
 ]
 
 [dependency-groups]
