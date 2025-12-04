@@ -12,11 +12,14 @@ This module provides thorough test coverage for PolicyManager including:
 
 import json
 import os
-import pytest
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from src.minio.managers.policy_manager import PolicyManager
 from src.minio.core.minio_client import MinIOClient
+from src.minio.models.command import CommandResult
 from src.minio.models.minio_config import MinIOConfig
 from src.minio.models.policy import (
     PolicyDocument,
@@ -28,7 +31,7 @@ from src.minio.models.policy import (
     PolicyType,
     PolicyAction,
 )
-from src.service.exceptions import PolicyOperationError
+from src.service.exceptions import PolicyOperationError, PolicyValidationError
 
 
 # =============================================================================
@@ -70,7 +73,6 @@ def mock_minio_client(mock_minio_config):
 @pytest.fixture
 def mock_lock_manager():
     """Create a mock DistributedLockManager."""
-    from contextlib import asynccontextmanager
 
     @asynccontextmanager
     async def mock_policy_update_lock(policy_name: str, timeout: int = None):
@@ -269,14 +271,12 @@ class TestResourceManagerMethods:
 
     def test_validate_resource_name_invalid_prefix(self, policy_manager):
         """Test _validate_resource_name with invalid prefix."""
-        from src.service.exceptions import PolicyValidationError
 
         with pytest.raises(PolicyValidationError):
             policy_manager._validate_resource_name("invalid-policy-name")
 
     def test_validate_resource_name_reserved(self, policy_manager):
         """Test _validate_resource_name with reserved names."""
-        from src.service.exceptions import PolicyValidationError
 
         with pytest.raises(PolicyValidationError):
             policy_manager._validate_resource_name("readonly")
@@ -634,7 +634,6 @@ class TestAttachDetachPolicy:
     @pytest.mark.asyncio
     async def test_attach_policy_to_user(self, policy_manager, mock_executor):
         """Test attaching policy to user."""
-        from src.minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
@@ -651,7 +650,6 @@ class TestAttachDetachPolicy:
     @pytest.mark.asyncio
     async def test_attach_policy_to_user_failure(self, policy_manager, mock_executor):
         """Test attach policy to user failure."""
-        from src.minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
@@ -671,7 +669,6 @@ class TestAttachDetachPolicy:
     @pytest.mark.asyncio
     async def test_detach_policy_from_user(self, policy_manager, mock_executor):
         """Test detaching policy from user."""
-        from src.minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
@@ -688,7 +685,6 @@ class TestAttachDetachPolicy:
     @pytest.mark.asyncio
     async def test_attach_policy_to_group(self, policy_manager, mock_executor):
         """Test attaching policy to group."""
-        from src.minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
@@ -705,7 +701,6 @@ class TestAttachDetachPolicy:
     @pytest.mark.asyncio
     async def test_detach_policy_from_group(self, policy_manager, mock_executor):
         """Test detaching policy from group."""
-        from src.minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
@@ -733,7 +728,6 @@ class TestPolicyAttachmentStatus:
         self, policy_manager, mock_executor
     ):
         """Test checking if policy is attached to group - true case."""
-        from src.minio.models.command import CommandResult
 
         response = {
             "result": {
@@ -761,7 +755,6 @@ class TestPolicyAttachmentStatus:
         self, policy_manager, mock_executor
     ):
         """Test checking if policy is attached to group - false case."""
-        from src.minio.models.command import CommandResult
 
         response = {"result": {"policyMappings": []}}
         mock_executor._execute_command = AsyncMock(
@@ -783,7 +776,6 @@ class TestPolicyAttachmentStatus:
         self, policy_manager, mock_executor
     ):
         """Test checking if both user policies are attached."""
-        from src.minio.models.command import CommandResult
 
         # Mock responses for both policy checks
         response = {

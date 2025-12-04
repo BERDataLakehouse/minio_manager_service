@@ -9,7 +9,13 @@ import pytest
 from src.minio.managers.group_manager import GroupManager, RESOURCE_TYPE
 from src.minio.models.command import CommandResult
 from src.minio.models.group import GroupModel
-from src.minio.models.policy import PolicyModel
+from src.minio.models.policy import (
+    PolicyAction,
+    PolicyDocument,
+    PolicyEffect,
+    PolicyModel,
+    PolicyStatement,
+)
 from src.service.exceptions import GroupOperationError
 
 
@@ -63,13 +69,6 @@ def mock_executor():
 @pytest.fixture
 def sample_policy_document():
     """Create a valid policy document for testing."""
-    from src.minio.models.policy import (
-        PolicyDocument,
-        PolicyStatement,
-        PolicyEffect,
-        PolicyAction,
-    )
-
     return PolicyDocument(
         version="2012-10-17",
         statement=[

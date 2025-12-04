@@ -1,5 +1,6 @@
 """Comprehensive tests for the minio.core.distributed_lock module."""
 
+import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -325,7 +326,6 @@ class TestHealthCheck:
         self, lock_manager_with_mock_redis, mock_redis_client
     ):
         """Test health_check returns False on timeout."""
-        import asyncio
 
         mock_redis_client.ping.side_effect = asyncio.TimeoutError("Timeout")
 

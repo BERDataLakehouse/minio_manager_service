@@ -17,8 +17,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.routes.credentials import CredentialsResponse, router
+from src.routes.credentials import CredentialsResponse, get_credentials, router
 from src.service.app_state import AppState
+from src.service.dependencies import auth
 from src.service.kb_auth import AdminPermission, KBaseUser
 
 
@@ -74,8 +75,6 @@ def test_app(mock_app_state, mock_auth_user):
     app.state.sharing_manager = MagicMock()
 
     # Override auth dependency
-    from src.service.dependencies import auth
-
     app.dependency_overrides[auth] = lambda: mock_auth_user
 
     return app
@@ -201,7 +200,6 @@ class TestGetCredentialsAsync:
     @pytest.mark.asyncio
     async def test_get_credentials_existing_user_async(self, mock_app_state):
         """Test get_credentials for existing user."""
-        from src.routes.credentials import get_credentials
 
         mock_request = MagicMock()
         mock_request.app.state = mock_app_state
@@ -220,7 +218,6 @@ class TestGetCredentialsAsync:
     @pytest.mark.asyncio
     async def test_get_credentials_new_user_async(self, mock_app_state):
         """Test get_credentials auto-creates new user."""
-        from src.routes.credentials import get_credentials
 
         mock_request = MagicMock()
         mock_request.app.state = mock_app_state
@@ -246,7 +243,6 @@ class TestGetCredentialsErrors:
     @pytest.mark.asyncio
     async def test_get_credentials_user_creation_error(self, mock_app_state):
         """Test handling of user creation errors."""
-        from src.routes.credentials import get_credentials
 
         mock_request = MagicMock()
 
@@ -266,7 +262,6 @@ class TestGetCredentialsErrors:
     @pytest.mark.asyncio
     async def test_get_credentials_rotation_error(self, mock_app_state):
         """Test handling of credential rotation errors."""
-        from src.routes.credentials import get_credentials
 
         mock_request = MagicMock()
 
