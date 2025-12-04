@@ -16,6 +16,7 @@ from ..minio.managers.sharing_manager import PathAccessInfo
 from ..minio.utils.validators import validate_s3_path
 from ..service.app_state import get_app_state
 from ..service.dependencies import auth
+from ..service.exceptions import DataGovernanceError
 from ..service.kb_auth import KBaseUser
 
 logger = logging.getLogger(__name__)
@@ -334,7 +335,7 @@ async def make_path_public(
         logger.error(
             f"User {username} failed to make {request_data.path} public: {result.errors}"
         )
-        raise RuntimeError(error_msg)
+        raise DataGovernanceError(error_msg)
 
     logger.info(f"User {username} successfully made {request_data.path} public")
 
@@ -371,7 +372,7 @@ async def make_path_private(
         logger.error(
             f"User {username} failed to make {request_data.path} private: {result.errors}"
         )
-        raise RuntimeError(error_msg)
+        raise DataGovernanceError(error_msg)
 
     logger.info(f"User {username} successfully made {request_data.path} private")
 
