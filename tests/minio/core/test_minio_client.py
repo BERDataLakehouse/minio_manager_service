@@ -5,9 +5,10 @@ MinIOClient provides async wrapper around aiobotocore for S3/MinIO operations.
 Tests use mocked aiobotocore client from conftest.py fixtures.
 """
 
+import aiobotocore.session
 import pytest
 from botocore.exceptions import ClientError
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.minio.core.minio_client import MinIOClient, MAX_LIST_OBJECTS_COUNT
 from src.service.exceptions import BucketOperationError, ConnectionError
@@ -73,9 +74,6 @@ class TestMinIOClientInitialization:
         client = MinIOClient(mock_minio_config)
 
         # Mock get_session to raise an error
-        import aiobotocore.session
-        from unittest.mock import patch
-
         with patch.object(
             aiobotocore.session,
             "get_session",

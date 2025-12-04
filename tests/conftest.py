@@ -17,6 +17,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.main import create_application
+from src.minio.core.minio_client import MinIOClient
+from src.minio.managers.group_manager import GroupManager
+from src.minio.managers.policy_manager import PolicyManager
+from src.minio.managers.user_manager import UserManager
 from src.minio.models.minio_config import MinIOConfig
 from src.minio.models.policy import (
     PolicyDocument,
@@ -27,6 +31,8 @@ from src.minio.models.policy import (
 )
 from src.minio.models.user import UserModel
 from src.minio.models.group import GroupModel
+from src.service.dependencies import auth
+from src.service.exceptions import PolicyOperationError
 from src.service.kb_auth import AdminPermission, KBaseUser
 
 
@@ -126,8 +132,6 @@ def mock_minio_client(mock_minio_config, mock_aiobotocore_session):
     This provides a MinIOClient that behaves correctly as an async context
     manager but uses mocked S3 operations underneath.
     """
-    from src.minio.core.minio_client import MinIOClient
-
     return MinIOClient(mock_minio_config)
 
 
@@ -177,8 +181,6 @@ def mock_distributed_lock_manager(mock_redis_client):
         )
         acquired = await lock.acquire(blocking=False)
         if not acquired:
-            from src.service.exceptions import PolicyOperationError
-
             raise PolicyOperationError(
                 f"Policy '{policy_name}' is currently locked. Try again later."
             )
@@ -328,7 +330,6 @@ def sample_group_data():
 @pytest.fixture
 def mock_policy_manager(mock_minio_client, mock_minio_config):
     """Create a PolicyManager with mocked dependencies."""
-    from src.minio.managers.policy_manager import PolicyManager
 
     return PolicyManager(mock_minio_client, mock_minio_config)
 
@@ -336,7 +337,6 @@ def mock_policy_manager(mock_minio_client, mock_minio_config):
 @pytest.fixture
 def mock_user_manager(mock_minio_client, mock_minio_config):
     """Create a UserManager with mocked dependencies."""
-    from src.minio.managers.user_manager import UserManager
 
     return UserManager(mock_minio_client, mock_minio_config)
 
@@ -344,7 +344,6 @@ def mock_user_manager(mock_minio_client, mock_minio_config):
 @pytest.fixture
 def mock_group_manager(mock_minio_client, mock_minio_config):
     """Create a GroupManager with mocked dependencies."""
-    from src.minio.managers.group_manager import GroupManager
 
     return GroupManager(mock_minio_client, mock_minio_config)
 
@@ -443,7 +442,6 @@ def mock_app(mock_kbase_user):
     user = mock_kbase_user()
 
     # Mock auth dependency
-    from src.service.dependencies import auth
 
     def mock_auth():
         return user

@@ -25,8 +25,13 @@ from src.routes.management import (
     ResourceDeleteResponse,
     UserListResponse,
     UserManagementResponse,
+    create_user,
+    delete_policy,
+    list_users,
     router,
 )
+from src.service.dependencies import require_admin
+from src.service.exception_handlers import universal_error_handler
 from src.service.kb_auth import AdminPermission, KBaseUser
 
 
@@ -118,7 +123,6 @@ def mock_admin_user():
 @pytest.fixture
 def test_app(mock_app_state, mock_admin_user):
     """Create a test FastAPI application with mocked dependencies."""
-    from src.service.exception_handlers import universal_error_handler
 
     app = FastAPI()
     app.include_router(router)
@@ -135,8 +139,6 @@ def test_app(mock_app_state, mock_admin_user):
     app.state.sharing_manager = MagicMock()
 
     # Override admin auth dependency
-    from src.service.dependencies import require_admin
-
     app.dependency_overrides[require_admin] = lambda: mock_admin_user
 
     return app
@@ -497,7 +499,6 @@ class TestManagementFunctionsAsync:
     @pytest.mark.asyncio
     async def test_list_users_async(self, mock_app_state, mock_admin_user):
         """Test list_users function directly."""
-        from src.routes.management import list_users
 
         mock_request = MagicMock()
 
@@ -511,7 +512,6 @@ class TestManagementFunctionsAsync:
     @pytest.mark.asyncio
     async def test_create_user_async(self, mock_app_state, mock_admin_user):
         """Test create_user function directly."""
-        from src.routes.management import create_user
 
         mock_request = MagicMock()
 
@@ -526,7 +526,6 @@ class TestManagementFunctionsAsync:
         self, mock_app_state, mock_admin_user
     ):
         """Test that detach errors don't stop policy deletion."""
-        from src.routes.management import delete_policy
 
         mock_request = MagicMock()
 

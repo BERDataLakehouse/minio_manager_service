@@ -34,11 +34,17 @@ from src.routes.sharing import (
     ShareResponse,
     UnshareRequest,
     UnshareResponse,
+    get_path_access_info,
+    make_path_private,
+    make_path_public,
     router,
+    share_data,
+    unshare_data,
 )
+from src.service.dependencies import auth
+from src.service.exception_handlers import universal_error_handler
 from src.service.exceptions import DataGovernanceError, PolicyValidationError
 from src.service.kb_auth import AdminPermission, KBaseUser
-
 
 # === FIXTURES ===
 
@@ -119,7 +125,6 @@ def mock_auth_user():
 @pytest.fixture
 def test_app(mock_app_state, mock_auth_user):
     """Create a test FastAPI application with mocked dependencies."""
-    from src.service.exception_handlers import universal_error_handler
 
     app = FastAPI()
     app.include_router(router)
@@ -136,8 +141,6 @@ def test_app(mock_app_state, mock_auth_user):
     app.state.sharing_manager = mock_app_state.sharing_manager
 
     # Override auth dependency
-    from src.service.dependencies import auth
-
     app.dependency_overrides[auth] = lambda: mock_auth_user
 
     return app
@@ -566,7 +569,6 @@ class TestSharingFunctionsAsync:
     @pytest.mark.asyncio
     async def test_share_data_async(self, mock_sharing_manager):
         """Test share_data function directly."""
-        from src.routes.sharing import share_data, ShareRequest
 
         mock_request = MagicMock()
         mock_response = MagicMock()
@@ -587,7 +589,6 @@ class TestSharingFunctionsAsync:
     @pytest.mark.asyncio
     async def test_unshare_data_async(self, mock_sharing_manager):
         """Test unshare_data function directly."""
-        from src.routes.sharing import unshare_data, UnshareRequest
 
         mock_request = MagicMock()
         mock_response = MagicMock()
@@ -610,7 +611,6 @@ class TestSharingFunctionsAsync:
     @pytest.mark.asyncio
     async def test_make_public_async(self, mock_sharing_manager):
         """Test make_path_public function directly."""
-        from src.routes.sharing import make_path_public, PathRequest
 
         mock_request = MagicMock()
         mock_app_state = MagicMock()
@@ -627,7 +627,6 @@ class TestSharingFunctionsAsync:
     @pytest.mark.asyncio
     async def test_make_private_async(self, mock_sharing_manager):
         """Test make_path_private function directly."""
-        from src.routes.sharing import make_path_private, PathRequest
 
         mock_request = MagicMock()
         mock_app_state = MagicMock()
@@ -644,7 +643,6 @@ class TestSharingFunctionsAsync:
     @pytest.mark.asyncio
     async def test_get_path_access_info_async(self, mock_sharing_manager):
         """Test get_path_access_info function directly."""
-        from src.routes.sharing import get_path_access_info, PathRequest
 
         mock_request = MagicMock()
         mock_app_state = MagicMock()
@@ -669,7 +667,6 @@ class TestSharingErrorHandling:
     @pytest.mark.asyncio
     async def test_share_data_governance_error(self, mock_sharing_manager):
         """Test DataGovernanceError is raised for make_public errors."""
-        from src.routes.sharing import make_path_public, PathRequest
 
         mock_sharing_manager.make_public.return_value = SharingResult(
             path="s3a://bucket/data/",
