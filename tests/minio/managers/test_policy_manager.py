@@ -363,9 +363,8 @@ class TestEnsureUserPolicies:
             return_value=sample_user_home_policy
         )
 
-        home_policy, system_policy = await policy_manager.ensure_user_policies(
-            "testuser"
-        )
+        # Call without capturing result since we only verify side effects
+        await policy_manager.ensure_user_policies("testuser")
 
         # Should not create policies, only load existing ones
         assert policy_manager._load_minio_policy.call_count == 2
