@@ -14,6 +14,7 @@ from src.minio.utils.validators import (
     USER_HOME_POLICY_PREFIX,
     USER_SYSTEM_POLICY_PREFIX,
     GROUP_POLICY_PREFIX,
+    GROUP_RO_POLICY_PREFIX,
 )
 from src.service.exceptions import (
     UserOperationError,
@@ -480,6 +481,11 @@ class TestValidatePolicyName:
     def test_valid_group_policy_name(self):
         """Test valid group policy name."""
         policy = f"{GROUP_POLICY_PREFIX}testgroup"
+        assert validate_policy_name(policy) == policy
+
+    def test_valid_group_read_only_policy_name(self):
+        """Test valid group read-only policy name."""
+        policy = f"{GROUP_RO_POLICY_PREFIX}testgroup"
         assert validate_policy_name(policy) == policy
 
     def test_policy_name_strips_whitespace(self):

@@ -76,6 +76,13 @@ class GroupManagementResponse(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
 
     group_name: Annotated[str, Field(description="Group name", min_length=1)]
+    ro_group_name: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Read-only group name (created alongside main group)",
+        ),
+    ]
     members: Annotated[list[str], Field(description="Group members")]
     member_count: Annotated[int, Field(description="Number of members", ge=0)]
     policy_name: Annotated[str, Field(description="Associated policy name")]
@@ -321,16 +328,23 @@ async def create_group(
     request: Request,
     authenticated_user=Depends(require_admin),
 ):
-    """Create a new group."""
+    """Create a new group.
+
+    This creates both the main group with read/write access and a read-only group
+    ({group_name}ro) with read-only access to the same shared workspace.
+    """
     app_state = get_app_state(request)
 
-    group_info = await app_state.group_manager.create_group(
+    # create_group returns a tuple: (main_group, ro_group)
+    group_info, ro_group_info = await app_state.group_manager.create_group(
         group_name=group_name,
         creator=authenticated_user.user,
     )
 
+    # Return response for the main group (read/write), including RO group info
     response = GroupManagementResponse(
         group_name=group_info.group_name,
+        ro_group_name=ro_group_info.group_name,
         members=group_info.members,
         member_count=len(group_info.members),
         policy_name=str(group_info.policy_name),
@@ -339,7 +353,10 @@ async def create_group(
         timestamp=datetime.now(),
     )
 
-    logger.info(f"Admin {authenticated_user.user} created group {group_name}")
+    logger.info(
+        f"Admin {authenticated_user.user} created group {group_name} "
+        f"and read-only group {ro_group_info.group_name}"
+    )
     return response
 
 

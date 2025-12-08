@@ -88,7 +88,13 @@ def mock_app_state():
     mock_created_group.group_name = "newgroup"
     mock_created_group.members = []
     mock_created_group.policy_name = "group-policy-newgroup"
-    app_state.group_manager.create_group = AsyncMock(return_value=mock_created_group)
+    mock_created_ro_group = MagicMock()
+    mock_created_ro_group.group_name = "newgroupro"
+    mock_created_ro_group.members = []
+    mock_created_ro_group.policy_name = "group-ro-policy-newgroup"
+    app_state.group_manager.create_group = AsyncMock(
+        return_value=(mock_created_group, mock_created_ro_group)
+    )
     app_state.group_manager.add_user_to_group = AsyncMock()
     app_state.group_manager.remove_user_from_group = AsyncMock()
     app_state.group_manager.delete_resource = AsyncMock(return_value=True)

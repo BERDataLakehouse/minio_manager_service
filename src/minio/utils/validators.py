@@ -30,12 +30,14 @@ BUILT_IN_POLICIES = [
 USER_HOME_POLICY_PREFIX = "user-home-policy-"
 USER_SYSTEM_POLICY_PREFIX = "user-system-policy-"
 GROUP_POLICY_PREFIX = "group-policy-"
+GROUP_RO_POLICY_PREFIX = "group-ro-policy-"
 
 # Allowed policy prefixes for data governance policies
 DATA_GOVERNANCE_POLICY_PREFIXES = [
     USER_HOME_POLICY_PREFIX,
     USER_SYSTEM_POLICY_PREFIX,
     GROUP_POLICY_PREFIX,
+    GROUP_RO_POLICY_PREFIX,
 ]
 
 # =============================================================================

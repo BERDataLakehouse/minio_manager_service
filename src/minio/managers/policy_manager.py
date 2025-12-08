@@ -357,6 +357,10 @@ class PolicyManager(ResourceManager[PolicyModel]):
         """Create group home policy"""
         return self._create_policy_model(PolicyType.GROUP_HOME, group_name)
 
+    def _create_group_read_only_policy(self, group_name: str) -> PolicyModel:
+        """Create group read-only policy"""
+        return self._create_policy_model(PolicyType.GROUP_READ_ONLY, group_name)
+
     async def get_user_home_policy(self, username: str) -> PolicyModel:
         """
         Retrieve the user's home policy from MinIO.
@@ -405,6 +409,59 @@ class PolicyManager(ResourceManager[PolicyModel]):
                 )
             return result
 
+    async def get_group_read_only_policy(self, group_name: str) -> PolicyModel:
+        """
+        Retrieve the existing read-only policy for a specific group.
+
+        Args:
+            group_name: Group name to get read-only policy for
+        """
+        async with self.operation_context("get_group_read_only_policy"):
+            policy_name = self.get_policy_name(PolicyType.GROUP_READ_ONLY, group_name)
+            result = await self._load_minio_policy(policy_name)
+            if result is None:
+                raise PolicyOperationError(
+                    f"Group read-only policy {policy_name} not found or unsupported"
+                )
+            return result
+
+    async def ensure_group_read_only_policy(self, group_name: str) -> PolicyModel:
+        """
+        Ensure read-only group policy exists for a group.
+
+        This method guarantees that the group has a read-only policy for shared
+        workspace access. The policy provides read access to the group's shared
+        directory structure.
+
+        If the policy already exists, it is returned as-is. If it doesn't exist,
+        it is created with default read-only permissions.
+
+        Args:
+            group_name: Group name to ensure read-only policy for
+        """
+        async with self.operation_context("create_group_read_only_policy"):
+            # Create group read-only policy model
+            group_ro_policy = self._create_group_read_only_policy(group_name)
+
+            # Check if policy already exists
+            policy_exists = await self.resource_exists(group_ro_policy.policy_name)
+            if policy_exists:
+                logger.info(
+                    f"Group read-only policy already exists: {group_ro_policy.policy_name}"
+                )
+                # Load existing policy to return
+                group_ro_policy = await self._load_minio_policy(
+                    group_ro_policy.policy_name
+                )
+            else:
+                # Create the policy in MinIO
+                await self._create_minio_policy(group_ro_policy)
+                logger.info(
+                    f"Created group read-only policy: {group_ro_policy.policy_name}"
+                )
+
+            return group_ro_policy  # type: ignore
+
     async def delete_user_policies(self, username: str) -> None:
         """
         Delete both home and system policies for a user.
@@ -452,22 +509,59 @@ class PolicyManager(ResourceManager[PolicyModel]):
                     f"Failed to delete user policies: {error_msg}"
                 )
 
-    async def delete_group_policy(self, group_name: str) -> None:
+    async def delete_group_policy(
+        self, group_name: str, include_read_only: bool = True
+    ) -> None:
         """
         Delete a group's policy from MinIO with proper cleanup.
 
         Args:
             group_name: Group name to delete policy for
+            include_read_only: If True, also delete the read-only policy (default True)
         """
         async with self.operation_context("delete_group_policy"):
-            policy_name = self.get_policy_name(PolicyType.GROUP_HOME, group_name)
+            errors = []
 
-            success = await self.delete_resource(policy_name)
-            if not success:
-                raise PolicyOperationError(
-                    f"Failed to delete group policy: {policy_name}"
+            # Delete the main group policy (read/write)
+            policy_name = self.get_policy_name(PolicyType.GROUP_HOME, group_name)
+            try:
+                success = await self.delete_resource(policy_name)
+                if success:
+                    logger.info(f"Deleted group policy: {policy_name}")
+                else:
+                    errors.append(f"Failed to delete group policy: {policy_name}")
+            except Exception as e:
+                logger.error(f"Error deleting group policy {policy_name}: {e}")
+                errors.append(f"Error deleting group policy: {e}")
+
+            # Delete the read-only group policy if requested
+            if include_read_only:
+                ro_policy_name = self.get_policy_name(
+                    PolicyType.GROUP_READ_ONLY, group_name
                 )
-            logger.info(f"Deleted group policy: {policy_name}")
+                try:
+                    # Check if read-only policy exists before trying to delete
+                    if await self.resource_exists(ro_policy_name):
+                        success = await self.delete_resource(ro_policy_name)
+                        if success:
+                            logger.info(
+                                f"Deleted group read-only policy: {ro_policy_name}"
+                            )
+                        else:
+                            errors.append(
+                                f"Failed to delete group read-only policy: {ro_policy_name}"
+                            )
+                except Exception as e:
+                    logger.warning(
+                        f"Error deleting group read-only policy {ro_policy_name}: {e}"
+                    )
+                    # Don't add to errors - read-only policy deletion is best-effort
+
+            if errors:
+                error_msg = "; ".join(errors)
+                raise PolicyOperationError(
+                    f"Failed to delete group policies: {error_msg}"
+                )
 
     # === POLICY ATTACHMENT OPERATIONS ===
 
