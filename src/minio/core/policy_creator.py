@@ -115,7 +115,7 @@ class PolicyCreator:
         Initialize the PolicyCreator for building a new policy from scratch.
 
         Args:
-            policy_type: Type of policy being created (USER_HOME, USER_SYSTEM, GROUP_HOME)
+            policy_type: Type of policy being created (USER_HOME, USER_SYSTEM, GROUP_HOME, GROUP_HOME_RO)
             target_name: Name of the target (username or group name)
             config: MinIO configuration for bucket and path information
             path_target_name: Optional target name to use for path generation.
