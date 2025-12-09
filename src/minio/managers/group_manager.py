@@ -101,7 +101,11 @@ class GroupManager(ResourceManager[GroupModel]):
     # === Single Group Creation Helper ===
 
     async def _create_single_group(
-        self, group_name: str, members: list[str], read_only: bool = False
+        self,
+        group_name: str,
+        members: list[str],
+        read_only: bool = False,
+        path_target: str | None = None,
     ) -> PolicyModel:
         """Create a single group with its policy.
 
@@ -112,13 +116,15 @@ class GroupManager(ResourceManager[GroupModel]):
             group_name: Name of the group to create
             members: Initial members for the group
             read_only: If True, create with read-only policy
+            path_target: Target name for policy paths (defaults to group_name).
+                         For RO groups, this should be the main group name.
 
         Returns:
             The policy model attached to the group
         """
         # Create group policy (ensure_group_policy is idempotent)
         policy_model = await self.policy_manager.ensure_group_policy(
-            group_name, read_only=read_only
+            group_name, read_only=read_only, path_target=path_target
         )
 
         # Create the group if it doesn't exist
@@ -261,9 +267,9 @@ class GroupManager(ResourceManager[GroupModel]):
                 group_name, members, read_only=False
             )
 
-            # Create read-only group ({group_name}ro)
+            # Create read-only group ({group_name}ro) with access to main group paths
             ro_policy_model = await self._create_single_group(
-                ro_group_name, members, read_only=True
+                ro_group_name, members, read_only=True, path_target=group_name
             )
 
             # Create group shared directory structure (only once, for the main group)

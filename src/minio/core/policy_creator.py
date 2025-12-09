@@ -109,6 +109,7 @@ class PolicyCreator:
         policy_type: PolicyType,
         target_name: str,
         config: MinIOConfig,
+        path_target_name: str | None = None,
     ):
         """
         Initialize the PolicyCreator for building a new policy from scratch.
@@ -117,21 +118,27 @@ class PolicyCreator:
             policy_type: Type of policy being created (USER_HOME, USER_SYSTEM, GROUP_HOME)
             target_name: Name of the target (username or group name)
             config: MinIO configuration for bucket and path information
+            path_target_name: Optional target name to use for path generation.
+                              If not provided, target_name is used.
+                              Useful when policy name should differ from path target (e.g. RO groups).
         """
 
         self.policy_type = policy_type
         self.target_name = target_name
         self.system_config = SYSTEM_RESOURCE_CONFIG
 
+        # Use path_target_name if provided, otherwise default to target_name
+        self.path_target = path_target_name or target_name
+
         self.config = config
         # user warehouse for spark tables
-        self.user_sql_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.users_sql_warehouse_prefix}/{self.target_name}"
+        self.user_sql_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.users_sql_warehouse_prefix}/{self.path_target}"
         # user warehouse for general files
-        self.user_general_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.users_general_warehouse_prefix}/{self.target_name}"
+        self.user_general_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.users_general_warehouse_prefix}/{self.path_target}"
         # tenant warehouse for spark tables
-        self.tenant_sql_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.tenant_sql_warehouse_prefix}/{self.target_name}"
+        self.tenant_sql_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.tenant_sql_warehouse_prefix}/{self.path_target}"
         # tenant warehouse for general files
-        self.tenant_general_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.tenant_general_warehouse_prefix}/{self.target_name}"
+        self.tenant_general_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.tenant_general_warehouse_prefix}/{self.path_target}"
 
         # Internal section management with Dict[PolicySectionType, List[PolicyStatement]]
         self._sections: Dict[PolicySectionType, List[PolicyStatement]] = {

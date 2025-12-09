@@ -108,7 +108,9 @@ def mock_policy_manager(sample_policy_document):
 
     # ensure_group_policy can be called with (group_name) or (group_name, read_only=True)
     # Return appropriate policy based on group_name
-    async def ensure_group_policy_side_effect(group_name: str, read_only: bool = False):
+    async def ensure_group_policy_side_effect(
+        group_name: str, read_only: bool = False, path_target: str | None = None
+    ):
         return PolicyModel(
             policy_name=f"group-policy-{group_name}",
             policy_document=sample_policy_document,
@@ -554,10 +556,10 @@ class TestCreateGroup:
 
             # Should call ensure_group_policy for both groups
             mock_policy_manager.ensure_group_policy.assert_any_call(
-                "testgroup", read_only=False
+                "testgroup", read_only=False, path_target=None
             )
             mock_policy_manager.ensure_group_policy.assert_any_call(
-                "testgroupro", read_only=True
+                "testgroupro", read_only=True, path_target="testgroup"
             )
 
 

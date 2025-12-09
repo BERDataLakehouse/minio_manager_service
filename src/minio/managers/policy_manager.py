@@ -293,7 +293,10 @@ class PolicyManager(ResourceManager[PolicyModel]):
             return home_policy, system_policy  # type: ignore
 
     def _create_policy_model(
-        self, policy_type: PolicyType, target_name: str
+        self,
+        policy_type: PolicyType,
+        target_name: str,
+        path_target_name: str | None = None,
     ) -> PolicyModel:
         """Create a policy model for the given type and target."""
         try:
@@ -301,6 +304,7 @@ class PolicyManager(ResourceManager[PolicyModel]):
                 policy_type=policy_type,
                 target_name=target_name,
                 config=self.config,
+                path_target_name=path_target_name,
             )
             return builder.create_default_policy().build()
         except Exception as e:
@@ -321,7 +325,7 @@ class PolicyManager(ResourceManager[PolicyModel]):
         return self._create_policy_model(PolicyType.USER_SYSTEM, username)
 
     async def ensure_group_policy(
-        self, group_name: str, read_only: bool = False
+        self, group_name: str, read_only: bool = False, path_target: str | None = None
     ) -> PolicyModel:
         """
         Ensure group policy exists for a group.
@@ -334,8 +338,10 @@ class PolicyManager(ResourceManager[PolicyModel]):
         multiple times and will not fail if the policy already exists.
 
         Args:
-            group_name: Group name to ensure policy for
+            group_name: Group name for policy naming (e.g., "testgroupro")
             read_only: If True, create policy with READ-only permissions
+            path_target: Target name for path generation (defaults to group_name).
+                         For RO groups, this should be the main group name.
         """
         op_name = (
             "create_group_policy_read_only" if read_only else "create_group_policy"
@@ -353,8 +359,10 @@ class PolicyManager(ResourceManager[PolicyModel]):
                 logger.info(f"Group policy{suffix} already exists: {policy_name}")
                 return await self._load_minio_policy(policy_name)  # type: ignore
 
-            # Create policy with appropriate permissions
-            policy = self._create_group_home_policy(group_name, read_only=read_only)
+            # Create policy with appropriate permissions and path target
+            policy = self._create_group_home_policy(
+                group_name, read_only=read_only, path_target_name=path_target
+            )
 
             await self._create_minio_policy(policy)
             suffix = " (read-only)" if read_only else ""
@@ -363,7 +371,10 @@ class PolicyManager(ResourceManager[PolicyModel]):
             return policy
 
     def _create_group_home_policy(
-        self, group_name: str, read_only: bool = False
+        self,
+        group_name: str,
+        read_only: bool = False,
+        path_target_name: str | None = None,
     ) -> PolicyModel:
         """Create group home policy.
 
@@ -372,7 +383,9 @@ class PolicyManager(ResourceManager[PolicyModel]):
             read_only: If True, create read-only policy with READ permissions
         """
         policy_type = PolicyType.GROUP_HOME_RO if read_only else PolicyType.GROUP_HOME
-        return self._create_policy_model(policy_type, group_name)
+        return self._create_policy_model(
+            policy_type, group_name, path_target_name=path_target_name
+        )
 
     async def get_user_home_policy(self, username: str) -> PolicyModel:
         """
