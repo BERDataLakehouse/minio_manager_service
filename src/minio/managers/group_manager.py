@@ -166,7 +166,7 @@ class GroupManager(ResourceManager[GroupModel]):
             # Detach read-only policy from read-only group
             # RO policies now use standard group-policy- naming
             ro_policy_name = self.policy_manager.get_policy_name(
-                PolicyType.GROUP_HOME, ro_group_name
+                PolicyType.GROUP_HOME_RO, ro_group_name
             )
             try:
                 await self.policy_manager.detach_policy_from_group(
