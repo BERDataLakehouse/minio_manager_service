@@ -12,6 +12,7 @@ from src.minio.core.policy_creator import (
 from src.minio.models.policy import (
     PolicyAction,
     PolicyDocument,
+    PolicyEffect,
     PolicyModel,
     PolicyPermissionLevel,
     PolicySectionType,
@@ -517,6 +518,38 @@ class TestEdgeCases:
         policy = creator.create_default_policy().build()
 
         assert "test.user-name" in policy.policy_name
+
+    def test_build_with_invalid_policy_name_raises_error(self, mock_minio_config):
+        """Test that build raises error if policy name validation fails."""
+        creator = PolicyCreator(
+            policy_type=PolicyType.USER_HOME,
+            target_name="invalid@user",  # Invalid character
+            config=mock_minio_config,
+        )
+
+        with pytest.raises(
+            PolicyOperationError, match="Generated policy name is invalid"
+        ):
+            creator.build()
+
+    def test_path_target_name_differs_from_target_name(self, mock_minio_config):
+        """Test using different path_target_name from target_name."""
+        creator = PolicyCreator(
+            policy_type=PolicyType.GROUP_HOME_RO,
+            target_name="testgroupro",
+            config=mock_minio_config,
+            path_target_name="testgroup",
+        )
+
+        creator.create_default_policy()
+        policy = creator.build()
+
+        # Policy name should use target_name
+        assert policy.policy_name == "group-policy-testgroupro"
+
+        # But paths should use path_target_name
+        policy_json = policy.to_minio_policy_json()
+        assert "testgroup" in policy_json  # Path uses path_target
 
 
 # =============================================================================

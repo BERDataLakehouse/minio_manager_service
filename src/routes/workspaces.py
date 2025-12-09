@@ -20,7 +20,7 @@ from ..minio.utils.governance import (
     generate_user_governance_prefix,
 )
 from ..service.dependencies import auth
-from ..service.exceptions import MinIOManagerError
+from ..service.exceptions import DataGovernanceError
 from ..service.kb_auth import KBaseUser
 
 logger = logging.getLogger(__name__)
@@ -262,7 +262,7 @@ async def get_group_workspace(
     )
 
     if not is_member and not is_ro_member:
-        raise MinIOManagerError("User is not a member of the group")
+        raise DataGovernanceError("User is not a member of the group")
     # Get group information
     group_info = await app_state.group_manager.get_group_info(group_name)
     group_policy = await app_state.policy_manager.get_group_policy(group_name)
@@ -305,7 +305,7 @@ async def get_group_sql_warehouse_prefix(
     )
 
     if not is_member and not is_ro_member:
-        raise MinIOManagerError("User is not a member of the group")
+        raise DataGovernanceError("User is not a member of the group")
 
     # Get group SQL warehouse prefix (tenant SQL warehouse)
     sql_warehouse_prefix = f"s3a://{app_state.group_manager.config.default_bucket}/{app_state.group_manager.tenant_sql_warehouse_prefix}/{group_name}/"
@@ -379,7 +379,7 @@ async def get_namespace_prefix(
         # Check if group exists
         group_exists = await app_state.group_manager.get_group_info(tenant)
         if not group_exists:
-            raise MinIOManagerError(f"Group {tenant} does not exist")
+            raise DataGovernanceError(f"Group {tenant} does not exist")
         # Check if user is a member of the group (either read/write or read-only variant)
         is_member = await app_state.group_manager.is_user_in_group(username, tenant)
         ro_group_name = f"{tenant}ro"
@@ -388,7 +388,7 @@ async def get_namespace_prefix(
         )
 
         if not is_member and not is_ro_member:
-            raise MinIOManagerError(
+            raise DataGovernanceError(
                 f"User {username} is not a member of the group {tenant}"
             )
         tenant_ns_prefix = generate_group_governance_prefix(tenant)

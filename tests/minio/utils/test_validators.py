@@ -414,6 +414,32 @@ class TestValidateS3Path:
         with pytest.raises(PolicyValidationError):
             validate_s3_path("s3://mybucket/%2e%2e%2f/etc/passwd")
 
+    def test_invalid_s3_path_non_ascii(self):
+        """Test S3 path with non-ASCII characters."""
+        with pytest.raises(PolicyValidationError, match="ASCII"):
+            validate_s3_path("s3://mybucket/path/\u4e2d\u6587")
+
+    def test_invalid_s3_path_suspicious_whitespace(self):
+        """Test S3 path with zero-width and suspicious whitespace."""
+        with pytest.raises(PolicyValidationError):
+            validate_s3_path("s3://mybucket/path\u200b/object")
+
+        with pytest.raises(PolicyValidationError):
+            validate_s3_path("s3://mybucket/path\ufeff/object")
+
+    def test_invalid_s3_path_leading_whitespace(self):
+        """Test S3 path with leading whitespace in key."""
+        with pytest.raises(PolicyValidationError):
+            validate_s3_path("s3://mybucket/ path/")
+
+    def test_invalid_s3_path_multiple_dots(self):
+        """Test S3 path with suspicious dot patterns."""
+        with pytest.raises(PolicyValidationError):
+            validate_s3_path("s3://mybucket/....//path")
+
+        with pytest.raises(PolicyValidationError):
+            validate_s3_path("s3://mybucket/path/..\\./etc")
+
 
 # =============================================================================
 # TEST PATH PREFIX VALIDATION

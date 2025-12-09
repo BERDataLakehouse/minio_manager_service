@@ -153,6 +153,7 @@ class SharingManager:
         requesting_user: str,
         with_users: Optional[List[str]] = None,
         with_groups: Optional[List[str]] = None,
+        permission_level: PolicyPermissionLevel = PolicyPermissionLevel.WRITE,
     ) -> SharingResult:
         """
         Share an S3 path with specified users and/or groups, granting them access permissions.
@@ -172,8 +173,11 @@ class SharingManager:
             requesting_user: Username of the user requesting the share operation
             with_users: Optional list of usernames to grant access to the path
             with_groups: Optional list of group names to grant access to the path
+            permission_level: Permission level to grant (READ or WRITE, default WRITE)
         """
-        logger.info(f"Starting share operation for path: {path}")
+        logger.info(
+            f"Starting share operation for path: {path} with {permission_level.value} permission"
+        )
 
         # Validate and authorize
         await self._validate_and_authorize_request(path, requesting_user)
@@ -182,10 +186,20 @@ class SharingManager:
         result = SharingResult(path=path)
 
         await self._update_targets_sharing(
-            SharingOperation.ADD, PolicyTarget.USER, with_users or [], path, result
+            SharingOperation.ADD,
+            PolicyTarget.USER,
+            with_users or [],
+            path,
+            result,
+            permission_level,
         )
         await self._update_targets_sharing(
-            SharingOperation.ADD, PolicyTarget.GROUP, with_groups or [], path, result
+            SharingOperation.ADD,
+            PolicyTarget.GROUP,
+            with_groups or [],
+            path,
+            result,
+            permission_level,
         )
 
         logger.info(f"Sharing completed for {path}: {result.success_count} targets")
@@ -260,6 +274,7 @@ class SharingManager:
         names: List[str],
         path: str,
         result: Union[SharingResult, UnsharingResult],
+        permission_level: PolicyPermissionLevel = PolicyPermissionLevel.WRITE,
     ) -> None:
         """Add or remove path sharing for multiple targets (users or groups)."""
         operation_verb = (
@@ -268,7 +283,9 @@ class SharingManager:
 
         for name in names:
             try:
-                await self._update_path_sharing(operation, target_type, name, path)
+                await self._update_path_sharing(
+                    operation, target_type, name, path, permission_level
+                )
                 result.add_success(target_type.value, name)
             except Exception as e:
                 logger.error(
@@ -282,15 +299,14 @@ class SharingManager:
         target_type: PolicyTarget,
         target_name: str,
         path: str,
+        permission_level: PolicyPermissionLevel = PolicyPermissionLevel.WRITE,
     ) -> None:
         """Add or remove path sharing by updating the appropriate policy."""
         if operation == SharingOperation.ADD:
             await self.policy_manager.add_path_access_for_target(
-                target_type, target_name, path, PolicyPermissionLevel.WRITE
+                target_type, target_name, path, permission_level
             )
-            log_message = (
-                f"Added path sharing: {path} to {target_type.value} {target_name}"
-            )
+            log_message = f"Added path sharing: {path} to {target_type.value} {target_name} with {permission_level.value} permission"
             logger.debug(log_message)
         else:  # SharingOperation.REMOVE
             await self.policy_manager.remove_path_access_for_target(

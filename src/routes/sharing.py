@@ -13,6 +13,7 @@ from fastapi import APIRouter, Body, Depends, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..minio.managers.sharing_manager import PathAccessInfo
+from ..minio.models.policy import PolicyPermissionLevel
 from ..minio.utils.validators import validate_s3_path
 from ..service.app_state import get_app_state
 from ..service.dependencies import auth
@@ -72,6 +73,14 @@ class ShareRequest(BaseModel):
     with_groups: Annotated[
         list[str],
         Field(default_factory=list, description="List of group names to share with"),
+    ]
+    permission: Annotated[
+        str,
+        Field(
+            default="write",
+            description="Permission level: 'read' for read-only, 'write' for read-write (default)",
+            pattern="^(read|write)$",
+        ),
     ]
 
     @field_validator("path")
@@ -210,12 +219,20 @@ async def share_data(
 
     username = authenticated_user.user
 
+    # Convert permission string to PolicyPermissionLevel
+    permission_level = (
+        PolicyPermissionLevel.READ
+        if share_request.permission == "read"
+        else PolicyPermissionLevel.WRITE
+    )
+
     # Perform the sharing operation
     result = await app_state.sharing_manager.share_path(
         path=share_request.path,
         requesting_user=username,
         with_users=share_request.with_users,
         with_groups=share_request.with_groups,
+        permission_level=permission_level,
     )
 
     share_response = ShareResponse(

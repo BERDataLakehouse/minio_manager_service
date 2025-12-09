@@ -279,6 +279,12 @@ def _validate_s3_object_key(key: str) -> None:
     if len(key) > 1024:
         raise PolicyValidationError("S3 object key cannot exceed 1024 characters")
 
+    # Disallow non-ASCII characters to prevent Unicode evasion of path checks
+    if not key.isascii():
+        raise PolicyValidationError(
+            "S3 object key must use ASCII characters only to prevent Unicode-based path bypasses"
+        )
+
     # Check for invalid characters in key
     invalid_chars = ["\n", "\r", "\0"]
     for char in invalid_chars:
@@ -286,6 +292,20 @@ def _validate_s3_object_key(key: str) -> None:
             raise PolicyValidationError(
                 "S3 object key cannot contain control characters"
             )
+
+    # Block zero-width / special whitespace characters that can hide traversal
+    suspicious_unicode_whitespace = [
+        "\u200b",  # zero width space
+        "\u200c",  # zero width non-joiner
+        "\u200d",  # zero width joiner
+        "\ufeff",  # zero width no-break space/BOM
+        "\u00a0",  # non-breaking space
+        "\u1680",  # ogham space mark
+    ]
+    if any(ch in key for ch in suspicious_unicode_whitespace):
+        raise PolicyValidationError(
+            "S3 object key contains disallowed whitespace characters"
+        )
 
     # Leading/trailing whitespace should be avoided
     if key != key.strip():
