@@ -54,7 +54,7 @@ class PolicyType(str, Enum):
     USER_HOME = "user_home"
     USER_SYSTEM = "user_system"
     GROUP_HOME = "group_home"
-    GROUP_READ_ONLY = "group_read_only"
+    GROUP_HOME_RO = "group_home_ro"
 
 
 class PolicySectionType(str, Enum):

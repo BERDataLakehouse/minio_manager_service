@@ -72,7 +72,7 @@ def group_policy_creator(mock_minio_config):
 def group_read_only_policy_creator(mock_minio_config):
     """Create a PolicyCreator for group read-only policy."""
     return PolicyCreator(
-        policy_type=PolicyType.GROUP_READ_ONLY,
+        policy_type=PolicyType.GROUP_HOME_RO,
         target_name="testgroup",
         config=mock_minio_config,
     )
@@ -138,12 +138,12 @@ class TestPolicyCreatorInit:
     def test_init_group_read_only_policy(self, mock_minio_config):
         """Test initialization for group read-only policy."""
         creator = PolicyCreator(
-            policy_type=PolicyType.GROUP_READ_ONLY,
+            policy_type=PolicyType.GROUP_HOME_RO,
             target_name="testgroup",
             config=mock_minio_config,
         )
 
-        assert creator.policy_type == PolicyType.GROUP_READ_ONLY
+        assert creator.policy_type == PolicyType.GROUP_HOME_RO
         assert (
             creator.tenant_sql_warehouse_path
             == "s3a://data-lake/tenant-sql-warehouse/testgroup"
@@ -566,7 +566,7 @@ class TestIntegration:
     def test_full_group_read_only_workflow(self, mock_minio_config):
         """Test complete group read-only policy creation workflow."""
         creator = PolicyCreator(
-            policy_type=PolicyType.GROUP_READ_ONLY,
+            policy_type=PolicyType.GROUP_HOME_RO,
             target_name="researchers",
             config=mock_minio_config,
         )

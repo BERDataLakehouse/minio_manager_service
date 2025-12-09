@@ -91,31 +91,33 @@ def mock_policy_manager(sample_policy_document):
     """Create a mock PolicyManager."""
     policy_manager = AsyncMock()
     policy_manager.get_policy_name = MagicMock(return_value="group-policy-testgroup")
+
+    # get_group_policy throws for new groups (like testgroupro) to trigger ensure_group_policy
+    async def get_group_policy_side_effect(group_name: str):
+        if group_name == "testgroup":
+            return PolicyModel(
+                policy_name="group-policy-testgroup",
+                policy_document=sample_policy_document,
+            )
+        # Throw for unknown groups to simulate policy not existing
+        raise Exception(f"Policy not found for {group_name}")
+
     policy_manager.get_group_policy = AsyncMock(
-        return_value=PolicyModel(
-            policy_name="group-policy-testgroup",
+        side_effect=get_group_policy_side_effect
+    )
+
+    # ensure_group_policy can be called with (group_name) or (group_name, read_only=True)
+    # Return appropriate policy based on group_name
+    async def ensure_group_policy_side_effect(group_name: str, read_only: bool = False):
+        return PolicyModel(
+            policy_name=f"group-policy-{group_name}",
             policy_document=sample_policy_document,
         )
-    )
+
     policy_manager.ensure_group_policy = AsyncMock(
-        return_value=PolicyModel(
-            policy_name="group-policy-testgroup",
-            policy_document=sample_policy_document,
-        )
+        side_effect=ensure_group_policy_side_effect
     )
-    # Read-only policy mocks
-    policy_manager.get_group_read_only_policy = AsyncMock(
-        return_value=PolicyModel(
-            policy_name="group-ro-policy-testgroup",
-            policy_document=sample_policy_document,
-        )
-    )
-    policy_manager.ensure_group_read_only_policy = AsyncMock(
-        return_value=PolicyModel(
-            policy_name="group-ro-policy-testgroup",
-            policy_document=sample_policy_document,
-        )
-    )
+
     policy_manager.attach_policy_to_group = AsyncMock()
     policy_manager.detach_policy_from_group = AsyncMock()
     policy_manager.delete_group_policy = AsyncMock()
@@ -426,7 +428,7 @@ class TestCreateGroup:
             # Verify read-only group was also created
             assert isinstance(ro_result, GroupModel)
             assert ro_result.group_name == "testgroupro"
-            assert ro_result.policy_name == "group-ro-policy-testgroup"
+            assert ro_result.policy_name == "group-policy-testgroupro"
 
     @pytest.mark.asyncio
     async def test_create_group_creator_not_exists(
@@ -526,12 +528,8 @@ class TestCreateGroup:
         self, group_manager_instance, mock_policy_manager, mock_user_manager
     ):
         """Test create_group falls back to ensure_group_policy if get_group_policy fails."""
-        # Make get_group_policy fail first time
+        # Make get_group_policy fail first time (for both main and RO group)
         mock_policy_manager.get_group_policy.side_effect = Exception("Policy not found")
-        # Also make get_group_read_only_policy fail to test the fallback
-        mock_policy_manager.get_group_read_only_policy.side_effect = Exception(
-            "Policy not found"
-        )
         group_manager_instance._policy_manager = mock_policy_manager
         group_manager_instance._user_manager = mock_user_manager
 
@@ -556,10 +554,10 @@ class TestCreateGroup:
             assert isinstance(result, GroupModel)
             assert isinstance(ro_result, GroupModel)
 
-            # Should call ensure_group_policy and ensure_group_read_only_policy as fallback
-            mock_policy_manager.ensure_group_policy.assert_called_once_with("testgroup")
-            mock_policy_manager.ensure_group_read_only_policy.assert_called_once_with(
-                "testgroupro"
+            # Should call ensure_group_policy with read_only=True as fallback
+            mock_policy_manager.ensure_group_policy.assert_any_call("testgroup")
+            mock_policy_manager.ensure_group_policy.assert_any_call(
+                "testgroupro", read_only=True
             )
 
 

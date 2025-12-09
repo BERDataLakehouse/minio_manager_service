@@ -538,80 +538,6 @@ class TestGetGroupPolicy:
             await policy_manager.get_group_policy("testgroup")
 
 
-class TestEnsureGroupReadOnlyPolicy:
-    """Tests for ensure_group_read_only_policy method."""
-
-    @pytest.mark.asyncio
-    async def test_creates_group_read_only_policy_when_not_exist(self, policy_manager):
-        """Test creating group read-only policy when it doesn't exist."""
-        policy_manager.resource_exists = AsyncMock(return_value=False)
-        policy_manager._create_minio_policy = AsyncMock()
-
-        result = await policy_manager.ensure_group_read_only_policy("testgroup")
-
-        assert result.policy_name == "group-ro-policy-testgroup"
-        policy_manager._create_minio_policy.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_returns_existing_group_read_only_policy(self, policy_manager):
-        """Test returning existing group read-only policy."""
-        # Create a sample read-only policy
-        sample_ro_policy = PolicyModel(
-            policy_name="group-ro-policy-testgroup",
-            policy_document=PolicyDocument(
-                version="2012-10-17",
-                statement=[
-                    PolicyStatement(
-                        effect=PolicyEffect.ALLOW,
-                        action=PolicyAction.GET_OBJECT,
-                        resource="arn:aws:s3:::test-bucket/testgroup/*",
-                    )
-                ],
-            ),
-        )
-        policy_manager.resource_exists = AsyncMock(return_value=True)
-        policy_manager._load_minio_policy = AsyncMock(return_value=sample_ro_policy)
-
-        result = await policy_manager.ensure_group_read_only_policy("testgroup")
-
-        assert result.policy_name == "group-ro-policy-testgroup"
-        policy_manager._load_minio_policy.assert_called_once()
-
-
-class TestGetGroupReadOnlyPolicy:
-    """Tests for get_group_read_only_policy method."""
-
-    @pytest.mark.asyncio
-    async def test_get_group_read_only_policy_success(self, policy_manager):
-        """Test successfully getting group read-only policy."""
-        sample_ro_policy = PolicyModel(
-            policy_name="group-ro-policy-testgroup",
-            policy_document=PolicyDocument(
-                version="2012-10-17",
-                statement=[
-                    PolicyStatement(
-                        effect=PolicyEffect.ALLOW,
-                        action=PolicyAction.GET_OBJECT,
-                        resource="arn:aws:s3:::test-bucket/testgroup/*",
-                    )
-                ],
-            ),
-        )
-        policy_manager._load_minio_policy = AsyncMock(return_value=sample_ro_policy)
-
-        result = await policy_manager.get_group_read_only_policy("testgroup")
-
-        assert result.policy_name == "group-ro-policy-testgroup"
-
-    @pytest.mark.asyncio
-    async def test_get_group_read_only_policy_not_found(self, policy_manager):
-        """Test getting group read-only policy when it doesn't exist."""
-        policy_manager._load_minio_policy = AsyncMock(return_value=None)
-
-        with pytest.raises(PolicyOperationError, match="not found"):
-            await policy_manager.get_group_read_only_policy("testgroup")
-
-
 class TestDeleteGroupPolicy:
     """Tests for delete_group_policy method."""
 
@@ -625,10 +551,10 @@ class TestDeleteGroupPolicy:
         await policy_manager.delete_group_policy("testgroup")
 
         # Should delete both main and read-only policies
-        # RO policy uses consistent naming: group-ro-policy-{group_name}ro
+        # RO policy now uses standard group-policy- naming: group-policy-{ro_group_name}
         assert policy_manager.delete_resource.call_count == 2
         policy_manager.delete_resource.assert_any_call("group-policy-testgroup")
-        policy_manager.delete_resource.assert_any_call("group-ro-policy-testgroupro")
+        policy_manager.delete_resource.assert_any_call("group-policy-testgroupro")
 
     @pytest.mark.asyncio
     async def test_deletes_only_main_policy_when_include_read_only_false(

@@ -121,9 +121,9 @@ class GroupManager(ResourceManager[GroupModel]):
         ro_group_name = f"{name}ro"
         if await self.resource_exists(ro_group_name):
             # Detach read-only policy from read-only group
-            # Use ro_group_name for consistent naming (policy matches group name)
+            # RO policies now use standard group-policy- naming
             ro_policy_name = self.policy_manager.get_policy_name(
-                PolicyType.GROUP_READ_ONLY, ro_group_name
+                PolicyType.GROUP_HOME, ro_group_name
             )
             try:
                 await self.policy_manager.detach_policy_from_group(
@@ -231,19 +231,17 @@ class GroupManager(ResourceManager[GroupModel]):
             # Create read-only group ({group_name}ro)
             ro_group_name = f"{group_name}ro"
 
-            # Create read-only group policy using the RO group name for consistent naming
+            # Create read-only group policy using standard group-policy naming with READ permissions
             try:
-                ro_policy_model = await self.policy_manager.get_group_read_only_policy(
+                ro_policy_model = await self.policy_manager.get_group_policy(
                     ro_group_name
                 )
             except Exception:
                 logger.warning(
                     "Failed to get read-only group policy - creating new policy"
                 )
-                ro_policy_model = (
-                    await self.policy_manager.ensure_group_read_only_policy(
-                        ro_group_name
-                    )
+                ro_policy_model = await self.policy_manager.ensure_group_policy(
+                    ro_group_name, read_only=True
                 )
 
             # Create the read-only group
