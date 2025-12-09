@@ -542,50 +542,32 @@ class TestDeleteGroupPolicy:
     """Tests for delete_group_policy method."""
 
     @pytest.mark.asyncio
-    async def test_deletes_group_policy_successfully(self, policy_manager):
-        """Test successfully deleting group policy and read-only policy."""
+    async def test_deletes_main_group_policy_successfully(self, policy_manager):
+        """Test successfully deleting main group policy."""
         policy_manager.delete_resource = AsyncMock(return_value=True)
-        # Mock resource_exists to return True for read-only policy check
-        policy_manager.resource_exists = AsyncMock(return_value=True)
 
         await policy_manager.delete_group_policy("testgroup")
-
-        # Should delete both main and read-only policies
-        # RO policy now uses standard group-policy- naming: group-policy-{ro_group_name}
-        assert policy_manager.delete_resource.call_count == 2
-        policy_manager.delete_resource.assert_any_call("group-policy-testgroup")
-        policy_manager.delete_resource.assert_any_call("group-policy-testgroupro")
-
-    @pytest.mark.asyncio
-    async def test_deletes_only_main_policy_when_include_read_only_false(
-        self, policy_manager
-    ):
-        """Test deleting only main group policy when include_read_only is False."""
-        policy_manager.delete_resource = AsyncMock(return_value=True)
-
-        await policy_manager.delete_group_policy("testgroup", include_read_only=False)
 
         policy_manager.delete_resource.assert_called_once_with("group-policy-testgroup")
 
     @pytest.mark.asyncio
-    async def test_raises_error_when_main_deletion_fails(self, policy_manager):
-        """Test error when main group policy deletion fails."""
+    async def test_deletes_read_only_group_policy_successfully(self, policy_manager):
+        """Test successfully deleting read-only group policy."""
+        policy_manager.delete_resource = AsyncMock(return_value=True)
+
+        await policy_manager.delete_group_policy("testgroupro", read_only=True)
+
+        policy_manager.delete_resource.assert_called_once_with(
+            "group-ro-policy-testgroupro"
+        )
+
+    @pytest.mark.asyncio
+    async def test_raises_error_when_deletion_fails(self, policy_manager):
+        """Test error when group policy deletion fails."""
         policy_manager.delete_resource = AsyncMock(return_value=False)
 
         with pytest.raises(PolicyOperationError, match="Failed to delete"):
             await policy_manager.delete_group_policy("testgroup")
-
-    @pytest.mark.asyncio
-    async def test_continues_if_read_only_policy_not_found(self, policy_manager):
-        """Test that deletion continues if read-only policy doesn't exist."""
-        policy_manager.delete_resource = AsyncMock(return_value=True)
-        # Read-only policy doesn't exist
-        policy_manager.resource_exists = AsyncMock(return_value=False)
-
-        await policy_manager.delete_group_policy("testgroup")
-
-        # Should only delete main policy since read-only doesn't exist
-        policy_manager.delete_resource.assert_called_once_with("group-policy-testgroup")
 
 
 # =============================================================================

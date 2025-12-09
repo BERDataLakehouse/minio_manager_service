@@ -134,6 +134,14 @@ class GroupManager(ResourceManager[GroupModel]):
                     f"Failed to detach read-only policy from group: {e}"
                 )
 
+            # Delete the read-only policy
+            try:
+                await self.policy_manager.delete_group_policy(
+                    ro_group_name, read_only=True
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to delete read-only group policy: {e}")
+
             # Delete the read-only group itself
             try:
                 cmd_args = self._command_builder.build_group_command(

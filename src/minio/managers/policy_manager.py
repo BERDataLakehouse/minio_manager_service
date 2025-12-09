@@ -474,60 +474,38 @@ class PolicyManager(ResourceManager[PolicyModel]):
                 )
 
     async def delete_group_policy(
-        self, group_name: str, include_read_only: bool = True
+        self, group_name: str, read_only: bool = False
     ) -> None:
         """
         Delete a group's policy from MinIO with proper cleanup.
 
         Args:
             group_name: Group name to delete policy for
-            include_read_only: If True, also delete the read-only policy (default True)
+            read_only: If True, delete the read-only policy; otherwise delete main policy
         """
-        async with self.operation_context("delete_group_policy"):
-            errors = []
+        op_name = (
+            "delete_group_policy_read_only" if read_only else "delete_group_policy"
+        )
+        async with self.operation_context(op_name):
+            policy_type = (
+                PolicyType.GROUP_HOME_RO if read_only else PolicyType.GROUP_HOME
+            )
+            policy_name = self.get_policy_name(policy_type, group_name)
+            suffix = " (read-only)" if read_only else ""
 
-            # Delete the main group policy (read/write)
-            policy_name = self.get_policy_name(PolicyType.GROUP_HOME, group_name)
             try:
                 success = await self.delete_resource(policy_name)
                 if success:
-                    logger.info(f"Deleted group policy: {policy_name}")
+                    logger.info(f"Deleted group policy{suffix}: {policy_name}")
                 else:
-                    errors.append(f"Failed to delete group policy: {policy_name}")
-            except Exception as e:
-                logger.error(f"Error deleting group policy {policy_name}: {e}")
-                errors.append(f"Error deleting group policy: {e}")
-
-            # Delete the read-only group policy if requested
-            if include_read_only:
-                # RO policies now use standard group-policy- naming
-                ro_group_name = f"{group_name}ro"
-                ro_policy_name = self.get_policy_name(
-                    PolicyType.GROUP_HOME, ro_group_name
-                )
-                try:
-                    # Check if read-only policy exists before trying to delete
-                    if await self.resource_exists(ro_policy_name):
-                        success = await self.delete_resource(ro_policy_name)
-                        if success:
-                            logger.info(
-                                f"Deleted group read-only policy: {ro_policy_name}"
-                            )
-                        else:
-                            errors.append(
-                                f"Failed to delete group read-only policy: {ro_policy_name}"
-                            )
-                except Exception as e:
-                    logger.warning(
-                        f"Error deleting group read-only policy {ro_policy_name}: {e}"
+                    raise PolicyOperationError(
+                        f"Failed to delete group policy{suffix}: {policy_name}"
                     )
-                    # Don't add to errors - read-only policy deletion is best-effort
-
-            if errors:
-                error_msg = "; ".join(errors)
-                raise PolicyOperationError(
-                    f"Failed to delete group policies: {error_msg}"
-                )
+            except PolicyOperationError:
+                raise
+            except Exception as e:
+                logger.error(f"Error deleting group policy{suffix} {policy_name}: {e}")
+                raise PolicyOperationError(f"Error deleting group policy{suffix}: {e}")
 
     # === POLICY ATTACHMENT OPERATIONS ===
 

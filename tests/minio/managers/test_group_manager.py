@@ -992,7 +992,12 @@ class TestDeleteCleanup:
 
         # Should detach policy from both main group and read-only group
         assert mock_policy_manager.detach_policy_from_group.call_count == 2
-        mock_policy_manager.delete_group_policy.assert_called_once_with("testgroup")
+        # Should delete both main and read-only policies
+        assert mock_policy_manager.delete_group_policy.call_count == 2
+        mock_policy_manager.delete_group_policy.assert_any_call("testgroup")
+        mock_policy_manager.delete_group_policy.assert_any_call(
+            "testgroupro", read_only=True
+        )
 
     @pytest.mark.asyncio
     async def test_pre_delete_cleanup_detach_fails_continues(
@@ -1007,8 +1012,8 @@ class TestDeleteCleanup:
         # Should not raise
         await group_manager_instance._pre_delete_cleanup("testgroup")
 
-        # delete_group_policy should still be called
-        mock_policy_manager.delete_group_policy.assert_called_once()
+        # delete_group_policy should still be called for both policies
+        assert mock_policy_manager.delete_group_policy.call_count == 2
 
     @pytest.mark.asyncio
     async def test_pre_delete_cleanup_delete_policy_fails_continues(
