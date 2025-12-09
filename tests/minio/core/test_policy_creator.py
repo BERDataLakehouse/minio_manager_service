@@ -567,7 +567,7 @@ class TestIntegration:
         """Test complete group read-only policy creation workflow."""
         creator = PolicyCreator(
             policy_type=PolicyType.GROUP_HOME_RO,
-            target_name="researchers",
+            target_name="researchersro",
             config=mock_minio_config,
         )
 
