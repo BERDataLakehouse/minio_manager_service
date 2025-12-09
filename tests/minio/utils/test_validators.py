@@ -420,11 +420,17 @@ class TestValidateS3Path:
             validate_s3_path("s3://mybucket/path/\u4e2d\u6587")
 
     def test_invalid_s3_path_suspicious_whitespace(self):
-        """Test S3 path with zero-width and suspicious whitespace."""
-        with pytest.raises(PolicyValidationError):
+        """Test S3 path with zero-width and suspicious whitespace.
+
+        Note: These characters are non-ASCII and will be caught by the ASCII check,
+        which also serves to block zero-width and suspicious Unicode whitespace.
+        """
+        # Zero-width space - caught by ASCII check
+        with pytest.raises(PolicyValidationError, match="ASCII"):
             validate_s3_path("s3://mybucket/path\u200b/object")
 
-        with pytest.raises(PolicyValidationError):
+        # Zero-width no-break space/BOM - caught by ASCII check
+        with pytest.raises(PolicyValidationError, match="ASCII"):
             validate_s3_path("s3://mybucket/path\ufeff/object")
 
     def test_invalid_s3_path_leading_whitespace(self):

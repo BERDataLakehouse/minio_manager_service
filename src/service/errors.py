@@ -61,6 +61,12 @@ class ErrorType(Enum):
     REQUEST_VALIDATION_FAILED = (30010, "Request validation failed")
     """ A request to a service failed validation of the request. """
 
+    BUCKET_VALIDATION_ERROR = (30020, "Bucket validation error")
+    """ Bucket name validation failed. """
+
+    VALIDATION_ERROR = (30030, "Validation error")
+    """ General validation error. """
+
     def __init__(self, error_code, error_type):
         self.error_code = error_code
         self.error_type = error_type

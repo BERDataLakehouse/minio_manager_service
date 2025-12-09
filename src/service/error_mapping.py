@@ -12,6 +12,7 @@ from src.service.errors import ErrorType
 from src.service.exceptions import (  # MinIO specific exceptions
     AuthenticationError,
     BucketOperationError,
+    BucketValidationError,
     ConnectionError,
     DataGovernanceError,
     GroupOperationError,
@@ -24,6 +25,7 @@ from src.service.exceptions import (  # MinIO specific exceptions
     PolicyOperationError,
     PolicyValidationError,
     UserOperationError,
+    ValidationError,
 )
 
 _H400 = status.HTTP_400_BAD_REQUEST

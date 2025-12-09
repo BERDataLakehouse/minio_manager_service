@@ -280,6 +280,7 @@ def _validate_s3_object_key(key: str) -> None:
         raise PolicyValidationError("S3 object key cannot exceed 1024 characters")
 
     # Disallow non-ASCII characters to prevent Unicode evasion of path checks
+    # This also blocks zero-width and suspicious Unicode whitespace characters
     if not key.isascii():
         raise PolicyValidationError(
             "S3 object key must use ASCII characters only to prevent Unicode-based path bypasses"
@@ -292,20 +293,6 @@ def _validate_s3_object_key(key: str) -> None:
             raise PolicyValidationError(
                 "S3 object key cannot contain control characters"
             )
-
-    # Block zero-width / special whitespace characters that can hide traversal
-    suspicious_unicode_whitespace = [
-        "\u200b",  # zero width space
-        "\u200c",  # zero width non-joiner
-        "\u200d",  # zero width joiner
-        "\ufeff",  # zero width no-break space/BOM
-        "\u00a0",  # non-breaking space
-        "\u1680",  # ogham space mark
-    ]
-    if any(ch in key for ch in suspicious_unicode_whitespace):
-        raise PolicyValidationError(
-            "S3 object key contains disallowed whitespace characters"
-        )
 
     # Leading/trailing whitespace should be avoided
     if key != key.strip():
@@ -409,8 +396,7 @@ def validate_policy_name(policy_name: str) -> str:
     # Character constraints - allow alphanumeric, periods, hyphens, underscores
     if not re.match(r"^[a-zA-Z0-9._-]+$", policy_name):
         raise PolicyValidationError(
-            "Policy name can only contain alphanumeric characters, "
-            "periods (.), hyphens (-), and underscores (_)"
+            "Policy name can only contain alphanumeric characters, periods (.), hyphens (-), and underscores (_)"
         )
 
     # Cannot start with a period for MinIO compatibility

@@ -354,8 +354,7 @@ async def create_group(
     )
 
     logger.info(
-        f"Admin {authenticated_user.user} created group {group_name} "
-        f"and read-only group {ro_group_info.group_name}"
+        f"Admin {authenticated_user.user} created group {group_name} and read-only group {ro_group_info.group_name}"
     )
     return response
 

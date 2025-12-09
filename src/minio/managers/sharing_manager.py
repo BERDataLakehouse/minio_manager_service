@@ -432,8 +432,7 @@ class SharingManager:
                 # system access rather than user-controlled data access
 
         logger.info(
-            f"Path access found - Users: {len(result.users)}, "
-            f"Groups: {len(result.groups)}, Public: {result.public}"
+            f"Path access found - Users: {len(result.users)}, Groups: {len(result.groups)}, Public: {result.public}"
         )
 
         return result
