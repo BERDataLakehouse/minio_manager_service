@@ -341,8 +341,10 @@ class PolicyManager(ResourceManager[PolicyModel]):
             "create_group_policy_read_only" if read_only else "create_group_policy"
         )
         async with self.operation_context(op_name):
-            # Always use GROUP_HOME naming for consistency
-            policy_name = self.get_policy_name(PolicyType.GROUP_HOME, group_name)
+            policy_type = (
+                PolicyType.GROUP_HOME_RO if read_only else PolicyType.GROUP_HOME
+            )
+            policy_name = self.get_policy_name(policy_type, group_name)
 
             # Check if policy already exists
             policy_exists = await self.resource_exists(policy_name)

@@ -239,18 +239,10 @@ class GroupManager(ResourceManager[GroupModel]):
             # Create read-only group ({group_name}ro)
             ro_group_name = f"{group_name}ro"
 
-            # Create read-only group policy using standard group-policy naming with READ permissions
-            try:
-                ro_policy_model = await self.policy_manager.get_group_policy(
-                    ro_group_name
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to get read-only group policy - creating new policy"
-                )
-                ro_policy_model = await self.policy_manager.ensure_group_policy(
-                    ro_group_name, read_only=True
-                )
+            # Create read-only group policy (ensure_group_policy is idempotent)
+            ro_policy_model = await self.policy_manager.ensure_group_policy(
+                ro_group_name, read_only=True
+            )
 
             # Create the read-only group
             if not await self.resource_exists(ro_group_name):
