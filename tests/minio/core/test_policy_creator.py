@@ -73,7 +73,7 @@ def group_read_only_policy_creator(mock_minio_config):
     """Create a PolicyCreator for group read-only policy."""
     return PolicyCreator(
         policy_type=PolicyType.GROUP_HOME_RO,
-        target_name="testgroup",
+        target_name="testgroupro",
         config=mock_minio_config,
     )
 
