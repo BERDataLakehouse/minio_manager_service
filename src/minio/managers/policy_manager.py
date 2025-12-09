@@ -536,8 +536,10 @@ class PolicyManager(ResourceManager[PolicyModel]):
 
             # Delete the read-only group policy if requested
             if include_read_only:
+                # Consistent naming: RO policy is named after the RO group (group_name + 'ro')
+                ro_group_name = f"{group_name}ro"
                 ro_policy_name = self.get_policy_name(
-                    PolicyType.GROUP_READ_ONLY, group_name
+                    PolicyType.GROUP_READ_ONLY, ro_group_name
                 )
                 try:
                     # Check if read-only policy exists before trying to delete

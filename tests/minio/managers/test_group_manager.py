@@ -559,7 +559,7 @@ class TestCreateGroup:
             # Should call ensure_group_policy and ensure_group_read_only_policy as fallback
             mock_policy_manager.ensure_group_policy.assert_called_once_with("testgroup")
             mock_policy_manager.ensure_group_read_only_policy.assert_called_once_with(
-                "testgroup"
+                "testgroupro"
             )
 
 

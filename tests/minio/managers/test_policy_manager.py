@@ -625,9 +625,10 @@ class TestDeleteGroupPolicy:
         await policy_manager.delete_group_policy("testgroup")
 
         # Should delete both main and read-only policies
+        # RO policy uses consistent naming: group-ro-policy-{group_name}ro
         assert policy_manager.delete_resource.call_count == 2
         policy_manager.delete_resource.assert_any_call("group-policy-testgroup")
-        policy_manager.delete_resource.assert_any_call("group-ro-policy-testgroup")
+        policy_manager.delete_resource.assert_any_call("group-ro-policy-testgroupro")
 
     @pytest.mark.asyncio
     async def test_deletes_only_main_policy_when_include_read_only_false(
