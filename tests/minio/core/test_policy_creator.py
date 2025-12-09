@@ -12,7 +12,6 @@ from src.minio.core.policy_creator import (
 from src.minio.models.policy import (
     PolicyAction,
     PolicyDocument,
-    PolicyEffect,
     PolicyModel,
     PolicyPermissionLevel,
     PolicySectionType,

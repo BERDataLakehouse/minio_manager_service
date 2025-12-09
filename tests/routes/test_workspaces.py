@@ -108,9 +108,7 @@ def sample_policy_model():
 @pytest.fixture
 def sample_group_info():
     """Create a sample GroupModel."""
-    return GroupModel(
-        group_name="testgroup", members=["testuser", "user2"]
-    )
+    return GroupModel(group_name="testgroup", members=["testuser", "user2"])
 
 
 # =============================================================================
@@ -129,7 +127,8 @@ class TestGetMyWorkspace:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get("/workspaces/me")
 
@@ -148,7 +147,8 @@ class TestGetMyWorkspace:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get("/workspaces/me")
 
@@ -173,7 +173,8 @@ class TestGetMyGroups:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get("/workspaces/me/groups")
 
@@ -189,7 +190,8 @@ class TestGetMyGroups:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get("/workspaces/me/groups")
 
@@ -222,7 +224,8 @@ class TestGetMyPolicies:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get("/workspaces/me/policies")
 
@@ -246,7 +249,8 @@ class TestGetMyPolicies:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get("/workspaces/me/policies")
 
@@ -278,7 +282,8 @@ class TestGetMyAccessiblePaths:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get("/workspaces/me/accessible-paths")
 
@@ -298,7 +303,8 @@ class TestGetMyAccessiblePaths:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get("/workspaces/me/accessible-paths")
 
@@ -338,7 +344,8 @@ class TestGetGroupWorkspace:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get("/workspaces/me/groups/testgroup")
 
@@ -356,7 +363,8 @@ class TestGetGroupWorkspace:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get("/workspaces/me/groups/testgroup")
 
@@ -387,7 +395,8 @@ class TestGetGroupWorkspace:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get("/workspaces/me/groups/testgroup")
 
@@ -408,7 +417,8 @@ class TestGetMySqlWarehousePrefix:
         """Test successfully getting SQL warehouse prefix."""
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get("/workspaces/me/sql-warehouse-prefix")
 
@@ -434,7 +444,8 @@ class TestGetGroupSqlWarehousePrefix:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get(
                     "/workspaces/me/groups/testgroup/sql-warehouse-prefix"
@@ -453,7 +464,8 @@ class TestGetGroupSqlWarehousePrefix:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get(
                     "/workspaces/me/groups/testgroup/sql-warehouse-prefix"
@@ -471,7 +483,8 @@ class TestGetGroupSqlWarehousePrefix:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get(
                     "/workspaces/me/groups/testgroup/sql-warehouse-prefix"
@@ -494,7 +507,8 @@ class TestGetNamespacePrefix:
         """Test getting namespace prefix for user only (no tenant)."""
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get("/workspaces/me/namespace-prefix")
 
@@ -516,7 +530,8 @@ class TestGetNamespacePrefix:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get(
                     "/workspaces/me/namespace-prefix?tenant=testgroup"
@@ -537,7 +552,8 @@ class TestGetNamespacePrefix:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get(
                     "/workspaces/me/namespace-prefix?tenant=nonexistent"
@@ -556,7 +572,8 @@ class TestGetNamespacePrefix:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get(
                     "/workspaces/me/namespace-prefix?tenant=testgroup"
@@ -577,7 +594,8 @@ class TestGetNamespacePrefix:
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
-                "src.service.app_state.get_request_user", return_value=mock_authenticated_user
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
             ):
                 response = client.get(
                     "/workspaces/me/namespace-prefix?tenant=testgroup"
