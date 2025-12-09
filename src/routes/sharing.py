@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..minio.managers.sharing_manager import PathAccessInfo
 from ..minio.models.policy import PolicyPermissionLevel
@@ -88,13 +88,6 @@ class ShareRequest(BaseModel):
     def validate_path(cls, v: str) -> str:
         """Validate S3 path format."""
         return validate_s3_path(v)
-
-    @model_validator(mode="after")
-    def validate_recipients(self):
-        """Ensure at least one recipient is specified."""
-        if not self.with_users and not self.with_groups:
-            raise ValueError("At least one recipient (user or group) is required")
-        return self
 
 
 class UnshareRequest(BaseModel):
