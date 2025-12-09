@@ -221,7 +221,7 @@ class TestGeneratePolicyName:
     def test_generate_group_read_only_policy_name(self, group_read_only_policy_creator):
         """Test generating group read-only policy name."""
         name = group_read_only_policy_creator._generate_policy_name()
-        assert name == "group-policy-testgroup"
+        assert name == "group-policy-testgroupro"
 
     def test_generate_policy_name_unknown_type(self, mock_minio_config):
         """Test generating policy name with unknown type raises error."""
