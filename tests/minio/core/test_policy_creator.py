@@ -221,7 +221,7 @@ class TestGeneratePolicyName:
     def test_generate_group_read_only_policy_name(self, group_read_only_policy_creator):
         """Test generating group read-only policy name."""
         name = group_read_only_policy_creator._generate_policy_name()
-        assert name == "group-ro-policy-testgroup"
+        assert name == "group-policy-testgroup"
 
     def test_generate_policy_name_unknown_type(self, mock_minio_config):
         """Test generating policy name with unknown type raises error."""
@@ -340,7 +340,7 @@ class TestBuild:
         policy = group_read_only_policy_creator.build()
 
         assert isinstance(policy, PolicyModel)
-        assert policy.policy_name == "group-ro-policy-testgroup"
+        assert policy.policy_name == "group-policy-testgroup"
 
     def test_build_empty_policy(self, user_home_creator):
         """Test building policy without creating default (empty sections)."""
@@ -575,7 +575,7 @@ class TestIntegration:
         policy = creator.build()
 
         # Verify policy structure
-        assert policy.policy_name == "group-ro-policy-researchers"
+        assert policy.policy_name == "group-policy-researchers"
         assert policy.policy_document.version == "2012-10-17"
         assert len(policy.policy_document.statement) > 0
 

@@ -558,7 +558,7 @@ class TestDeleteGroupPolicy:
         await policy_manager.delete_group_policy("testgroupro", read_only=True)
 
         policy_manager.delete_resource.assert_called_once_with(
-            "group-ro-policy-testgroupro"
+            "group-policy-testgroupro"
         )
 
     @pytest.mark.asyncio

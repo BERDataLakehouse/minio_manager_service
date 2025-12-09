@@ -50,7 +50,6 @@ from ..models.policy import (
 )
 from ..utils.validators import (
     GROUP_POLICY_PREFIX,
-    GROUP_RO_POLICY_PREFIX,
     USER_HOME_POLICY_PREFIX,
     USER_SYSTEM_POLICY_PREFIX,
     validate_policy_name,
@@ -248,7 +247,8 @@ class PolicyCreator:
         elif self.policy_type == PolicyType.GROUP_HOME:
             policy_name = f"{GROUP_POLICY_PREFIX}{self.target_name}"
         elif self.policy_type == PolicyType.GROUP_HOME_RO:
-            policy_name = f"{GROUP_RO_POLICY_PREFIX}{self.target_name}"
+            # Use same naming as GROUP_HOME - read_only is about permissions, not naming
+            policy_name = f"{GROUP_POLICY_PREFIX}{self.target_name}"
         else:
             raise PolicyOperationError(f"Unknown policy type: {self.policy_type}")
 
