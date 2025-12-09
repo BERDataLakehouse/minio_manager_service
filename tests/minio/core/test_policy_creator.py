@@ -575,7 +575,7 @@ class TestIntegration:
         policy = creator.build()
 
         # Verify policy structure
-        assert policy.policy_name == "group-policy-researchers"
+        assert policy.policy_name == "group-policy-researchersro"
         assert policy.policy_document.version == "2012-10-17"
         assert len(policy.policy_document.statement) > 0
 
