@@ -293,7 +293,10 @@ class PolicyManager(ResourceManager[PolicyModel]):
             return home_policy, system_policy  # type: ignore
 
     def _create_policy_model(
-        self, policy_type: PolicyType, target_name: str
+        self,
+        policy_type: PolicyType,
+        target_name: str,
+        path_target_name: str | None = None,
     ) -> PolicyModel:
         """Create a policy model for the given type and target."""
         try:
@@ -301,6 +304,7 @@ class PolicyManager(ResourceManager[PolicyModel]):
                 policy_type=policy_type,
                 target_name=target_name,
                 config=self.config,
+                path_target_name=path_target_name,
             )
             return builder.create_default_policy().build()
         except Exception as e:
@@ -320,7 +324,9 @@ class PolicyManager(ResourceManager[PolicyModel]):
         """Create user system policy"""
         return self._create_policy_model(PolicyType.USER_SYSTEM, username)
 
-    async def ensure_group_policy(self, group_name: str) -> PolicyModel:
+    async def ensure_group_policy(
+        self, group_name: str, read_only: bool = False, path_target: str | None = None
+    ) -> PolicyModel:
         """
         Ensure group policy exists for a group.
 
@@ -332,30 +338,54 @@ class PolicyManager(ResourceManager[PolicyModel]):
         multiple times and will not fail if the policy already exists.
 
         Args:
-            group_name: Group name to ensure policy for
+            group_name: Group name for policy naming (e.g., "testgroupro")
+            read_only: If True, create policy with READ-only permissions
+            path_target: Target name for path generation (defaults to group_name).
+                         For RO groups, this should be the main group name.
         """
-        async with self.operation_context("create_group_policy"):
-            # Create group policy model (Currently only group home policy)
-            group_policy = self._create_group_home_policy(group_name)
+        op_name = (
+            "create_group_policy_read_only" if read_only else "create_group_policy"
+        )
+        async with self.operation_context(op_name):
+            policy_type = (
+                PolicyType.GROUP_HOME_RO if read_only else PolicyType.GROUP_HOME
+            )
+            policy_name = self.get_policy_name(policy_type, group_name)
 
             # Check if policy already exists
-            # NOTE: Race condition possible - policy could be created between this check and creation
-            policy_exists = await self.resource_exists(group_policy.policy_name)
+            policy_exists = await self.resource_exists(policy_name)
             if policy_exists:
-                logger.info(f"Group policy already exists: {group_policy.policy_name}")
-                # Load existing policy to return
-                group_policy = await self._load_minio_policy(group_policy.policy_name)
-            else:
-                # Create the policy in MinIO
-                # NOTE: _create_minio_policy will overwrite existing policies
-                await self._create_minio_policy(group_policy)
-                logger.info(f"Created group policy: {group_policy.policy_name}")
+                suffix = " (read-only)" if read_only else ""
+                logger.info(f"Group policy{suffix} already exists: {policy_name}")
+                return await self._load_minio_policy(policy_name)  # type: ignore
 
-            return group_policy  # type: ignore
+            # Create policy with appropriate permissions and path target
+            policy = self._create_group_home_policy(
+                group_name, read_only=read_only, path_target_name=path_target
+            )
 
-    def _create_group_home_policy(self, group_name: str) -> PolicyModel:
-        """Create group home policy"""
-        return self._create_policy_model(PolicyType.GROUP_HOME, group_name)
+            await self._create_minio_policy(policy)
+            suffix = " (read-only)" if read_only else ""
+            logger.info(f"Created group policy{suffix}: {policy_name}")
+
+            return policy
+
+    def _create_group_home_policy(
+        self,
+        group_name: str,
+        read_only: bool = False,
+        path_target_name: str | None = None,
+    ) -> PolicyModel:
+        """Create group home policy.
+
+        Args:
+            group_name: Group name
+            read_only: If True, create read-only policy with READ permissions
+        """
+        policy_type = PolicyType.GROUP_HOME_RO if read_only else PolicyType.GROUP_HOME
+        return self._create_policy_model(
+            policy_type, group_name, path_target_name=path_target_name
+        )
 
     async def get_user_home_policy(self, username: str) -> PolicyModel:
         """
@@ -389,15 +419,21 @@ class PolicyManager(ResourceManager[PolicyModel]):
                 )
             return result
 
-    async def get_group_policy(self, group_name: str) -> PolicyModel:
+    async def get_group_policy(
+        self, group_name: str, read_only: bool = False
+    ) -> PolicyModel:
         """
         Retrieve the existing policy for a specific group with proper error handling.
 
         Args:
             group_name: Group name to get policy for
+            read_only: If True, get read-only policy instead of write policy
         """
         async with self.operation_context("get_group_policy"):
-            policy_name = self.get_policy_name(PolicyType.GROUP_HOME, group_name)
+            policy_type = (
+                PolicyType.GROUP_HOME_RO if read_only else PolicyType.GROUP_HOME
+            )
+            policy_name = self.get_policy_name(policy_type, group_name)
             result = await self._load_minio_policy(policy_name)
             if result is None:
                 raise PolicyOperationError(
@@ -452,22 +488,39 @@ class PolicyManager(ResourceManager[PolicyModel]):
                     f"Failed to delete user policies: {error_msg}"
                 )
 
-    async def delete_group_policy(self, group_name: str) -> None:
+    async def delete_group_policy(
+        self, group_name: str, read_only: bool = False
+    ) -> None:
         """
         Delete a group's policy from MinIO with proper cleanup.
 
         Args:
             group_name: Group name to delete policy for
+            read_only: If True, delete the read-only policy; otherwise delete main policy
         """
-        async with self.operation_context("delete_group_policy"):
-            policy_name = self.get_policy_name(PolicyType.GROUP_HOME, group_name)
+        op_name = (
+            "delete_group_policy_read_only" if read_only else "delete_group_policy"
+        )
+        async with self.operation_context(op_name):
+            policy_type = (
+                PolicyType.GROUP_HOME_RO if read_only else PolicyType.GROUP_HOME
+            )
+            policy_name = self.get_policy_name(policy_type, group_name)
+            suffix = " (read-only)" if read_only else ""
 
-            success = await self.delete_resource(policy_name)
-            if not success:
-                raise PolicyOperationError(
-                    f"Failed to delete group policy: {policy_name}"
-                )
-            logger.info(f"Deleted group policy: {policy_name}")
+            try:
+                success = await self.delete_resource(policy_name)
+                if success:
+                    logger.info(f"Deleted group policy{suffix}: {policy_name}")
+                else:
+                    raise PolicyOperationError(
+                        f"Failed to delete group policy{suffix}: {policy_name}"
+                    )
+            except PolicyOperationError:
+                raise
+            except Exception as e:
+                logger.error(f"Error deleting group policy{suffix} {policy_name}: {e}")
+                raise PolicyOperationError(f"Error deleting group policy{suffix}: {e}")
 
     # === POLICY ATTACHMENT OPERATIONS ===
 

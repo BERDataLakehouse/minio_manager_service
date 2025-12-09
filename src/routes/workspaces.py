@@ -254,9 +254,14 @@ async def get_group_workspace(
 
     username = authenticated_user.user
 
-    # Check if user is a member of the group
+    # Check if user is a member of the group (either read/write or read-only variant)
     is_member = await app_state.group_manager.is_user_in_group(username, group_name)
-    if not is_member:
+    ro_group_name = f"{group_name}ro"
+    is_ro_member = await app_state.group_manager.is_user_in_group(
+        username, ro_group_name
+    )
+
+    if not is_member and not is_ro_member:
         raise MinIOManagerError("User is not a member of the group")
     # Get group information
     group_info = await app_state.group_manager.get_group_info(group_name)
@@ -292,9 +297,14 @@ async def get_group_sql_warehouse_prefix(
 
     username = authenticated_user.user
 
-    # Check if user is a member of the group
+    # Check if user is a member of the group (either read/write or read-only variant)
     is_member = await app_state.group_manager.is_user_in_group(username, group_name)
-    if not is_member:
+    ro_group_name = f"{group_name}ro"
+    is_ro_member = await app_state.group_manager.is_user_in_group(
+        username, ro_group_name
+    )
+
+    if not is_member and not is_ro_member:
         raise MinIOManagerError("User is not a member of the group")
 
     # Get group SQL warehouse prefix (tenant SQL warehouse)
@@ -370,9 +380,14 @@ async def get_namespace_prefix(
         group_exists = await app_state.group_manager.get_group_info(tenant)
         if not group_exists:
             raise MinIOManagerError(f"Group {tenant} does not exist")
-        # Check if user is a member of the group
+        # Check if user is a member of the group (either read/write or read-only variant)
         is_member = await app_state.group_manager.is_user_in_group(username, tenant)
-        if not is_member:
+        ro_group_name = f"{tenant}ro"
+        is_ro_member = await app_state.group_manager.is_user_in_group(
+            username, ro_group_name
+        )
+
+        if not is_member and not is_ro_member:
             raise MinIOManagerError(
                 f"User {username} is not a member of the group {tenant}"
             )

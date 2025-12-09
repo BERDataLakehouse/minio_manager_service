@@ -109,29 +109,36 @@ class PolicyCreator:
         policy_type: PolicyType,
         target_name: str,
         config: MinIOConfig,
+        path_target_name: str | None = None,
     ):
         """
         Initialize the PolicyCreator for building a new policy from scratch.
 
         Args:
-            policy_type: Type of policy being created (USER_HOME, USER_SYSTEM, GROUP_HOME)
+            policy_type: Type of policy being created (USER_HOME, USER_SYSTEM, GROUP_HOME, GROUP_HOME_RO)
             target_name: Name of the target (username or group name)
             config: MinIO configuration for bucket and path information
+            path_target_name: Optional target name to use for path generation.
+                              If not provided, target_name is used.
+                              Useful when policy name should differ from path target (e.g. RO groups).
         """
 
         self.policy_type = policy_type
         self.target_name = target_name
         self.system_config = SYSTEM_RESOURCE_CONFIG
 
+        # Use path_target_name if provided, otherwise default to target_name
+        self.path_target = path_target_name or target_name
+
         self.config = config
         # user warehouse for spark tables
-        self.user_sql_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.users_sql_warehouse_prefix}/{self.target_name}"
+        self.user_sql_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.users_sql_warehouse_prefix}/{self.path_target}"
         # user warehouse for general files
-        self.user_general_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.users_general_warehouse_prefix}/{self.target_name}"
+        self.user_general_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.users_general_warehouse_prefix}/{self.path_target}"
         # tenant warehouse for spark tables
-        self.tenant_sql_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.tenant_sql_warehouse_prefix}/{self.target_name}"
+        self.tenant_sql_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.tenant_sql_warehouse_prefix}/{self.path_target}"
         # tenant warehouse for general files
-        self.tenant_general_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.tenant_general_warehouse_prefix}/{self.target_name}"
+        self.tenant_general_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.tenant_general_warehouse_prefix}/{self.path_target}"
 
         # Internal section management with Dict[PolicySectionType, List[PolicyStatement]]
         self._sections: Dict[PolicySectionType, List[PolicyStatement]] = {
@@ -246,6 +253,10 @@ class PolicyCreator:
             policy_name = f"{USER_SYSTEM_POLICY_PREFIX}{self.target_name}"
         elif self.policy_type == PolicyType.GROUP_HOME:
             policy_name = f"{GROUP_POLICY_PREFIX}{self.target_name}"
+        elif self.policy_type == PolicyType.GROUP_HOME_RO:
+            # Use same naming pattern as GROUP_HOME: group-policy-{target_name}
+            # Note: target_name will be the RO group name (e.g., 'testgroupro')
+            policy_name = f"{GROUP_POLICY_PREFIX}{self.target_name}"
         else:
             raise PolicyOperationError(f"Unknown policy type: {self.policy_type}")
 
@@ -268,6 +279,8 @@ class PolicyCreator:
             return self._create_default_system_policy()
         elif self.policy_type == PolicyType.GROUP_HOME:
             return self._create_default_group_policy()
+        elif self.policy_type == PolicyType.GROUP_HOME_RO:
+            return self._create_default_group_policy(read_only=True)
         else:
             raise PolicyOperationError(f"Unknown policy type: {self.policy_type}")
 
@@ -353,25 +366,33 @@ class PolicyCreator:
 
         return self
 
-    def _create_default_group_policy(self) -> "PolicyCreator":
-        """Create default group policy with group shared workspace paths."""
+    def _create_default_group_policy(self, read_only: bool = False) -> "PolicyCreator":
+        """Create default group policy with group shared workspace paths.
+
+        Args:
+            read_only: If True, grant READ access only. If False, grant WRITE access.
+        """
+        permission = (
+            PolicyPermissionLevel.READ if read_only else PolicyPermissionLevel.WRITE
+        )
+
         # Add access to group's SQL warehouse with table naming enforcement
-        # Only allow tables/databases that follow t_groupname__* pattern
-        governance_prefix = generate_group_governance_prefix(self.target_name)
+        # Only allow tables/databases that follow groupname_* pattern
+        governance_prefix = generate_group_governance_prefix(self.path_target)
         tenant_sql_warehouse_governed_path = (
             f"{self.tenant_sql_warehouse_path}/{governance_prefix}*"
         )
         self._add_path_access_via_builder(
             self.config.default_bucket,
             tenant_sql_warehouse_governed_path,
-            PolicyPermissionLevel.WRITE,
+            permission,
         )
 
         # Add access to group's general warehouse (no naming restrictions for general files)
         self._add_path_access_via_builder(
             self.config.default_bucket,
             self.tenant_general_warehouse_path,
-            PolicyPermissionLevel.WRITE,
+            permission,
         )
 
         return self

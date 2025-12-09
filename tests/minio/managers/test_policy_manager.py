@@ -542,13 +542,24 @@ class TestDeleteGroupPolicy:
     """Tests for delete_group_policy method."""
 
     @pytest.mark.asyncio
-    async def test_deletes_group_policy_successfully(self, policy_manager):
-        """Test successfully deleting group policy."""
+    async def test_deletes_main_group_policy_successfully(self, policy_manager):
+        """Test successfully deleting main group policy."""
         policy_manager.delete_resource = AsyncMock(return_value=True)
 
         await policy_manager.delete_group_policy("testgroup")
 
         policy_manager.delete_resource.assert_called_once_with("group-policy-testgroup")
+
+    @pytest.mark.asyncio
+    async def test_deletes_read_only_group_policy_successfully(self, policy_manager):
+        """Test successfully deleting read-only group policy."""
+        policy_manager.delete_resource = AsyncMock(return_value=True)
+
+        await policy_manager.delete_group_policy("testgroupro", read_only=True)
+
+        policy_manager.delete_resource.assert_called_once_with(
+            "group-policy-testgroupro"
+        )
 
     @pytest.mark.asyncio
     async def test_raises_error_when_deletion_fails(self, policy_manager):

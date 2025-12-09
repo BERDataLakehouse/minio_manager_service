@@ -68,6 +68,17 @@ def group_policy_creator(mock_minio_config):
     )
 
 
+@pytest.fixture
+def group_read_only_policy_creator(mock_minio_config):
+    """Create a PolicyCreator for group read-only policy."""
+    return PolicyCreator(
+        policy_type=PolicyType.GROUP_HOME_RO,
+        target_name="testgroupro",
+        config=mock_minio_config,
+        path_target_name="testgroup",
+    )
+
+
 # =============================================================================
 # TEST INITIALIZATION
 # =============================================================================
@@ -116,6 +127,24 @@ class TestPolicyCreatorInit:
         )
 
         assert creator.policy_type == PolicyType.GROUP_HOME
+        assert (
+            creator.tenant_sql_warehouse_path
+            == "s3a://data-lake/tenant-sql-warehouse/testgroup"
+        )
+        assert (
+            creator.tenant_general_warehouse_path
+            == "s3a://data-lake/tenant-general-warehouse/testgroup"
+        )
+
+    def test_init_group_read_only_policy(self, mock_minio_config):
+        """Test initialization for group read-only policy."""
+        creator = PolicyCreator(
+            policy_type=PolicyType.GROUP_HOME_RO,
+            target_name="testgroup",
+            config=mock_minio_config,
+        )
+
+        assert creator.policy_type == PolicyType.GROUP_HOME_RO
         assert (
             creator.tenant_sql_warehouse_path
             == "s3a://data-lake/tenant-sql-warehouse/testgroup"
@@ -190,6 +219,11 @@ class TestGeneratePolicyName:
         name = group_policy_creator._generate_policy_name()
         assert name == "group-policy-testgroup"
 
+    def test_generate_group_read_only_policy_name(self, group_read_only_policy_creator):
+        """Test generating group read-only policy name."""
+        name = group_read_only_policy_creator._generate_policy_name()
+        assert name == "group-policy-testgroupro"
+
     def test_generate_policy_name_unknown_type(self, mock_minio_config):
         """Test generating policy name with unknown type raises error."""
         creator = PolicyCreator(
@@ -244,6 +278,28 @@ class TestCreateDefaultPolicy:
         total_statements = sum(len(stmts) for stmts in sections.values())
         assert total_statements > 0
 
+    def test_create_default_group_read_only_policy(
+        self, group_read_only_policy_creator
+    ):
+        """Test creating default group read-only policy with READ permissions only."""
+        result = group_read_only_policy_creator.create_default_policy()
+
+        assert result is group_read_only_policy_creator
+
+        sections = group_read_only_policy_creator.get_sections()
+        total_statements = sum(len(stmts) for stmts in sections.values())
+        assert total_statements > 0
+
+        # Verify it has read permissions but no write/delete
+        policy = group_read_only_policy_creator.build()
+        actions = [stmt.action for stmt in policy.policy_document.statement]
+
+        # Should have GET_OBJECT (read access)
+        assert PolicyAction.GET_OBJECT in actions
+        # Should NOT have PUT_OBJECT or DELETE_OBJECT (write access)
+        assert PolicyAction.PUT_OBJECT not in actions
+        assert PolicyAction.DELETE_OBJECT not in actions
+
 
 # =============================================================================
 # TEST BUILD
@@ -278,6 +334,14 @@ class TestBuild:
 
         assert isinstance(policy, PolicyModel)
         assert policy.policy_name == "group-policy-testgroup"
+
+    def test_build_group_read_only_policy(self, group_read_only_policy_creator):
+        """Test building complete group read-only policy."""
+        group_read_only_policy_creator.create_default_policy()
+        policy = group_read_only_policy_creator.build()
+
+        assert isinstance(policy, PolicyModel)
+        assert policy.policy_name == "group-policy-testgroupro"
 
     def test_build_empty_policy(self, user_home_creator):
         """Test building policy without creating default (empty sections)."""
@@ -499,3 +563,29 @@ class TestIntegration:
 
         assert policy.policy_name == "group-policy-researchers"
         assert len(policy.policy_document.statement) > 0
+
+    def test_full_group_read_only_workflow(self, mock_minio_config):
+        """Test complete group read-only policy creation workflow."""
+        creator = PolicyCreator(
+            policy_type=PolicyType.GROUP_HOME_RO,
+            target_name="researchersro",
+            config=mock_minio_config,
+        )
+
+        creator.create_default_policy()
+        policy = creator.build()
+
+        # Verify policy structure
+        assert policy.policy_name == "group-policy-researchersro"
+        assert policy.policy_document.version == "2012-10-17"
+        assert len(policy.policy_document.statement) > 0
+
+        # Verify read-only: has GET but not PUT/DELETE
+        actions = [stmt.action for stmt in policy.policy_document.statement]
+        assert PolicyAction.GET_OBJECT in actions
+        assert PolicyAction.PUT_OBJECT not in actions
+        assert PolicyAction.DELETE_OBJECT not in actions
+
+        # Verify can serialize to JSON
+        json_str = policy.to_minio_policy_json()
+        assert "Statement" in json_str

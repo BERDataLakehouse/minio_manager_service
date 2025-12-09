@@ -81,6 +81,7 @@ def sample_policy_document():
                         "s3:prefix": ["groups-general-warehouse/testgroup/*"]
                     }
                 },
+                principal=None,
             )
         ],
     )
@@ -91,18 +92,35 @@ def mock_policy_manager(sample_policy_document):
     """Create a mock PolicyManager."""
     policy_manager = AsyncMock()
     policy_manager.get_policy_name = MagicMock(return_value="group-policy-testgroup")
+
+    # get_group_policy throws for new groups (like testgroupro) to trigger ensure_group_policy
+    async def get_group_policy_side_effect(group_name: str):
+        if group_name == "testgroup":
+            return PolicyModel(
+                policy_name="group-policy-testgroup",
+                policy_document=sample_policy_document,
+            )
+        # Throw for unknown groups to simulate policy not existing
+        raise Exception(f"Policy not found for {group_name}")
+
     policy_manager.get_group_policy = AsyncMock(
-        return_value=PolicyModel(
-            policy_name="group-policy-testgroup",
+        side_effect=get_group_policy_side_effect
+    )
+
+    # ensure_group_policy can be called with (group_name) or (group_name, read_only=True)
+    # Return appropriate policy based on group_name
+    async def ensure_group_policy_side_effect(
+        group_name: str, read_only: bool = False, path_target: str | None = None
+    ):
+        return PolicyModel(
+            policy_name=f"group-policy-{group_name}",
             policy_document=sample_policy_document,
         )
-    )
+
     policy_manager.ensure_group_policy = AsyncMock(
-        return_value=PolicyModel(
-            policy_name="group-policy-testgroup",
-            policy_document=sample_policy_document,
-        )
+        side_effect=ensure_group_policy_side_effect
     )
+
     policy_manager.attach_policy_to_group = AsyncMock()
     policy_manager.detach_policy_from_group = AsyncMock()
     policy_manager.delete_group_policy = AsyncMock()
@@ -401,12 +419,19 @@ class TestCreateGroup:
                 )
             )
 
-            result = await group_manager_instance.create_group("testgroup", "creator")
+            result, ro_result = await group_manager_instance.create_group(
+                "testgroup", "creator"
+            )
 
             assert isinstance(result, GroupModel)
             assert result.group_name == "testgroup"
             assert result.members == ["creator"]
             assert result.policy_name == "group-policy-testgroup"
+
+            # Verify read-only group was also created
+            assert isinstance(ro_result, GroupModel)
+            assert ro_result.group_name == "testgroupro"
+            assert ro_result.policy_name == "group-policy-testgroupro"
 
     @pytest.mark.asyncio
     async def test_create_group_creator_not_exists(
@@ -434,9 +459,12 @@ class TestCreateGroup:
         with patch.object(
             group_manager_instance, "resource_exists", AsyncMock(return_value=True)
         ):
-            result = await group_manager_instance.create_group("testgroup", "creator")
+            result, ro_result = await group_manager_instance.create_group(
+                "testgroup", "creator"
+            )
 
             assert isinstance(result, GroupModel)
+            assert isinstance(ro_result, GroupModel)
             # Should not call execute_command to create the group
             # But should still attach policy if not attached
 
@@ -462,9 +490,14 @@ class TestCreateGroup:
                 )
             )
 
-            await group_manager_instance.create_group("testgroup", "creator")
+            result, ro_result = await group_manager_instance.create_group(
+                "testgroup", "creator"
+            )
 
-            # attach_policy_to_group should NOT be called
+            # Verify both groups returned
+            assert isinstance(result, GroupModel)
+            assert isinstance(ro_result, GroupModel)
+            # attach_policy_to_group should NOT be called since policies are already attached
             mock_policy_manager.attach_policy_to_group.assert_not_called()
 
     @pytest.mark.asyncio
@@ -494,12 +527,10 @@ class TestCreateGroup:
             assert "Failed to create group" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_create_group_policy_creation_fallback(
+    async def test_create_group_calls_ensure_group_policy(
         self, group_manager_instance, mock_policy_manager, mock_user_manager
     ):
-        """Test create_group falls back to ensure_group_policy if get_group_policy fails."""
-        # Make get_group_policy fail first time
-        mock_policy_manager.get_group_policy.side_effect = Exception("Policy not found")
+        """Test create_group calls ensure_group_policy for both main and RO groups."""
         group_manager_instance._policy_manager = mock_policy_manager
         group_manager_instance._user_manager = mock_user_manager
 
@@ -516,10 +547,21 @@ class TestCreateGroup:
                 )
             )
 
-            await group_manager_instance.create_group("testgroup", "creator")
+            result, ro_result = await group_manager_instance.create_group(
+                "testgroup", "creator"
+            )
 
-            # Should call ensure_group_policy as fallback
-            mock_policy_manager.ensure_group_policy.assert_called_once_with("testgroup")
+            # Verify both groups were created
+            assert isinstance(result, GroupModel)
+            assert isinstance(ro_result, GroupModel)
+
+            # Should call ensure_group_policy for both groups
+            mock_policy_manager.ensure_group_policy.assert_any_call(
+                "testgroup", read_only=False, path_target=None
+            )
+            mock_policy_manager.ensure_group_policy.assert_any_call(
+                "testgroupro", read_only=True, path_target="testgroup"
+            )
 
 
 # =============================================================================
@@ -931,13 +973,34 @@ class TestDeleteCleanup:
     async def test_pre_delete_cleanup_success(
         self, group_manager_instance, mock_policy_manager
     ):
-        """Test _pre_delete_cleanup detaches and deletes policy."""
+        """Test _pre_delete_cleanup detaches and deletes policy for main and read-only groups."""
         group_manager_instance._policy_manager = mock_policy_manager
 
-        await group_manager_instance._pre_delete_cleanup("testgroup")
+        # Mock resource_exists to return True for read-only group
+        with patch.object(
+            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
+        ):
+            # Mock command execution for deleting read-only group
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout="",
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group rm",
+                )
+            )
 
-        mock_policy_manager.detach_policy_from_group.assert_called_once()
-        mock_policy_manager.delete_group_policy.assert_called_once_with("testgroup")
+            await group_manager_instance._pre_delete_cleanup("testgroup")
+
+        # Should detach policy from both main group and read-only group
+        assert mock_policy_manager.detach_policy_from_group.call_count == 2
+        # Should delete both main and read-only policies
+        assert mock_policy_manager.delete_group_policy.call_count == 2
+        mock_policy_manager.delete_group_policy.assert_any_call("testgroup")
+        mock_policy_manager.delete_group_policy.assert_any_call(
+            "testgroupro", read_only=True
+        )
 
     @pytest.mark.asyncio
     async def test_pre_delete_cleanup_detach_fails_continues(
@@ -952,8 +1015,8 @@ class TestDeleteCleanup:
         # Should not raise
         await group_manager_instance._pre_delete_cleanup("testgroup")
 
-        # delete_group_policy should still be called
-        mock_policy_manager.delete_group_policy.assert_called_once()
+        # delete_group_policy should still be called for both policies
+        assert mock_policy_manager.delete_group_policy.call_count == 2
 
     @pytest.mark.asyncio
     async def test_pre_delete_cleanup_delete_policy_fails_continues(
@@ -965,6 +1028,24 @@ class TestDeleteCleanup:
 
         # Should not raise
         await group_manager_instance._pre_delete_cleanup("testgroup")
+
+    @pytest.mark.asyncio
+    async def test_pre_delete_cleanup_ro_group_not_exists(
+        self, group_manager_instance, mock_policy_manager
+    ):
+        """Test _pre_delete_cleanup handles case when read-only group doesn't exist."""
+        group_manager_instance._policy_manager = mock_policy_manager
+
+        # Mock resource_exists to return False for read-only group
+        with patch.object(
+            group_manager_instance, "resource_exists", AsyncMock(return_value=False)
+        ):
+            await group_manager_instance._pre_delete_cleanup("testgroup")
+
+        # Should still detach from main group (once, not twice)
+        assert mock_policy_manager.detach_policy_from_group.call_count == 1
+        # Should still call delete_group_policy
+        mock_policy_manager.delete_group_policy.assert_called_once_with("testgroup")
 
     @pytest.mark.asyncio
     async def test_post_delete_cleanup_success(
@@ -1147,10 +1228,11 @@ class TestEdgeCases:
                 )
             )
 
-            result = await group_manager_instance.create_group(
+            result, ro_result = await group_manager_instance.create_group(
                 "  testgroup  ", "creator"
             )
             assert result.group_name == "testgroup"
+            assert ro_result.group_name == "testgroupro"
 
     @pytest.mark.asyncio
     async def test_group_name_validation_special_chars(self, group_manager_instance):
