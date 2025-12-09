@@ -377,7 +377,7 @@ class PolicyCreator:
         )
 
         # Add access to group's SQL warehouse with table naming enforcement
-        # Only allow tables/databases that follow t_groupname__* pattern
+        # Only allow tables/databases that follow groupname_* pattern
         governance_prefix = generate_group_governance_prefix(self.target_name)
         tenant_sql_warehouse_governed_path = (
             f"{self.tenant_sql_warehouse_path}/{governance_prefix}*"

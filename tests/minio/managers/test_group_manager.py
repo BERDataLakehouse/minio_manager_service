@@ -81,6 +81,7 @@ def sample_policy_document():
                         "s3:prefix": ["groups-general-warehouse/testgroup/*"]
                     }
                 },
+                principal=None,
             )
         ],
     )
