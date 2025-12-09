@@ -340,7 +340,7 @@ class TestBuild:
         policy = group_read_only_policy_creator.build()
 
         assert isinstance(policy, PolicyModel)
-        assert policy.policy_name == "group-policy-testgroup"
+        assert policy.policy_name == "group-policy-testgroupro"
 
     def test_build_empty_policy(self, user_home_creator):
         """Test building policy without creating default (empty sections)."""
