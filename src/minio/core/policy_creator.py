@@ -247,7 +247,8 @@ class PolicyCreator:
         elif self.policy_type == PolicyType.GROUP_HOME:
             policy_name = f"{GROUP_POLICY_PREFIX}{self.target_name}"
         elif self.policy_type == PolicyType.GROUP_HOME_RO:
-            # Use same naming as GROUP_HOME - read_only is about permissions, not naming
+            # Use same naming pattern as GROUP_HOME: group-policy-{target_name}
+            # Note: target_name will be the RO group name (e.g., 'testgroupro')
             policy_name = f"{GROUP_POLICY_PREFIX}{self.target_name}"
         else:
             raise PolicyOperationError(f"Unknown policy type: {self.policy_type}")
