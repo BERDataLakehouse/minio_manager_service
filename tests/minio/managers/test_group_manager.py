@@ -524,12 +524,10 @@ class TestCreateGroup:
             assert "Failed to create group" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_create_group_policy_creation_fallback(
+    async def test_create_group_calls_ensure_group_policy(
         self, group_manager_instance, mock_policy_manager, mock_user_manager
     ):
-        """Test create_group falls back to ensure_group_policy if get_group_policy fails."""
-        # Make get_group_policy fail first time (for both main and RO group)
-        mock_policy_manager.get_group_policy.side_effect = Exception("Policy not found")
+        """Test create_group calls ensure_group_policy for both main and RO groups."""
         group_manager_instance._policy_manager = mock_policy_manager
         group_manager_instance._user_manager = mock_user_manager
 
@@ -554,8 +552,10 @@ class TestCreateGroup:
             assert isinstance(result, GroupModel)
             assert isinstance(ro_result, GroupModel)
 
-            # Should call ensure_group_policy with read_only=True as fallback
-            mock_policy_manager.ensure_group_policy.assert_any_call("testgroup")
+            # Should call ensure_group_policy for both groups
+            mock_policy_manager.ensure_group_policy.assert_any_call(
+                "testgroup", read_only=False
+            )
             mock_policy_manager.ensure_group_policy.assert_any_call(
                 "testgroupro", read_only=True
             )

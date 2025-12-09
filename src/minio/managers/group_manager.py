@@ -7,7 +7,7 @@ from ..core.minio_client import MinIOClient
 from ..models.command import GroupAction
 from ..models.group import GroupModel
 from ..models.minio_config import MinIOConfig
-from ..models.policy import PolicyType
+from ..models.policy import PolicyModel, PolicyType
 from ..utils.validators import validate_group_name
 from .resource_manager import ResourceManager
 
@@ -97,6 +97,49 @@ class GroupManager(ResourceManager[GroupModel]):
             raise GroupOperationError(
                 f"Failed to parse group list command output: {stdout}"
             ) from e
+
+    # === Single Group Creation Helper ===
+
+    async def _create_single_group(
+        self, group_name: str, members: list[str], read_only: bool = False
+    ) -> PolicyModel:
+        """Create a single group with its policy.
+
+        Handles: policy creation, group creation, and policy attachment.
+        All operations are idempotent.
+
+        Args:
+            group_name: Name of the group to create
+            members: Initial members for the group
+            read_only: If True, create with read-only policy
+
+        Returns:
+            The policy model attached to the group
+        """
+        # Create group policy (ensure_group_policy is idempotent)
+        policy_model = await self.policy_manager.ensure_group_policy(
+            group_name, read_only=read_only
+        )
+
+        # Create the group if it doesn't exist
+        if not await self.resource_exists(group_name):
+            cmd_args = self._command_builder.build_group_command(
+                GroupAction.ADD, group_name, members
+            )
+            result = await self._executor._execute_command(cmd_args)
+            if not result.success:
+                suffix = " (read-only)" if read_only else ""
+                raise GroupOperationError(
+                    f"Failed to create group{suffix}: {result.stderr}"
+                )
+
+        # Attach group policy only if not already attached
+        if not await self.policy_manager.is_policy_attached_to_group(group_name):
+            await self.policy_manager.attach_policy_to_group(
+                policy_model.policy_name, group_name
+            )
+
+        return policy_model
 
     # === Pre/Post Delete Cleanup Overrides ===
 
@@ -204,6 +247,7 @@ class GroupManager(ResourceManager[GroupModel]):
         async with self.operation_context("create_group"):
             # Normalize group name by stripping whitespace
             group_name = group_name.strip()
+            ro_group_name = f"{group_name}ro"
 
             # Create group with initial members (MinIO requires at least one member)
             members = [creator]
@@ -212,54 +256,15 @@ class GroupManager(ResourceManager[GroupModel]):
             if not await self.user_manager.resource_exists(creator):
                 raise GroupOperationError(f"User {creator} does not exist")
 
-            # Create group policy (read/write)
-            try:
-                policy_model = await self.policy_manager.get_group_policy(group_name)
-            except Exception:
-                logger.warning("Failed to get group policy - creating new policy")
-                policy_model = await self.policy_manager.ensure_group_policy(group_name)
-
-            # Create the group
-            if not await self.resource_exists(group_name):
-                cmd_args = self._command_builder.build_group_command(
-                    GroupAction.ADD, group_name, members
-                )
-                result = await self._executor._execute_command(cmd_args)
-                if not result.success:
-                    raise GroupOperationError(
-                        f"Failed to create group: {result.stderr}"
-                    )
-
-            # Attach group policy only if not already attached
-            if not await self.policy_manager.is_policy_attached_to_group(group_name):
-                await self.policy_manager.attach_policy_to_group(
-                    policy_model.policy_name, group_name
-                )
-
-            # Create read-only group ({group_name}ro)
-            ro_group_name = f"{group_name}ro"
-
-            # Create read-only group policy (ensure_group_policy is idempotent)
-            ro_policy_model = await self.policy_manager.ensure_group_policy(
-                ro_group_name, read_only=True
+            # Create main group with read/write policy
+            policy_model = await self._create_single_group(
+                group_name, members, read_only=False
             )
 
-            # Create the read-only group
-            if not await self.resource_exists(ro_group_name):
-                cmd_args = self._command_builder.build_group_command(
-                    GroupAction.ADD, ro_group_name, members
-                )
-                result = await self._executor._execute_command(cmd_args)
-                if not result.success:
-                    raise GroupOperationError(
-                        f"Failed to create read-only group: {result.stderr}"
-                    )
-
-            # Attach read-only group policy only if not already attached
-            if not await self.policy_manager.is_policy_attached_to_group(ro_group_name):
-                await self.policy_manager.attach_policy_to_group(
-                    ro_policy_model.policy_name, ro_group_name
-                )
+            # Create read-only group ({group_name}ro)
+            ro_policy_model = await self._create_single_group(
+                ro_group_name, members, read_only=True
+            )
 
             # Create group shared directory structure (only once, for the main group)
             await self._create_group_shared_directory(group_name)
