@@ -75,6 +75,7 @@ def group_read_only_policy_creator(mock_minio_config):
         policy_type=PolicyType.GROUP_HOME_RO,
         target_name="testgroupro",
         config=mock_minio_config,
+        path_target_name="testgroup",
     )
 
 
