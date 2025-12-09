@@ -18,17 +18,6 @@ class HealthResponse(BaseModel):
 
 
 @router.get(
-    "/",
-    response_model=HealthResponse,
-    summary="Root endpoint",
-    description="Returns the health status of the API.",
-)
-async def root():
-    """Root endpoint - returns health status."""
-    return HealthResponse(status="healthy")
-
-
-@router.get(
     "/health",
     response_model=HealthResponse,
     summary="Health check",
