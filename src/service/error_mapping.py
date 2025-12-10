@@ -12,6 +12,7 @@ from src.service.errors import ErrorType
 from src.service.exceptions import (  # MinIO specific exceptions
     AuthenticationError,
     BucketOperationError,
+    BucketValidationError,
     ConnectionError,
     DataGovernanceError,
     GroupOperationError,
@@ -24,6 +25,7 @@ from src.service.exceptions import (  # MinIO specific exceptions
     PolicyOperationError,
     PolicyValidationError,
     UserOperationError,
+    ValidationError,
 )
 
 _H400 = status.HTTP_400_BAD_REQUEST
@@ -57,9 +59,11 @@ _ERR_MAP = {
     PolicyValidationError: ErrorMapping(ErrorType.POLICY_VALIDATION_ERROR, _H400),
     PolicyOperationError: ErrorMapping(ErrorType.POLICY_OPERATION_ERROR, _H500),
     BucketOperationError: ErrorMapping(ErrorType.BUCKET_OPERATION_ERROR, _H500),
+    BucketValidationError: ErrorMapping(ErrorType.BUCKET_VALIDATION_ERROR, _H400),
     UserOperationError: ErrorMapping(ErrorType.USER_OPERATION_ERROR, _H400),
     GroupOperationError: ErrorMapping(ErrorType.GROUP_OPERATION_ERROR, _H400),
     DataGovernanceError: ErrorMapping(ErrorType.DATA_GOVERNANCE_ERROR, _H403),
+    ValidationError: ErrorMapping(ErrorType.VALIDATION_ERROR, _H400),
     ConnectionError: ErrorMapping(ErrorType.CONNECTION_ERROR, _H503),
     # Base error fallback
     MinIOError: ErrorMapping(ErrorType.MINIO_ERROR, _H500),

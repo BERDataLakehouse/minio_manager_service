@@ -26,6 +26,7 @@ from src.minio.managers.sharing_manager import (
     SharingResult,
     UnsharingResult,
 )
+from src.minio.models.policy import PolicyPermissionLevel
 from src.routes.sharing import (
     PathAccessResponse,
     PathRequest,
@@ -208,6 +209,41 @@ class TestShareRequest:
                 extra_field="not allowed",
             )
 
+    def test_share_request_permission_default(self):
+        """Test that permission defaults to 'write' when not specified."""
+        request = ShareRequest(
+            path="s3a://bucket/data/path/",
+            with_users=["alice"],
+        )
+        assert request.permission == "write"
+
+    def test_share_request_permission_read(self):
+        """Test ShareRequest with 'read' permission."""
+        request = ShareRequest(
+            path="s3a://bucket/data/path/",
+            with_users=["alice"],
+            permission="read",
+        )
+        assert request.permission == "read"
+
+    def test_share_request_permission_write(self):
+        """Test ShareRequest with explicit 'write' permission."""
+        request = ShareRequest(
+            path="s3a://bucket/data/path/",
+            with_users=["alice"],
+            permission="write",
+        )
+        assert request.permission == "write"
+
+    def test_share_request_permission_invalid(self):
+        """Test ShareRequest with invalid permission value."""
+        with pytest.raises(ValueError, match="String should match pattern"):
+            ShareRequest(
+                path="s3a://bucket/data/path/",
+                with_users=["alice"],
+                permission="execute",
+            )
+
 
 class TestUnshareRequest:
     """Tests for UnshareRequest model."""
@@ -386,6 +422,59 @@ class TestShareDataEndpoint:
 
         # PolicyValidationError is converted to 400 by exception handler
         assert response.status_code == 400
+
+    def test_share_data_permission_read(self, client, mock_sharing_manager):
+        """Test sharing with 'read' permission converts to PolicyPermissionLevel.READ."""
+
+        response = client.post(
+            "/sharing/share",
+            json={
+                "path": "s3a://bucket/data/project/",
+                "with_users": ["alice"],
+                "permission": "read",
+            },
+        )
+
+        assert response.status_code == 200
+        # Verify sharing_manager.share_path was called with PolicyPermissionLevel.READ
+        mock_sharing_manager.share_path.assert_called_once()
+        call_kwargs = mock_sharing_manager.share_path.call_args.kwargs
+        assert call_kwargs["permission_level"] == PolicyPermissionLevel.READ
+
+    def test_share_data_permission_write(self, client, mock_sharing_manager):
+        """Test sharing with 'write' permission converts to PolicyPermissionLevel.WRITE."""
+
+        response = client.post(
+            "/sharing/share",
+            json={
+                "path": "s3a://bucket/data/project/",
+                "with_users": ["alice"],
+                "permission": "write",
+            },
+        )
+
+        assert response.status_code == 200
+        # Verify sharing_manager.share_path was called with PolicyPermissionLevel.WRITE
+        mock_sharing_manager.share_path.assert_called_once()
+        call_kwargs = mock_sharing_manager.share_path.call_args.kwargs
+        assert call_kwargs["permission_level"] == PolicyPermissionLevel.WRITE
+
+    def test_share_data_permission_default_is_write(self, client, mock_sharing_manager):
+        """Test sharing without permission defaults to PolicyPermissionLevel.WRITE."""
+
+        response = client.post(
+            "/sharing/share",
+            json={
+                "path": "s3a://bucket/data/project/",
+                "with_users": ["alice"],
+            },
+        )
+
+        assert response.status_code == 200
+        # Verify sharing_manager.share_path was called with default PolicyPermissionLevel.WRITE
+        mock_sharing_manager.share_path.assert_called_once()
+        call_kwargs = mock_sharing_manager.share_path.call_args.kwargs
+        assert call_kwargs["permission_level"] == PolicyPermissionLevel.WRITE
 
 
 # === UNSHARE DATA ENDPOINT TESTS ===

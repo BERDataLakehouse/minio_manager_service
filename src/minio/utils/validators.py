@@ -279,6 +279,13 @@ def _validate_s3_object_key(key: str) -> None:
     if len(key) > 1024:
         raise PolicyValidationError("S3 object key cannot exceed 1024 characters")
 
+    # Disallow non-ASCII characters to prevent Unicode evasion of path checks
+    # This also blocks zero-width and suspicious Unicode whitespace characters
+    if not key.isascii():
+        raise PolicyValidationError(
+            "S3 object key must use ASCII characters only to prevent Unicode-based path bypasses"
+        )
+
     # Check for invalid characters in key
     invalid_chars = ["\n", "\r", "\0"]
     for char in invalid_chars:
@@ -389,8 +396,7 @@ def validate_policy_name(policy_name: str) -> str:
     # Character constraints - allow alphanumeric, periods, hyphens, underscores
     if not re.match(r"^[a-zA-Z0-9._-]+$", policy_name):
         raise PolicyValidationError(
-            "Policy name can only contain alphanumeric characters, "
-            "periods (.), hyphens (-), and underscores (_)"
+            "Policy name can only contain alphanumeric characters, periods (.), hyphens (-), and underscores (_)"
         )
 
     # Cannot start with a period for MinIO compatibility

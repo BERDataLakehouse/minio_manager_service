@@ -757,3 +757,83 @@ class TestEdgeCases:
         # Both paths should be present
         assert "path1" in prefixes
         assert "path2" in prefixes
+
+    def test_add_path_without_new_policy_flag_removes_existing(
+        self, policy_with_list_bucket
+    ):
+        """Test that add_path_access without new_policy flag removes and re-adds path."""
+        builder = PolicyBuilder(policy_with_list_bucket, "test-bucket")
+        # Add path with WRITE permission
+        builder = builder.add_path_access(
+            "s3a://test-bucket/path1", PolicyPermissionLevel.WRITE
+        )
+
+        # Add same path with READ permission (should remove WRITE and add READ)
+        builder = builder.add_path_access(
+            "s3a://test-bucket/path1", PolicyPermissionLevel.READ, new_policy=False
+        )
+
+        policy = builder.build()
+
+        # Should have GET_OBJECT but not PUT_OBJECT
+        assert any(
+            stmt.action == PolicyAction.GET_OBJECT
+            for stmt in policy.policy_document.statement
+        )
+        assert not any(
+            stmt.action == PolicyAction.PUT_OBJECT
+            for stmt in policy.policy_document.statement
+        )
+
+    def test_add_to_list_bucket_statement_error_handling(self, empty_policy_model):
+        """Test error when trying to add to non-existent ListBucket statement."""
+        builder = PolicyBuilder(empty_policy_model, "test-bucket")
+
+        with pytest.raises(PolicyOperationError, match="No ListBucket statement found"):
+            builder._add_to_list_bucket_statement("test/path")
+
+    def test_remove_from_list_bucket_statement_error_handling(self, empty_policy_model):
+        """Test error when trying to remove from non-existent ListBucket statement."""
+        builder = PolicyBuilder(empty_policy_model, "test-bucket")
+
+        with pytest.raises(PolicyOperationError, match="No ListBucket statement found"):
+            builder._remove_from_list_bucket_statement("test/path")
+
+    def test_extract_path_with_no_bucket_path_component(self, policy_with_list_bucket):
+        """Test extract path with path that has no component after bucket name."""
+        builder = PolicyBuilder(policy_with_list_bucket, "test-bucket")
+
+        # This should fail validation because there's no path after bucket
+        with pytest.raises((PolicyOperationError, PolicyValidationError)):
+            builder._extract_and_validate_path("s3a://test-bucket/")
+
+    def test_path_with_governance_wildcard_preserves_parent_arns(
+        self, policy_with_list_bucket
+    ):
+        """Test that governance wildcard paths add parent directory ARNs."""
+        builder = PolicyBuilder(policy_with_list_bucket, "test-bucket")
+        new_builder = builder.add_path_access(
+            "s3a://test-bucket/users-sql-warehouse/user1/u_user1__*",
+            PolicyPermissionLevel.WRITE,
+        )
+
+        policy = new_builder.build()
+
+        # Check that GET_OBJECT statements include parent directory ARNs
+        get_object_stmts = [
+            stmt
+            for stmt in policy.policy_document.statement
+            if stmt.action == PolicyAction.GET_OBJECT
+        ]
+
+        assert len(get_object_stmts) > 0
+        all_resources = []
+        for stmt in get_object_stmts:
+            resources = (
+                stmt.resource if isinstance(stmt.resource, list) else [stmt.resource]
+            )
+            all_resources.extend(resources)
+
+        # Should include parent directory ARN
+        parent_arn = "arn:aws:s3:::test-bucket/users-sql-warehouse/user1"
+        assert parent_arn in all_resources or f"{parent_arn}/*" in all_resources

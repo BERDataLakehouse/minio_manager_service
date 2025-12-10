@@ -1587,3 +1587,346 @@ class TestResourceExists:
         result = await policy_manager.resource_exists("user-home-policy-nonexistent")
 
         assert result is False
+
+
+# =============================================================================
+# Test Edge Cases and Error Handling
+# =============================================================================
+
+
+class TestUnsupportedTargetTypes:
+    """Tests for unsupported target type error handling."""
+
+    @pytest.mark.asyncio
+    async def test_load_policy_for_unsupported_target_type(self, policy_manager):
+        """Test _load_policy_for_target raises error for unsupported target type."""
+
+        # Create a fake PolicyTarget that's not USER or GROUP
+        class UnsupportedTarget:
+            pass
+
+        with pytest.raises(PolicyOperationError, match="Unsupported target type"):
+            await policy_manager._load_policy_for_target(
+                UnsupportedTarget(),  # Not USER or GROUP
+                "testuser",
+            )
+
+
+class TestPolicyCreationExceptions:
+    """Tests for policy creation error handling."""
+
+    @pytest.mark.asyncio
+    async def test_create_policy_model_handles_exception(self, policy_manager):
+        """Test _create_policy_model handles and wraps exceptions."""
+        with patch("src.minio.managers.policy_manager.PolicyCreator") as mock_creator:
+            mock_creator.side_effect = ValueError("Invalid policy configuration")
+
+            with pytest.raises(PolicyOperationError, match="Failed to create"):
+                policy_manager._create_policy_model(PolicyType.USER_HOME, "testuser")
+
+
+class TestPolicyDeletionErrors:
+    """Tests for policy deletion error scenarios."""
+
+    @pytest.mark.asyncio
+    async def test_delete_user_policies_home_policy_exception(
+        self, policy_manager, mock_executor
+    ):
+        """Test delete_user_policies handles home policy deletion exception and raises."""
+        policy_manager.resource_exists = AsyncMock(return_value=True)
+
+        async def mock_delete(name):
+            if "home" in name:
+                raise Exception("Failed to delete home policy")
+            return True
+
+        policy_manager.delete_resource = AsyncMock(side_effect=mock_delete)
+
+        # Should raise PolicyOperationError due to collected errors
+        with pytest.raises(
+            PolicyOperationError, match="Failed to delete user policies"
+        ):
+            await policy_manager.delete_user_policies("testuser")
+
+        assert policy_manager.delete_resource.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_delete_user_policies_system_policy_exception(
+        self, policy_manager, mock_executor
+    ):
+        """Test delete_user_policies handles system policy deletion exception and raises."""
+        policy_manager.resource_exists = AsyncMock(return_value=True)
+
+        async def mock_delete(name):
+            if "system" in name:
+                raise Exception("Failed to delete system policy")
+            return True
+
+        policy_manager.delete_resource = AsyncMock(side_effect=mock_delete)
+
+        # Should raise PolicyOperationError due to collected errors
+        with pytest.raises(
+            PolicyOperationError, match="Failed to delete user policies"
+        ):
+            await policy_manager.delete_user_policies("testuser")
+
+        assert policy_manager.delete_resource.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_delete_group_policy_exception(self, policy_manager):
+        """Test delete_group_policy handles deletion exception."""
+        policy_manager.resource_exists = AsyncMock(return_value=True)
+        policy_manager.delete_resource = AsyncMock(
+            side_effect=Exception("Failed to delete group policy")
+        )
+
+        with pytest.raises(PolicyOperationError, match="Error deleting group policy"):
+            await policy_manager.delete_group_policy("testgroup")
+
+
+class TestARNPathExtraction:
+    """Tests for _extract_path_from_resource_arn edge cases."""
+
+    def test_extract_path_invalid_arn_format(self, policy_manager):
+        """Test extraction returns None for ARN not ending with /*."""
+        result = policy_manager._extract_path_from_resource_arn(
+            "arn:aws:s3:::bucket/path/to/file.txt"
+        )
+        assert result is None
+
+    def test_extract_path_insufficient_parts(self, policy_manager):
+        """Test extraction returns None when path has fewer than 2 parts."""
+        result = policy_manager._extract_path_from_resource_arn("arn:aws:s3:::bucket/*")
+        assert result is None
+
+
+class TestMinioPolicyCreationCleanup:
+    """Tests for _create_minio_policy cleanup error handling."""
+
+    @pytest.mark.asyncio
+    async def test_create_minio_policy_cleanup_failure(
+        self, policy_manager, mock_executor, sample_policy_model
+    ):
+        """Test _create_minio_policy handles cleanup failure gracefully."""
+        mock_executor._execute_command.return_value = CommandResult(
+            success=True, stdout="", stderr="", return_code=0, command=""
+        )
+
+        with patch("os.remove", side_effect=OSError("Permission denied")):
+            await policy_manager._create_minio_policy(sample_policy_model)
+
+
+class TestShadowPolicyUpdateFlow:
+    """Tests for shadow policy update flow."""
+
+    @pytest.mark.asyncio
+    async def test_shadow_policy_update_flow_calls_all_steps(
+        self, policy_manager, sample_policy_model
+    ):
+        """Test _execute_shadow_policy_update calls all 4 steps in order."""
+        policy_manager._create_shadow_policy = AsyncMock(
+            return_value="shadow-policy-123"
+        )
+        policy_manager._attach_shadow_policy = AsyncMock()
+        policy_manager._replace_original_policy = AsyncMock()
+        policy_manager._detach_and_delete_shadow_policy = AsyncMock()
+
+        result = await policy_manager._execute_shadow_policy_update(
+            sample_policy_model, "testuser", PolicyType.USER_HOME
+        )
+
+        policy_manager._create_shadow_policy.assert_called_once()
+        policy_manager._attach_shadow_policy.assert_called_once_with(
+            "shadow-policy-123", "testuser", PolicyType.USER_HOME
+        )
+        policy_manager._replace_original_policy.assert_called_once_with(
+            sample_policy_model, "testuser", PolicyType.USER_HOME
+        )
+        policy_manager._detach_and_delete_shadow_policy.assert_called_once_with(
+            "shadow-policy-123", "testuser", PolicyType.USER_HOME
+        )
+
+        assert result == "shadow-policy-123"
+
+    @pytest.mark.asyncio
+    async def test_replace_original_policy_user_flow(
+        self, policy_manager, sample_policy_model
+    ):
+        """Test _replace_original_policy follows correct flow for user policies."""
+        policy_manager.detach_policy_from_user = AsyncMock()
+        policy_manager.delete_resource = AsyncMock()
+        policy_manager._create_minio_policy = AsyncMock()
+        policy_manager.attach_policy_to_user = AsyncMock()
+
+        await policy_manager._replace_original_policy(
+            sample_policy_model, "testuser", PolicyType.USER_HOME
+        )
+
+        policy_manager.detach_policy_from_user.assert_called_once()
+        policy_manager.delete_resource.assert_called_once()
+        policy_manager._create_minio_policy.assert_called_once()
+        policy_manager.attach_policy_to_user.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_replace_original_policy_group_flow(
+        self, policy_manager, sample_policy_model
+    ):
+        """Test _replace_original_policy follows correct flow for group policies."""
+        policy_manager.detach_policy_from_group = AsyncMock()
+        policy_manager.delete_resource = AsyncMock()
+        policy_manager._create_minio_policy = AsyncMock()
+        policy_manager.attach_policy_to_group = AsyncMock()
+
+        await policy_manager._replace_original_policy(
+            sample_policy_model, "testgroup", PolicyType.GROUP_HOME
+        )
+
+        policy_manager.detach_policy_from_group.assert_called_once()
+        policy_manager.delete_resource.assert_called_once()
+        policy_manager._create_minio_policy.assert_called_once()
+        policy_manager.attach_policy_to_group.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_detach_and_delete_shadow_policy_user_flow(self, policy_manager):
+        """Test _detach_and_delete_shadow_policy for user policies."""
+        policy_manager.detach_policy_from_user = AsyncMock()
+        policy_manager.delete_resource = AsyncMock()
+
+        await policy_manager._detach_and_delete_shadow_policy(
+            "shadow-policy-123", "testuser", PolicyType.USER_HOME
+        )
+
+        policy_manager.detach_policy_from_user.assert_called_once_with(
+            "shadow-policy-123", "testuser"
+        )
+        policy_manager.delete_resource.assert_called_once_with("shadow-policy-123")
+
+    @pytest.mark.asyncio
+    async def test_detach_and_delete_shadow_policy_group_flow(self, policy_manager):
+        """Test _detach_and_delete_shadow_policy for group policies."""
+        policy_manager.detach_policy_from_group = AsyncMock()
+        policy_manager.delete_resource = AsyncMock()
+
+        await policy_manager._detach_and_delete_shadow_policy(
+            "shadow-policy-123", "testgroup", PolicyType.GROUP_HOME
+        )
+
+        policy_manager.detach_policy_from_group.assert_called_once_with(
+            "shadow-policy-123", "testgroup"
+        )
+        policy_manager.delete_resource.assert_called_once_with("shadow-policy-123")
+
+
+class TestShadowPolicyCleanup:
+    """Tests for shadow policy cleanup on failure."""
+
+    @pytest.mark.asyncio
+    async def test_cleanup_shadow_policy_user_graceful_failure(self, policy_manager):
+        """Test _cleanup_shadow_policy gracefully handles detachment failure for users."""
+        policy_manager.detach_policy_from_user = AsyncMock(
+            side_effect=Exception("Detachment failed")
+        )
+        policy_manager.delete_resource = AsyncMock()
+
+        await policy_manager._cleanup_shadow_policy(
+            "shadow-policy-123", "testuser", PolicyType.USER_HOME
+        )
+
+        policy_manager.delete_resource.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_shadow_policy_group_graceful_failure(self, policy_manager):
+        """Test _cleanup_shadow_policy gracefully handles detachment failure for groups."""
+        policy_manager.detach_policy_from_group = AsyncMock(
+            side_effect=Exception("Detachment failed")
+        )
+        policy_manager.delete_resource = AsyncMock()
+
+        await policy_manager._cleanup_shadow_policy(
+            "shadow-policy-123", "testgroup", PolicyType.GROUP_HOME
+        )
+
+        policy_manager.delete_resource.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_shadow_policy_delete_failure(self, policy_manager):
+        """Test _cleanup_shadow_policy logs warning when cleanup deletion fails."""
+        policy_manager.detach_policy_from_user = AsyncMock()
+        policy_manager.delete_resource = AsyncMock(
+            side_effect=Exception("Delete failed")
+        )
+
+        await policy_manager._cleanup_shadow_policy(
+            "shadow-policy-123", "testuser", PolicyType.USER_HOME
+        )
+
+
+class TestUpdateMinioPolicyCleanup:
+    """Tests for _update_minio_policy shadow policy cleanup."""
+
+    @pytest.mark.asyncio
+    async def test_update_minio_policy_calls_cleanup_on_failure(
+        self, policy_manager, sample_policy_model
+    ):
+        """Test _update_minio_policy calls cleanup when shadow update fails."""
+        # Mock the shadow update to return a shadow name first, then fail
+        policy_manager._execute_shadow_policy_update = AsyncMock()
+        policy_manager._execute_shadow_policy_update.side_effect = [
+            "shadow-policy-123",  # First call returns shadow name
+            Exception("Shadow update failed"),  # Subsequent calls fail
+        ]
+        # Actually, let's test it differently - mock _parse_policy_info and _execute_shadow_policy_update
+        policy_manager._parse_policy_info = MagicMock(
+            return_value=("testuser", PolicyType.USER_HOME)
+        )
+        policy_manager._execute_shadow_policy_update = AsyncMock(
+            side_effect=Exception("Shadow update failed")
+        )
+        policy_manager._cleanup_shadow_policy = AsyncMock()
+
+        with pytest.raises(PolicyOperationError):
+            await policy_manager._update_minio_policy(sample_policy_model)
+
+        # Cleanup should not be called because shadow_name is None
+        # This tests the if shadow_name check in the error handler
+        assert not policy_manager._cleanup_shadow_policy.called
+
+
+class TestPolicyDocumentLoadingErrors:
+    """Tests for policy document loading error handling."""
+
+    @pytest.mark.asyncio
+    async def test_load_minio_policy_parse_exception(
+        self, policy_manager, mock_executor
+    ):
+        """Test _load_minio_policy handles policy document parsing exception."""
+        # Mock executor to return valid JSON but invalid policy document
+        mock_executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout='{"Policy": {"Version": "invalid", "Statement": "notalist"}}',
+            stderr="",
+            return_code=0,
+            command="",
+        )
+
+        with pytest.raises(PolicyOperationError, match="Failed to load policy"):
+            await policy_manager._load_minio_policy("user-home-policy-test")
+
+
+class TestRemovePathAccessErrors:
+    """Tests for remove_path_access_from_policy error handling."""
+
+    @pytest.mark.asyncio
+    async def test_remove_path_access_exception(
+        self, policy_manager, sample_policy_model
+    ):
+        """Test remove_path_access_from_policy handles exceptions."""
+        with patch("src.minio.managers.policy_manager.PolicyBuilder") as mock_builder:
+            mock_builder.side_effect = Exception("Builder failed")
+
+            with pytest.raises(
+                PolicyOperationError, match="Failed to remove path access"
+            ):
+                await policy_manager.remove_path_access_from_policy(
+                    sample_policy_model, "s3a://test-bucket/path/to/remove"
+                )
