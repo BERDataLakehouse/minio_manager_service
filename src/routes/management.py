@@ -19,6 +19,7 @@ from ..minio.utils.validators import validate_group_name
 from ..service.app_state import get_app_state
 from ..service.dependencies import require_admin
 from ..service.exceptions import (
+    DataGovernanceError,
     GroupOperationError,
     PolicyOperationError,
     UserOperationError,
@@ -334,6 +335,12 @@ async def create_group(
     This creates both the main group with read/write access and a read-only group
     ({group_name}ro) with read-only access to the same shared workspace.
     """
+    # Prevent creating groups ending with 'ro' - this suffix is reserved for read-only variants
+    if group_name.endswith("ro"):
+        raise DataGovernanceError(
+            "Group name cannot end with 'ro' - this suffix is reserved for read-only group variants"
+        )
+
     # Validate group name early to return 400 for invalid names
     validate_group_name(group_name)
 

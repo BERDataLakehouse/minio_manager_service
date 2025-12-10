@@ -20,7 +20,7 @@ from ..minio.utils.governance import (
     generate_user_governance_prefix,
 )
 from ..service.dependencies import auth
-from ..service.exceptions import DataGovernanceError
+from ..service.exceptions import DataGovernanceError, GroupOperationError
 from ..service.kb_auth import KBaseUser
 
 logger = logging.getLogger(__name__)
@@ -254,30 +254,38 @@ async def get_group_workspace(
 
     username = authenticated_user.user
 
+    # Normalize group name - remove 'ro' suffix if present
+    base_group = group_name[:-2] if group_name.endswith("ro") else group_name
+
     # Check if user is a member of the group (either read/write or read-only variant)
-    is_member = await app_state.group_manager.is_user_in_group(username, group_name)
-    ro_group_name = f"{group_name}ro"
-    is_ro_member = await app_state.group_manager.is_user_in_group(
-        username, ro_group_name
-    )
+    is_member = await app_state.group_manager.is_user_in_group(username, base_group)
+    ro_group_name = f"{base_group}ro"
+    is_ro_member = False
+    try:
+        is_ro_member = await app_state.group_manager.is_user_in_group(
+            username, ro_group_name
+        )
+    except GroupOperationError as e:
+        # Read-only group doesn't exist - this is okay
+        logger.warning(f"Read-only group {ro_group_name} does not exist: {e}")
 
     if not is_member and not is_ro_member:
         raise DataGovernanceError("User is not a member of the group")
-    # Get group information
-    group_info = await app_state.group_manager.get_group_info(group_name)
-    group_policy = await app_state.policy_manager.get_group_policy(group_name)
+    # Get group information using base_group
+    group_info = await app_state.group_manager.get_group_info(base_group)
+    group_policy = await app_state.policy_manager.get_group_policy(base_group)
     group_accessible_paths = app_state.policy_manager.get_accessible_paths_from_policy(
         group_policy
     )
 
     response = GroupWorkspaceResponse(
-        group_name=group_name,
+        group_name=base_group,
         members=group_info.members,
         member_count=len(group_info.members),
         accessible_paths=group_accessible_paths,
     )
 
-    logger.info(f"Retrieved group workspace for {group_name} by user {username}")
+    logger.info(f"Retrieved group workspace for {base_group} by user {username}")
     return response
 
 
@@ -297,26 +305,34 @@ async def get_group_sql_warehouse_prefix(
 
     username = authenticated_user.user
 
+    # Normalize group name - remove 'ro' suffix if present
+    base_group = group_name[:-2] if group_name.endswith("ro") else group_name
+
     # Check if user is a member of the group (either read/write or read-only variant)
-    is_member = await app_state.group_manager.is_user_in_group(username, group_name)
-    ro_group_name = f"{group_name}ro"
-    is_ro_member = await app_state.group_manager.is_user_in_group(
-        username, ro_group_name
-    )
+    is_member = await app_state.group_manager.is_user_in_group(username, base_group)
+    ro_group_name = f"{base_group}ro"
+    is_ro_member = False
+    try:
+        is_ro_member = await app_state.group_manager.is_user_in_group(
+            username, ro_group_name
+        )
+    except GroupOperationError as e:
+        # Read-only group doesn't exist - this is okay
+        logger.warning(f"Read-only group {ro_group_name} does not exist: {e}")
 
     if not is_member and not is_ro_member:
         raise DataGovernanceError("User is not a member of the group")
 
-    # Get group SQL warehouse prefix (tenant SQL warehouse)
-    sql_warehouse_prefix = f"s3a://{app_state.group_manager.config.default_bucket}/{app_state.group_manager.tenant_sql_warehouse_prefix}/{group_name}/"
+    # Get group SQL warehouse prefix (tenant SQL warehouse) using base_group
+    sql_warehouse_prefix = f"s3a://{app_state.group_manager.config.default_bucket}/{app_state.group_manager.tenant_sql_warehouse_prefix}/{base_group}/"
 
     response = GroupSqlWarehousePrefixResponse(
-        group_name=group_name,
+        group_name=base_group,
         sql_warehouse_prefix=sql_warehouse_prefix,
     )
 
     logger.info(
-        f"Retrieved SQL warehouse prefix for group {group_name} by user {username}"
+        f"Retrieved SQL warehouse prefix for group {base_group} by user {username}"
     )
     return response
 
@@ -376,22 +392,34 @@ async def get_namespace_prefix(
 
     tenant_ns_prefix = None
     if tenant:
+        # Normalize tenant name - remove 'ro' suffix if present
+        # This handles cases where get_my_groups() returns both 'group' and 'groupro'
+        base_tenant = tenant[:-2] if tenant.endswith("ro") else tenant
+
         # Check if group exists
-        group_exists = await app_state.group_manager.get_group_info(tenant)
+        group_exists = await app_state.group_manager.get_group_info(base_tenant)
         if not group_exists:
-            raise DataGovernanceError(f"Group {tenant} does not exist")
+            raise DataGovernanceError(f"Group {base_tenant} does not exist")
+
         # Check if user is a member of the group (either read/write or read-only variant)
-        is_member = await app_state.group_manager.is_user_in_group(username, tenant)
-        ro_group_name = f"{tenant}ro"
-        is_ro_member = await app_state.group_manager.is_user_in_group(
-            username, ro_group_name
+        is_member = await app_state.group_manager.is_user_in_group(
+            username, base_tenant
         )
+        ro_group_name = f"{base_tenant}ro"
+        is_ro_member = False
+        try:
+            is_ro_member = await app_state.group_manager.is_user_in_group(
+                username, ro_group_name
+            )
+        except GroupOperationError as e:
+            # Read-only group doesn't exist - this is okay
+            logger.warning(f"Read-only group {ro_group_name} does not exist: {e}")
 
         if not is_member and not is_ro_member:
             raise DataGovernanceError(
-                f"User {username} is not a member of the group {tenant}"
+                f"User {username} is not a member of the group {base_tenant}"
             )
-        tenant_ns_prefix = generate_group_governance_prefix(tenant)
+        tenant_ns_prefix = generate_group_governance_prefix(base_tenant)
 
     return NamespacePrefixResponse(
         username=username,
