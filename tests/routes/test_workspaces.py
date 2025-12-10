@@ -18,6 +18,7 @@ from src.minio.models.group import GroupModel
 from src.routes.workspaces import router
 from src.service.app_state import AppState
 from src.service.exception_handlers import universal_error_handler
+from src.service.exceptions import GroupOperationError
 from src.service.kb_auth import AdminPermission, KBaseUser
 
 
@@ -402,6 +403,79 @@ class TestGetGroupWorkspace:
 
         assert response.status_code == 200
 
+    def test_get_group_workspace_with_ro_suffix_normalization(
+        self,
+        client,
+        mock_app_state,
+        mock_authenticated_user,
+        sample_group_info,
+        sample_policy_model,
+    ):
+        """Test group workspace with group name ending in 'ro' - should normalize."""
+        # User passes "testgroupro" but only belongs to "testgroupro" (RO variant)
+        mock_app_state.group_manager.is_user_in_group = AsyncMock(
+            side_effect=[
+                False,  # Not member of normalized "testgroup"
+                True,  # Is member of "testgroupro"
+            ]
+        )
+        mock_app_state.group_manager.get_group_info = AsyncMock(
+            return_value=sample_group_info
+        )
+        mock_app_state.policy_manager.get_group_policy = AsyncMock(
+            return_value=sample_policy_model
+        )
+        mock_app_state.policy_manager.get_accessible_paths_from_policy = MagicMock(
+            return_value=["s3a://test-bucket/tenant-sql-warehouse/testgroup/"]
+        )
+
+        with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
+            with patch(
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
+            ):
+                response = client.get("/workspaces/me/groups/testgroupro")
+
+        assert response.status_code == 200
+        data = response.json()
+        # Response should use normalized name
+        assert data["group_name"] == "testgroup"
+
+    def test_get_group_workspace_ro_group_not_exist(
+        self,
+        client,
+        mock_app_state,
+        mock_authenticated_user,
+        sample_group_info,
+        sample_policy_model,
+    ):
+        """Test group workspace when RO variant doesn't exist - should not fail."""
+        # User is member of main group, RO group doesn't exist
+        mock_app_state.group_manager.is_user_in_group = AsyncMock(
+            side_effect=[
+                True,  # Is member of main group
+                GroupOperationError("Group testgroupro not found"),  # RO doesn't exist
+            ]
+        )
+        mock_app_state.group_manager.get_group_info = AsyncMock(
+            return_value=sample_group_info
+        )
+        mock_app_state.policy_manager.get_group_policy = AsyncMock(
+            return_value=sample_policy_model
+        )
+        mock_app_state.policy_manager.get_accessible_paths_from_policy = MagicMock(
+            return_value=["s3a://test-bucket/tenant-sql-warehouse/testgroup/"]
+        )
+
+        with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
+            with patch(
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
+            ):
+                response = client.get("/workspaces/me/groups/testgroup")
+
+        assert response.status_code == 200
+
 
 # =============================================================================
 # Test /workspaces/me/sql-warehouse-prefix - Get My SQL Warehouse Prefix
@@ -491,6 +565,58 @@ class TestGetGroupSqlWarehousePrefix:
                 )
 
         assert response.status_code == 200
+
+    def test_get_group_sql_warehouse_prefix_with_ro_suffix_normalization(
+        self, client, mock_app_state, mock_authenticated_user
+    ):
+        """Test SQL warehouse prefix with group name ending in 'ro' - should normalize."""
+        # User passes "testgroupro" which should be normalized to "testgroup"
+        mock_app_state.group_manager.is_user_in_group = AsyncMock(
+            side_effect=[
+                False,  # Not member of normalized "testgroup"
+                True,  # Is member of "testgroupro"
+            ]
+        )
+
+        with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
+            with patch(
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
+            ):
+                response = client.get(
+                    "/workspaces/me/groups/testgroupro/sql-warehouse-prefix"
+                )
+
+        assert response.status_code == 200
+        data = response.json()
+        # Response should use normalized name
+        assert data["group_name"] == "testgroup"
+        assert "tenant-sql-warehouse/testgroup" in data["sql_warehouse_prefix"]
+
+    def test_get_group_sql_warehouse_prefix_ro_group_not_exist(
+        self, client, mock_app_state, mock_authenticated_user
+    ):
+        """Test SQL warehouse prefix when RO variant doesn't exist - should not fail."""
+        # User is member of main group, RO group doesn't exist
+        mock_app_state.group_manager.is_user_in_group = AsyncMock(
+            side_effect=[
+                True,  # Is member of main group
+                GroupOperationError("Group testgroupro not found"),  # RO doesn't exist
+            ]
+        )
+
+        with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
+            with patch(
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
+            ):
+                response = client.get(
+                    "/workspaces/me/groups/testgroup/sql-warehouse-prefix"
+                )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["group_name"] == "testgroup"
 
 
 # =============================================================================
@@ -604,6 +730,102 @@ class TestGetNamespacePrefix:
         assert response.status_code == 200
         data = response.json()
         assert data["tenant_namespace_prefix"] == "testgroup_"
+
+    def test_get_namespace_prefix_with_tenant_ro_suffix_normalization(
+        self, client, mock_app_state, mock_authenticated_user, sample_group_info
+    ):
+        """Test namespace prefix with tenant name ending in 'ro' - should normalize."""
+        # User passes tenant="testgroupro" which should be normalized to "testgroup"
+        mock_app_state.group_manager.get_group_info = AsyncMock(
+            return_value=sample_group_info
+        )
+        mock_app_state.group_manager.is_user_in_group = AsyncMock(
+            side_effect=[
+                False,  # Not member of normalized "testgroup"
+                True,  # Is member of "testgroupro"
+            ]
+        )
+
+        with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
+            with patch(
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
+            ):
+                response = client.get(
+                    "/workspaces/me/namespace-prefix?tenant=testgroupro"
+                )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["username"] == "testuser"
+        assert data["user_namespace_prefix"] == "u_testuser__"
+        assert data["tenant"] == "testgroupro"  # Original tenant parameter preserved
+        # But the prefix uses normalized name
+        assert data["tenant_namespace_prefix"] == "testgroup_"
+
+    def test_get_namespace_prefix_tenant_ro_group_not_exist(
+        self, client, mock_app_state, mock_authenticated_user, sample_group_info
+    ):
+        """Test namespace prefix when RO variant doesn't exist - should not fail."""
+        # User is member of main group, RO group doesn't exist
+        mock_app_state.group_manager.get_group_info = AsyncMock(
+            return_value=sample_group_info
+        )
+        mock_app_state.group_manager.is_user_in_group = AsyncMock(
+            side_effect=[
+                True,  # Is member of main group
+                GroupOperationError("Group testgroupro not found"),  # RO doesn't exist
+            ]
+        )
+
+        with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
+            with patch(
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
+            ):
+                response = client.get(
+                    "/workspaces/me/namespace-prefix?tenant=testgroup"
+                )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["tenant_namespace_prefix"] == "testgroup_"
+
+    def test_get_namespace_prefix_double_ro_suffix_prevention(
+        self, client, mock_app_state, mock_authenticated_user, sample_group_info
+    ):
+        """Test that passing 'groupro' doesn't create 'grouproRO' when checking membership."""
+        # This tests the core bug we fixed - ensure normalization prevents double-ro
+        mock_app_state.group_manager.get_group_info = AsyncMock(
+            return_value=sample_group_info
+        )
+
+        # Track what group names were checked
+        checked_groups = []
+        async def track_is_user_in_group(username, group_name):
+            checked_groups.append(group_name)
+            if group_name == "testgroup":
+                return True
+            return False
+
+        mock_app_state.group_manager.is_user_in_group = AsyncMock(
+            side_effect=track_is_user_in_group
+        )
+
+        with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
+            with patch(
+                "src.service.app_state.get_request_user",
+                return_value=mock_authenticated_user,
+            ):
+                response = client.get(
+                    "/workspaces/me/namespace-prefix?tenant=testgroupro"
+                )
+
+        assert response.status_code == 200
+        # Verify we checked "testgroup" and "testgroupro", NOT "testgrouproRO"
+        assert "testgroup" in checked_groups
+        assert "testgroupro" in checked_groups
+        assert "testgrouproRO" not in checked_groups
 
 
 # =============================================================================
