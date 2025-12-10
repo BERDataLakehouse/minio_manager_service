@@ -20,7 +20,7 @@ from ..minio.utils.governance import (
     generate_user_governance_prefix,
 )
 from ..service.dependencies import auth
-from ..service.exceptions import DataGovernanceError
+from ..service.exceptions import DataGovernanceError, GroupOperationError
 from ..service.kb_auth import KBaseUser
 
 logger = logging.getLogger(__name__)
@@ -376,22 +376,34 @@ async def get_namespace_prefix(
 
     tenant_ns_prefix = None
     if tenant:
+        # Normalize tenant name - remove 'ro' suffix if present
+        # This handles cases where get_my_groups() returns both 'group' and 'groupro'
+        base_tenant = tenant[:-2] if tenant.endswith("ro") else tenant
+
         # Check if group exists
-        group_exists = await app_state.group_manager.get_group_info(tenant)
+        group_exists = await app_state.group_manager.get_group_info(base_tenant)
         if not group_exists:
-            raise DataGovernanceError(f"Group {tenant} does not exist")
+            raise DataGovernanceError(f"Group {base_tenant} does not exist")
+
         # Check if user is a member of the group (either read/write or read-only variant)
-        is_member = await app_state.group_manager.is_user_in_group(username, tenant)
-        ro_group_name = f"{tenant}ro"
-        is_ro_member = await app_state.group_manager.is_user_in_group(
-            username, ro_group_name
+        is_member = await app_state.group_manager.is_user_in_group(
+            username, base_tenant
         )
+        ro_group_name = f"{base_tenant}ro"
+        is_ro_member = False
+        try:
+            is_ro_member = await app_state.group_manager.is_user_in_group(
+                username, ro_group_name
+            )
+        except GroupOperationError as e:
+            # Read-only group doesn't exist - this is okay
+            logger.warning(f"Read-only group {ro_group_name} does not exist: {e}")
 
         if not is_member and not is_ro_member:
             raise DataGovernanceError(
-                f"User {username} is not a member of the group {tenant}"
+                f"User {username} is not a member of the group {base_tenant}"
             )
-        tenant_ns_prefix = generate_group_governance_prefix(tenant)
+        tenant_ns_prefix = generate_group_governance_prefix(base_tenant)
 
     return NamespacePrefixResponse(
         username=username,
