@@ -802,6 +802,7 @@ class TestGetNamespacePrefix:
 
         # Track what group names were checked
         checked_groups = []
+
         async def track_is_user_in_group(username, group_name):
             checked_groups.append(group_name)
             if group_name == "testgroup":
