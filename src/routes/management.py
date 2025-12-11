@@ -17,7 +17,7 @@ from ..minio.models.policy import PolicyModel, PolicyTarget
 from ..minio.models.user import UserModel
 from ..minio.utils.validators import validate_group_name
 from ..service.app_state import get_app_state
-from ..service.dependencies import require_admin
+from ..service.dependencies import auth, require_admin
 from ..service.exceptions import (
     DataGovernanceError,
     GroupOperationError,
@@ -124,6 +124,17 @@ class ResourceDeleteResponse(BaseModel):
         str, Field(description="Name of resource deleted", min_length=1)
     ]
     message: Annotated[str, Field(description="Human-readable message")]
+
+
+class GroupNamesResponse(BaseModel):
+    """Response model for listing group names only (for authenticated users)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    group_names: Annotated[
+        list[str], Field(description="List of available group names")
+    ]
+    total_count: Annotated[int, Field(description="Total number of groups", ge=0)]
 
 
 # ===== USER MANAGEMENT ENDPOINTS =====
@@ -316,6 +327,32 @@ async def list_groups(
 
     logger.info(f"Admin {authenticated_user.user} listed {len(groups)} groups")
     return {"groups": groups, "total_count": len(group_names)}
+
+
+@router.get(
+    "/groups/names",
+    response_model=GroupNamesResponse,
+    summary="List available group names",
+    description="Get a list of all available group names in the system. Requires authentication but not admin privileges.",
+)
+async def list_group_names(
+    request: Request,
+    authenticated_user=Depends(auth),
+):
+    """List all group names in the system.
+
+    This endpoint is available to any authenticated user and returns only
+    group names without detailed membership or policy information.
+    """
+    app_state = get_app_state(request)
+
+    group_names = await app_state.group_manager.list_resources()
+
+    logger.info(f"User {authenticated_user.user} listed {len(group_names)} group names")
+    return GroupNamesResponse(
+        group_names=group_names,
+        total_count=len(group_names),
+    )
 
 
 @router.post(

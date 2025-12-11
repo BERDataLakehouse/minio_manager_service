@@ -22,15 +22,17 @@ from src.minio.models.policy import PolicyDocument, PolicyModel, PolicyTarget
 from src.minio.models.user import UserModel
 from src.routes.management import (
     GroupManagementResponse,
+    GroupNamesResponse,
     ResourceDeleteResponse,
     UserListResponse,
     UserManagementResponse,
     create_user,
     delete_policy,
+    list_group_names,
     list_users,
     router,
 )
-from src.service.dependencies import require_admin
+from src.service.dependencies import auth, require_admin
 from src.service.exception_handlers import universal_error_handler
 from src.service.kb_auth import AdminPermission, KBaseUser
 
@@ -355,6 +357,120 @@ class TestListGroupsEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["total_count"] == 0
+
+
+class TestListGroupNamesEndpoint:
+    """Tests for list_group_names endpoint (authenticated users, not admin-only)."""
+
+    @pytest.fixture
+    def mock_regular_user(self):
+        """Create a mock regular (non-admin) user."""
+        return KBaseUser(user="regularuser", admin_perm=AdminPermission.NONE)
+
+    @pytest.fixture
+    def test_app_with_regular_auth(self, mock_app_state, mock_regular_user):
+        """Create a test app with regular user auth override (not admin)."""
+        app = FastAPI()
+        app.include_router(router)
+        app.add_exception_handler(Exception, universal_error_handler)
+
+        # Store app state
+        app.state.minio_client = MagicMock()
+        app.state.minio_config = MagicMock()
+        app.state.policy_manager = mock_app_state.policy_manager
+        app.state.user_manager = mock_app_state.user_manager
+        app.state.group_manager = mock_app_state.group_manager
+        app.state.sharing_manager = MagicMock()
+
+        # Override auth dependency (for regular authenticated user, not admin)
+        app.dependency_overrides[auth] = lambda: mock_regular_user
+        # Also override require_admin for other endpoints to work in the same app
+        app.dependency_overrides[require_admin] = lambda: mock_regular_user
+
+        return app
+
+    @pytest.fixture
+    def client_regular_user(self, test_app_with_regular_auth, mock_app_state):
+        """Create a test client authenticated as regular user."""
+        with patch("src.routes.management.get_app_state", return_value=mock_app_state):
+            yield TestClient(test_app_with_regular_auth, raise_server_exceptions=False)
+
+    def test_list_group_names_success(self, client_regular_user, mock_app_state):
+        """Test listing group names successfully as regular user."""
+        mock_app_state.group_manager.list_resources.return_value = [
+            "group1",
+            "group2",
+            "myteam",
+        ]
+
+        response = client_regular_user.get("/management/groups/names")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "group_names" in data
+        assert "total_count" in data
+        assert data["total_count"] == 3
+        assert data["group_names"] == ["group1", "group2", "myteam"]
+
+    def test_list_group_names_empty(self, client_regular_user, mock_app_state):
+        """Test listing group names when none exist."""
+        mock_app_state.group_manager.list_resources.return_value = []
+
+        response = client_regular_user.get("/management/groups/names")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 0
+        assert data["group_names"] == []
+
+    def test_list_group_names_response_model_validation(
+        self, client_regular_user, mock_app_state
+    ):
+        """Test that response matches GroupNamesResponse model."""
+        mock_app_state.group_manager.list_resources.return_value = ["testgroup"]
+
+        response = client_regular_user.get("/management/groups/names")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Validate response can be parsed as GroupNamesResponse
+        parsed = GroupNamesResponse(**data)
+        assert parsed.group_names == ["testgroup"]
+        assert parsed.total_count == 1
+
+    def test_list_group_names_only_returns_names(
+        self, client_regular_user, mock_app_state
+    ):
+        """Test that only group names are returned, not detailed info."""
+        mock_app_state.group_manager.list_resources.return_value = ["group1"]
+
+        response = client_regular_user.get("/management/groups/names")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should NOT contain sensitive fields from admin endpoint
+        assert "members" not in data
+        assert "groups" not in data  # The detailed groups list
+        assert "policy_name" not in data
+
+        # Should only have group_names and total_count
+        assert set(data.keys()) == {"group_names", "total_count"}
+
+    @pytest.mark.asyncio
+    async def test_list_group_names_async(self, mock_app_state):
+        """Test list_group_names function directly."""
+        mock_request = MagicMock()
+        mock_user = KBaseUser(user="testuser", admin_perm=AdminPermission.NONE)
+
+        mock_app_state.group_manager.list_resources.return_value = ["g1", "g2"]
+
+        with patch("src.routes.management.get_app_state", return_value=mock_app_state):
+            response = await list_group_names(mock_request, mock_user)
+
+            assert response.group_names == ["g1", "g2"]
+            assert response.total_count == 2
 
 
 class TestCreateGroupEndpoint:
