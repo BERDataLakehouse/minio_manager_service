@@ -9,7 +9,7 @@ dependencies = [
     "fastapi==0.116.2",
     "uvicorn==0.35.0",
     "httpx==0.28.1",
-    "python-dotenv==1.1.1",
+    "python-dotenv==1.2.1",
     "pydantic==2.11.9",
     "aiohttp==3.12.15",
     "cacheout==0.16.0",
