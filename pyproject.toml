@@ -14,7 +14,7 @@ dependencies = [
     "aiohttp==3.12.15",
     "cacheout==0.16.0",
     "aiobotocore==2.24.2",
-    "redis==6.4.0",
+    "redis==7.2.1",
     "ruff==0.14.4",
 ]
 
