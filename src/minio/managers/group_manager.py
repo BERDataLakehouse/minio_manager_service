@@ -530,7 +530,7 @@ class GroupManager(ResourceManager[GroupModel]):
         # Create directory markers
         for path in group_paths:
             # Create directory marker
-            marker_key = f"{path}.keep"
+            marker_key = f"{path}.s3keep"
             await self.client.put_object(
                 bucket_name, marker_key, b"Group directory marker"
             )

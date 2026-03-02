@@ -452,7 +452,7 @@ class UserManager(ResourceManager[UserModel]):
         # Create directory markers
         for path in home_paths:
             # Create directory marker
-            marker_key = f"{path}.keep"
+            marker_key = f"{path}.s3keep"
             await self.client.put_object(
                 bucket_name, marker_key, b"User directory marker"
             )
@@ -489,7 +489,7 @@ Happy data science!
             # Create directory markers for each prefix
             for prefix in prefixes:
                 # Create directory marker
-                marker_key = f"{prefix}/.keep"
+                marker_key = f"{prefix}/.s3keep"
                 await self.client.put_object(
                     bucket_name, marker_key, b"User system directory marker"
                 )
