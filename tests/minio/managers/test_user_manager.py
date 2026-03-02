@@ -800,8 +800,8 @@ class TestPrivateHelperMethods:
 
     def test_generate_secure_password_custom_length(self, user_manager):
         """Test secure password generation with custom length."""
-        password = user_manager._generate_secure_password(length=16)
-        assert len(password) == 16
+        password = user_manager._generate_secure_password(length=8)
+        assert len(password) == 8
 
     def test_is_path_in_user_home_general(self, user_manager):
         """Test path detection in general warehouse."""
