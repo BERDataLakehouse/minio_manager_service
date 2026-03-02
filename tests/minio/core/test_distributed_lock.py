@@ -458,8 +458,8 @@ class TestIntegrationScenarios:
         mock_lock = mock_redis_client.lock.return_value
         workflow_steps = []
 
-        mock_lock.acquire.side_effect = (
-            lambda **kwargs: workflow_steps.append("acquire") or True
+        mock_lock.acquire.side_effect = lambda **kwargs: (
+            workflow_steps.append("acquire") or True
         )
         mock_lock.release.side_effect = lambda: workflow_steps.append("release")
 
