@@ -201,8 +201,14 @@ class PathAccessResponse(PathAccessInfo):
 @router.post(
     "/share",
     response_model=ShareResponse,
-    summary="Share data path",
-    description="Share an S3 path with specified users and/or groups. Only path owners can share their data.",
+    summary="Share data path (DEPRECATED)",
+    description=(
+        "**DEPRECATED**: Direct path sharing is no longer recommended. "
+        "Please create a Tenant Workspace and request access to the tenant "
+        "for sharing/unsharing activities.\n\n"
+        "Share an S3 path with specified users and/or groups. Only path owners can share their data."
+    ),
+    deprecated=True,
     responses={
         200: {"description": "All sharing operations succeeded"},
         207: {"description": "Partial success - some sharing operations failed"},
@@ -266,8 +272,14 @@ async def share_data(
 @router.post(
     "/unshare",
     response_model=UnshareResponse,
-    summary="Remove data sharing",
-    description="Remove sharing permissions for an S3 path from specified users and/or groups.",
+    summary="Remove data sharing (DEPRECATED)",
+    description=(
+        "**DEPRECATED**: Direct path sharing is no longer recommended. "
+        "Please create a Tenant Workspace and request access to the tenant "
+        "for sharing/unsharing activities.\n\n"
+        "Remove sharing permissions for an S3 path from specified users and/or groups."
+    ),
+    deprecated=True,
     responses={
         200: {"description": "All unsharing operations succeeded"},
         207: {"description": "Partial success - some unsharing operations failed"},
@@ -328,8 +340,14 @@ async def unshare_data(
 @router.post(
     "/make-public",
     response_model=PublicAccessResponse,
-    summary="Make path publicly accessible",
-    description="Make an S3 path publicly accessible by sharing it with all users via the global user group.",
+    summary="Make path publicly accessible (DEPRECATED)",
+    description=(
+        "**DEPRECATED**: Direct public path sharing is no longer recommended. "
+        "Please create a namespace under the `globalusers` tenant "
+        "for sharing/unsharing activities.\n\n"
+        "Make an S3 path publicly accessible by sharing it with all users via the global user group."
+    ),
+    deprecated=True,
 )
 async def make_path_public(
     request_data: Annotated[
@@ -365,8 +383,14 @@ async def make_path_public(
 @router.post(
     "/make-private",
     response_model=PublicAccessResponse,
-    summary="Make path completely private",
-    description="Remove a path from ALL policies that have access, making it completely private. Only the owner retains access.",
+    summary="Make path completely private (DEPRECATED)",
+    description=(
+        "**DEPRECATED**: Direct public path sharing is no longer recommended. "
+        "Please remove the namespace under the `globalusers` tenant "
+        "to revoke public access.\n\n"
+        "Remove a path from ALL policies that have access, making it completely private. Only the owner retains access."
+    ),
+    deprecated=True,
 )
 async def make_path_private(
     request_data: Annotated[
