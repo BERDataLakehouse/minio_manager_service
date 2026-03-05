@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Any, Dict, List, Optional
 import aiohttp
@@ -57,12 +58,14 @@ class PolarisService:
             self._token = result["access_token"]
             return str(self._token)
 
-    async def _request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
+    async def _request(
+        self, method: str, endpoint: str, **kwargs: Any
+    ) -> Dict[str, Any]:
         """Make an authenticated request to Polaris management API."""
         async with aiohttp.ClientSession() as session:
             token = await self._get_token(session)
 
-            headers = kwargs.pop("headers", {})
+            headers: dict[str, str] = kwargs.pop("headers", {})
             headers["Authorization"] = f"Bearer {token}"
             headers["Polaris-Realm"] = "POLARIS"
             headers["Accept"] = "application/json"
@@ -73,7 +76,31 @@ class PolarisService:
                 async with session.request(
                     method, url, headers=headers, **kwargs
                 ) as resp:
-                    resp.raise_for_status()
+                    if resp.status >= 400:
+                        body_text = await resp.text()
+                        error_message: str = resp.reason or "Unknown Error"
+                        if body_text:
+                            # Try to extract the inner error message from Polaris JSON
+                            try:
+                                error_json = json.loads(body_text)
+                                if (
+                                    "error" in error_json
+                                    and "message" in error_json["error"]
+                                ):
+                                    error_message = str(error_json["error"]["message"])
+                                else:
+                                    error_message = body_text
+                            except (json.JSONDecodeError, TypeError):
+                                error_message = body_text
+
+                        raise aiohttp.ClientResponseError(
+                            resp.request_info,
+                            resp.history,
+                            status=resp.status,
+                            message=error_message,
+                            headers=resp.headers,
+                        )
+
                     # Some endpoints return 201/204 with no JSON body
                     if resp.status == 204:
                         return {}
