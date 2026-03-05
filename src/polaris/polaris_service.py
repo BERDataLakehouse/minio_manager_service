@@ -217,9 +217,11 @@ class PolarisService:
                 json=payload,
             )
         except aiohttp.ClientResponseError as e:
-            if e.status == 409:
+            if e.status == 409 or (
+                e.status == 500 and "already exists" in str(e.message)
+            ):
                 logger.warning(
-                    "Conflict (409) while granting catalog privilege '%s' on catalog "
+                    "Conflict while granting catalog privilege '%s' on catalog "
                     "'%s' to role '%s'; assuming privilege is already granted.",
                     privilege,
                     catalog,
