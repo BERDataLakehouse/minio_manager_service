@@ -100,7 +100,7 @@ class PolarisService:
 
         Args:
             name: Catalog name (e.g., "user_tgu2", "tenant_globalusers")
-            storage_location: S3 base path (e.g., "s3://cdm-lake/users-general-warehouse/tgu2/iceberg/")
+            storage_location: S3 base path (e.g., "s3a://cdm-lake/users-general-warehouse/tgu2/iceberg/")
             s3_endpoint: S3/MinIO endpoint URL. When provided, storageConfigInfo includes
                 endpoint, pathStyleAccess, and stsUnavailable fields required for MinIO.
                 Falls back to self.minio_endpoint if not provided.
@@ -209,9 +209,6 @@ class PolarisService:
         self, catalog: str, role_name: str, privilege: str = "CATALOG_MANAGE_CONTENT"
     ) -> Dict[str, Any]:
         """Grant a privilege on the catalog to a catalog role."""
-        payload = {"privilege": privilege}
-        # To grant on the catalog itself, the endpoint is /catalogs/{catalog_name}/catalog-roles/{catalog_role_name}/grants
-        # with a specific GrantResource payload
         payload = {"grant": {"type": "catalog", "privilege": privilege}}
         try:
             return await self._request(
@@ -219,11 +216,24 @@ class PolarisService:
                 f"/catalogs/{catalog}/catalog-roles/{role_name}/grants",
                 json=payload,
             )
-        except aiohttp.ClientResponseError:
-            # Grants endpoint design in Polaris might use a different payload structure,
-            # let's try the other form if this fails or just ignore if it's already granted
-            pass
-        return {}
+        except aiohttp.ClientResponseError as e:
+            if e.status == 409:
+                logger.warning(
+                    "Conflict (409) while granting catalog privilege '%s' on catalog "
+                    "'%s' to role '%s'; assuming privilege is already granted.",
+                    privilege,
+                    catalog,
+                    role_name,
+                )
+                return {}
+            logger.warning(
+                "Failed to grant catalog privilege '%s' on catalog '%s' to role '%s': %s",
+                privilege,
+                catalog,
+                role_name,
+                e,
+            )
+            raise
 
     async def create_principal_role(self, role_name: str) -> Dict[str, Any]:
         """Create a principal role."""

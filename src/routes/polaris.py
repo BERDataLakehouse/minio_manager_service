@@ -61,7 +61,7 @@ async def provision_polaris_user(
         # The /iceberg/ path has its own IAM statement separate from the u_{username}__*
         # governed path, added by policy_creator._create_default_user_home_policy().
         user_config = app_state_obj.user_manager.config
-        storage_location = f"s3://{user_config.default_bucket}/{user_config.users_sql_warehouse_prefix}/{username}/iceberg/"
+        storage_location = f"s3a://{user_config.default_bucket}/{user_config.users_sql_warehouse_prefix}/{username}/iceberg/"
 
         # All steps are idempotent — create_* methods return existing entities on 409,
         # and grant_* calls are wrapped in try/except to handle "already granted" (500).

@@ -477,19 +477,37 @@ class TestCatalogRoles:
             )
 
     @pytest.mark.asyncio
-    async def test_grant_catalog_privilege_error_returns_empty(self, polaris_service):
-        """Test grant failure silently returns empty dict."""
+    async def test_grant_catalog_privilege_conflict_returns_empty(
+        self, polaris_service
+    ):
+        """Test 409 conflict returns empty dict (already granted)."""
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
             mock_req.side_effect = aiohttp.ClientResponseError(
-                request_info=MagicMock(), history=(), status=400, message="Bad Request"
+                request_info=MagicMock(), history=(), status=409, message="Conflict"
             )
 
             result = await polaris_service.grant_catalog_privilege(
                 "cat", "role", "SOME_PRIV"
             )
             assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_grant_catalog_privilege_non_conflict_raises(self, polaris_service):
+        """Test non-409 errors are re-raised."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = aiohttp.ClientResponseError(
+                request_info=MagicMock(), history=(), status=500, message="Server Error"
+            )
+
+            with pytest.raises(aiohttp.ClientResponseError) as exc_info:
+                await polaris_service.grant_catalog_privilege(
+                    "cat", "role", "SOME_PRIV"
+                )
+            assert exc_info.value.status == 500
 
 
 # === PRINCIPAL ROLE TESTS ===
@@ -696,3 +714,153 @@ class TestDeletions:
             assert mock_del_role.call_count == 2
             mock_del_role.assert_any_call("globalusers_member")
             mock_del_role.assert_any_call("globalusersro_member")
+
+
+# === ENSURE TENANT CATALOG TESTS ===
+
+
+class TestEnsureTenantCatalog:
+    """Tests for the ensure_tenant_catalog orchestration method."""
+
+    @pytest.mark.asyncio
+    async def test_ensure_tenant_catalog_creates_all_resources(self, polaris_service):
+        """Test that ensure_tenant_catalog creates catalog, roles, grants, and principal roles."""
+        with (
+            patch.object(
+                polaris_service, "create_catalog", new_callable=AsyncMock
+            ) as mock_create_cat,
+            patch.object(
+                polaris_service, "create_catalog_role", new_callable=AsyncMock
+            ) as mock_create_cat_role,
+            patch.object(
+                polaris_service, "grant_catalog_privilege", new_callable=AsyncMock
+            ) as mock_grant_priv,
+            patch.object(
+                polaris_service, "create_principal_role", new_callable=AsyncMock
+            ) as mock_create_pr_role,
+            patch.object(
+                polaris_service,
+                "grant_catalog_role_to_principal_role",
+                new_callable=AsyncMock,
+            ) as mock_grant_cr_to_pr,
+        ):
+            await polaris_service.ensure_tenant_catalog(
+                "globalusers",
+                "s3a://cdm-lake/tenants-sql-warehouse/globalusers/iceberg/",
+            )
+
+            # Catalog created
+            mock_create_cat.assert_called_once_with(
+                "tenant_globalusers",
+                "s3a://cdm-lake/tenants-sql-warehouse/globalusers/iceberg/",
+            )
+
+            # Writer + reader catalog roles created
+            assert mock_create_cat_role.call_count == 2
+            mock_create_cat_role.assert_any_call(
+                "tenant_globalusers", "globalusers_writer"
+            )
+            mock_create_cat_role.assert_any_call(
+                "tenant_globalusers", "globalusers_reader"
+            )
+
+            # Writer gets CATALOG_MANAGE_CONTENT, reader gets 3 read privileges
+            assert mock_grant_priv.call_count == 4
+            mock_grant_priv.assert_any_call(
+                "tenant_globalusers", "globalusers_writer", "CATALOG_MANAGE_CONTENT"
+            )
+            mock_grant_priv.assert_any_call(
+                "tenant_globalusers", "globalusers_reader", "TABLE_READ_DATA"
+            )
+            mock_grant_priv.assert_any_call(
+                "tenant_globalusers", "globalusers_reader", "TABLE_LIST"
+            )
+            mock_grant_priv.assert_any_call(
+                "tenant_globalusers", "globalusers_reader", "NAMESPACE_LIST"
+            )
+
+            # Writer + reader principal roles created
+            assert mock_create_pr_role.call_count == 2
+            mock_create_pr_role.assert_any_call("globalusers_member")
+            mock_create_pr_role.assert_any_call("globalusersro_member")
+
+            # Catalog roles wired to principal roles
+            assert mock_grant_cr_to_pr.call_count == 2
+            mock_grant_cr_to_pr.assert_any_call(
+                "tenant_globalusers", "globalusers_writer", "globalusers_member"
+            )
+            mock_grant_cr_to_pr.assert_any_call(
+                "tenant_globalusers", "globalusers_reader", "globalusersro_member"
+            )
+
+    @pytest.mark.asyncio
+    async def test_ensure_tenant_catalog_naming_conventions(self, polaris_service):
+        """Test that ensure_tenant_catalog uses correct naming conventions."""
+        with (
+            patch.object(
+                polaris_service, "create_catalog", new_callable=AsyncMock
+            ) as mock_create_cat,
+            patch.object(
+                polaris_service, "create_catalog_role", new_callable=AsyncMock
+            ),
+            patch.object(
+                polaris_service, "grant_catalog_privilege", new_callable=AsyncMock
+            ),
+            patch.object(
+                polaris_service, "create_principal_role", new_callable=AsyncMock
+            ) as mock_create_pr_role,
+            patch.object(
+                polaris_service,
+                "grant_catalog_role_to_principal_role",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await polaris_service.ensure_tenant_catalog(
+                "myteam", "s3a://bucket/tenants/myteam/iceberg/"
+            )
+
+            # Catalog name is tenant_{group}
+            mock_create_cat.assert_called_once_with(
+                "tenant_myteam", "s3a://bucket/tenants/myteam/iceberg/"
+            )
+
+            # Principal roles: {group}_member and {group}ro_member
+            mock_create_pr_role.assert_any_call("myteam_member")
+            mock_create_pr_role.assert_any_call("myteamro_member")
+
+    @pytest.mark.asyncio
+    async def test_ensure_tenant_catalog_reader_privilege_errors_ignored(
+        self, polaris_service
+    ):
+        """Test that errors granting reader privileges are silently ignored."""
+        with (
+            patch.object(polaris_service, "create_catalog", new_callable=AsyncMock),
+            patch.object(
+                polaris_service, "create_catalog_role", new_callable=AsyncMock
+            ),
+            patch.object(
+                polaris_service, "grant_catalog_privilege", new_callable=AsyncMock
+            ) as mock_grant,
+            patch.object(
+                polaris_service, "create_principal_role", new_callable=AsyncMock
+            ),
+            patch.object(
+                polaris_service,
+                "grant_catalog_role_to_principal_role",
+                new_callable=AsyncMock,
+            ),
+        ):
+            # Writer grant succeeds, all reader grants raise
+            mock_grant.side_effect = [
+                {},  # writer CATALOG_MANAGE_CONTENT succeeds
+                Exception("unsupported privilege"),  # TABLE_READ_DATA
+                Exception("unsupported privilege"),  # TABLE_LIST
+                Exception("unsupported privilege"),  # NAMESPACE_LIST
+            ]
+
+            # Should not raise despite reader grant failures
+            await polaris_service.ensure_tenant_catalog(
+                "testgroup", "s3a://bucket/path/"
+            )
+
+            assert mock_grant.call_count == 4

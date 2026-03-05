@@ -392,7 +392,7 @@ async def create_group(
     if app_state.polaris_service:
         try:
             group_config = app_state.group_manager.config
-            storage_location = f"s3://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{group_name}/iceberg/"
+            storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{group_name}/iceberg/"
 
             await app_state.polaris_service.ensure_tenant_catalog(
                 group_name, storage_location

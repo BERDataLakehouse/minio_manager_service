@@ -139,9 +139,13 @@ class UserManager(ResourceManager[UserModel]):
 
         if self.polaris_service:
             try:
-                await self.polaris_service.drop_tenant_catalog(name)
+                await self.polaris_service.delete_catalog(f"user_{name}")
+                await self.polaris_service.delete_principal(name)
+                await self.polaris_service.delete_principal_role(f"{name}_role")
             except Exception as e:
-                logger.warning(f"Failed to drop Polaris tenant catalog for {name}: {e}")
+                logger.warning(
+                    f"Failed to clean up Polaris resources for user {name}: {e}"
+                )
 
     # CORE USER OPERATIONS
 
