@@ -97,13 +97,13 @@ def _create_test_app(mock_state, authenticated_user):
 
 
 class TestProvisionPolarisUser:
-    """Tests for POST /v1/polaris/user_provision/{username}."""
+    """Tests for POST /polaris/user_provision/{username}."""
 
     def test_provision_own_catalog_success(self, mock_app_state_obj, regular_user):
         """Test user can provision their own catalog."""
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
-        response = client.post("/v1/polaris/user_provision/testuser")
+        response = client.post("/polaris/user_provision/testuser")
 
         assert response.status_code == 200
         data = response.json()
@@ -118,7 +118,7 @@ class TestProvisionPolarisUser:
         """Test catalog is created with correct SQL warehouse + iceberg path."""
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
-        client.post("/v1/polaris/user_provision/testuser")
+        client.post("/polaris/user_provision/testuser")
 
         mock_app_state_obj.polaris_service.create_catalog.assert_called_once_with(
             name="user_testuser",
@@ -133,7 +133,7 @@ class TestProvisionPolarisUser:
         polaris = mock_app_state_obj.polaris_service
 
         client = TestClient(app, raise_server_exceptions=False)
-        client.post("/v1/polaris/user_provision/testuser")
+        client.post("/polaris/user_provision/testuser")
 
         # Verify all 8 steps executed
         polaris.create_catalog.assert_called_once()
@@ -163,7 +163,7 @@ class TestProvisionPolarisUser:
         """Test non-admin user cannot provision another user's catalog."""
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
-        response = client.post("/v1/polaris/user_provision/otheruser")
+        response = client.post("/polaris/user_provision/otheruser")
 
         assert response.status_code == 403
 
@@ -171,7 +171,7 @@ class TestProvisionPolarisUser:
         """Test admin can provision any user's catalog."""
         app = _create_test_app(mock_app_state_obj, admin_user)
         client = TestClient(app, raise_server_exceptions=False)
-        response = client.post("/v1/polaris/user_provision/otheruser")
+        response = client.post("/polaris/user_provision/otheruser")
 
         assert response.status_code == 200
         assert response.json()["personal_catalog"] == "user_otheruser"
@@ -183,7 +183,7 @@ class TestProvisionPolarisUser:
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
-        response = client.post("/v1/polaris/user_provision/testuser")
+        response = client.post("/polaris/user_provision/testuser")
 
         assert response.status_code == 500
         assert "Failed to provision Polaris catalog" in response.json()["detail"]
@@ -197,7 +197,7 @@ class TestProvisionPolarisUser:
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
-        response = client.post("/v1/polaris/user_provision/testuser")
+        response = client.post("/polaris/user_provision/testuser")
 
         data = response.json()
         assert "tenant_teamA" in data["tenant_catalogs"]
@@ -213,7 +213,7 @@ class TestProvisionPolarisUser:
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
-        response = client.post("/v1/polaris/user_provision/testuser")
+        response = client.post("/polaris/user_provision/testuser")
 
         assert response.status_code == 200
 
@@ -234,7 +234,7 @@ class TestProvisionPolarisUser:
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
-        response = client.post("/v1/polaris/user_provision/testuser")
+        response = client.post("/polaris/user_provision/testuser")
 
         data = response.json()
         assert "tenant_globalusers" in data["tenant_catalogs"]
@@ -248,7 +248,7 @@ class TestProvisionPolarisUser:
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
-        response = client.post("/v1/polaris/user_provision/testuser")
+        response = client.post("/polaris/user_provision/testuser")
 
         data = response.json()
         assert "tenant_globalusers" in data["tenant_catalogs"]
@@ -262,7 +262,7 @@ class TestProvisionPolarisUser:
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
-        response = client.post("/v1/polaris/user_provision/testuser")
+        response = client.post("/polaris/user_provision/testuser")
 
         data = response.json()
         assert data["tenant_catalogs"].count("tenant_globalusers") == 1

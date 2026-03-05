@@ -9,10 +9,10 @@ from ..service.kb_auth import AdminPermission
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1")
+router = APIRouter(prefix="/polaris")
 
 
-@router.post("/polaris/user_provision/{username}", response_model=Dict[str, Any])
+@router.post("/user_provision/{username}", response_model=Dict[str, Any])
 async def provision_polaris_user(
     username: str,
     app_state_obj: app_state.AppState = Depends(app_state.get_app_state),

@@ -866,6 +866,21 @@ class TestPolarisIntegration:
             "user2", "group1_member"
         )
 
+    def test_add_ro_member_uses_base_group_for_catalog_and_reader_role(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test add_group_member for *ro groups maps to base tenant catalog and reader role."""
+        response = polaris_client.post("/management/groups/group1ro/members/user2")
+
+        assert response.status_code == 200
+        polaris_app_state.polaris_service.ensure_tenant_catalog.assert_called_once_with(
+            "group1",
+            "s3a://cdm-lake/tenant-sql-warehouse/group1/iceberg/",
+        )
+        polaris_app_state.polaris_service.grant_principal_role_to_principal.assert_called_once_with(
+            "user2", "group1ro_member"
+        )
+
     def test_remove_member_revokes_principal_role(
         self, polaris_client, polaris_app_state
     ):
@@ -875,6 +890,17 @@ class TestPolarisIntegration:
         assert response.status_code == 200
         polaris_app_state.polaris_service.revoke_principal_role_from_principal.assert_called_once_with(
             "user1", "group1_member"
+        )
+
+    def test_remove_ro_member_revokes_reader_role(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test remove_group_member for *ro groups revokes reader role."""
+        response = polaris_client.delete("/management/groups/group1ro/members/user1")
+
+        assert response.status_code == 200
+        polaris_app_state.polaris_service.revoke_principal_role_from_principal.assert_called_once_with(
+            "user1", "group1ro_member"
         )
 
     def test_polaris_error_propagates_on_create_group(

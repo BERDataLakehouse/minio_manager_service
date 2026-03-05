@@ -390,12 +390,7 @@ class PolarisService:
         reader_role_name = f"{group_name}_reader"
         await self.create_catalog_role(tenant_name, reader_role_name)
         for privilege in ["TABLE_READ_DATA", "TABLE_LIST", "NAMESPACE_LIST"]:
-            try:
-                await self.grant_catalog_privilege(
-                    tenant_name, reader_role_name, privilege
-                )
-            except Exception:
-                pass  # Some privileges may not apply at catalog level in all Polaris versions
+            await self.grant_catalog_privilege(tenant_name, reader_role_name, privilege)
 
         reader_principal_role = f"{group_name}ro_member"
         await self.create_principal_role(reader_principal_role)

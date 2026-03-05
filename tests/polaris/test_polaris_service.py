@@ -943,10 +943,10 @@ class TestEnsureTenantCatalog:
             mock_create_pr_role.assert_any_call("myteamro_member")
 
     @pytest.mark.asyncio
-    async def test_ensure_tenant_catalog_reader_privilege_errors_ignored(
+    async def test_ensure_tenant_catalog_reader_privilege_errors_propagate(
         self, polaris_service
     ):
-        """Test that errors granting reader privileges are silently ignored."""
+        """Test that reader privilege grant errors are surfaced."""
         with (
             patch.object(polaris_service, "create_catalog", new_callable=AsyncMock),
             patch.object(
@@ -972,9 +972,10 @@ class TestEnsureTenantCatalog:
                 Exception("unsupported privilege"),  # NAMESPACE_LIST
             ]
 
-            # Should not raise despite reader grant failures
-            await polaris_service.ensure_tenant_catalog(
-                "testgroup", "s3a://bucket/path/"
-            )
+            with pytest.raises(Exception, match="unsupported privilege"):
+                await polaris_service.ensure_tenant_catalog(
+                    "testgroup", "s3a://bucket/path/"
+                )
 
-            assert mock_grant.call_count == 4
+            # Stops at first failing reader privilege grant
+            assert mock_grant.call_count == 2
