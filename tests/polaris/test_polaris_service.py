@@ -495,12 +495,15 @@ class TestCatalogRoles:
 
     @pytest.mark.asyncio
     async def test_grant_catalog_privilege_non_conflict_raises(self, polaris_service):
-        """Test non-409 errors are re-raised."""
+        """Test non-conflict 500 errors are re-raised."""
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
             mock_req.side_effect = aiohttp.ClientResponseError(
-                request_info=MagicMock(), history=(), status=500, message="Server Error"
+                request_info=MagicMock(),
+                history=(),
+                status=500,
+                message="Unexpected server failure",
             )
 
             with pytest.raises(aiohttp.ClientResponseError) as exc_info:
@@ -508,6 +511,26 @@ class TestCatalogRoles:
                     "cat", "role", "SOME_PRIV"
                 )
             assert exc_info.value.status == 500
+
+    @pytest.mark.asyncio
+    async def test_grant_catalog_privilege_duplicate_key_returns_empty(
+        self, polaris_service
+    ):
+        """Test 500 with 'already exists' (Polaris duplicate key bug) returns empty dict."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = aiohttp.ClientResponseError(
+                request_info=MagicMock(),
+                history=(),
+                status=500,
+                message="duplicate key value violates unique constraint already exists",
+            )
+
+            result = await polaris_service.grant_catalog_privilege(
+                "cat", "role", "SOME_PRIV"
+            )
+            assert result == {}
 
 
 # === PRINCIPAL ROLE TESTS ===
