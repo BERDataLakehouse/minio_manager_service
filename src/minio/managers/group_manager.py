@@ -222,7 +222,10 @@ class GroupManager(ResourceManager[GroupModel]):
         except Exception as e:
             self.logger.warning(f"Failed to delete group shared directory: {e}")
 
-        await self.polaris_service.drop_tenant_catalog(name)
+        try:
+            await self.polaris_service.drop_tenant_catalog(name)
+        except Exception as e:
+            self.logger.warning(f"Failed to drop tenant catalog: {e}")
 
     # === Group-Specific Operations ===
 
