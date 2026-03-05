@@ -121,6 +121,7 @@ def mock_app_state():
 
     # Mock Polaris Service
     app_state.polaris_service = AsyncMock()
+    app_state.polaris_service.create_principal = AsyncMock(return_value={})
     app_state.polaris_service.grant_principal_role_to_principal = AsyncMock()
     app_state.polaris_service.revoke_principal_role_from_principal = AsyncMock()
     app_state.polaris_service.ensure_tenant_catalog = AsyncMock()
@@ -815,6 +816,17 @@ class TestPolarisIntegration:
             "s3a://cdm-lake/tenant-sql-warehouse/newgroup/iceberg/",
         )
 
+    def test_create_group_ensures_creator_principal(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test create_group ensures the creator has a Polaris principal."""
+        response = polaris_client.post("/management/groups/newgroup")
+
+        assert response.status_code == 201
+        polaris_app_state.polaris_service.create_principal.assert_called_once_with(
+            name="admin"
+        )
+
     def test_create_group_grants_writer_role_to_creator(
         self, polaris_client, polaris_app_state
     ):
@@ -824,6 +836,17 @@ class TestPolarisIntegration:
         assert response.status_code == 201
         polaris_app_state.polaris_service.grant_principal_role_to_principal.assert_called_once_with(
             "admin", "newgroup_member"
+        )
+
+    def test_add_member_ensures_user_principal(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test add_group_member ensures the user has a Polaris principal."""
+        response = polaris_client.post("/management/groups/group1/members/user2")
+
+        assert response.status_code == 200
+        polaris_app_state.polaris_service.create_principal.assert_called_once_with(
+            name="user2"
         )
 
     def test_add_member_grants_principal_role(self, polaris_client, polaris_app_state):

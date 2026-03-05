@@ -396,6 +396,9 @@ async def create_group(
         group_name, storage_location
     )
 
+    # Ensure the creator has a Polaris principal (idempotent — handles pre-Polaris users)
+    await app_state.polaris_service.create_principal(name=authenticated_user.user)
+
     # The creator should be automatically granted the writer role
     writer_principal_role = f"{group_name}_member"
     await app_state.polaris_service.grant_principal_role_to_principal(
@@ -436,6 +439,9 @@ async def add_group_member(
     app_state = get_app_state(request)
 
     await app_state.group_manager.add_user_to_group(username, group_name)
+
+    # Ensure the user has a Polaris principal (idempotent — handles pre-Polaris users)
+    await app_state.polaris_service.create_principal(name=username)
 
     # Grant the user's principal the tenant's principal role
     principal_role_name = f"{group_name}_member"

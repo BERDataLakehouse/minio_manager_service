@@ -50,9 +50,6 @@ async def provision_polaris_user(
             detail="You can only provision your own Polaris catalog",
         )
 
-    if not app_state_obj.polaris_service:
-        raise HTTPException(status_code=501, detail="Polaris service is not configured")
-
     polaris = app_state_obj.polaris_service
 
     try:
@@ -90,27 +87,17 @@ async def provision_polaris_user(
         principal_role = f"{username}_role"
         await polaris.create_principal_role(role_name=principal_role)
 
-        # 6. Assign the catalog role to the principal role (ignore if already assigned)
-        try:
-            await polaris.grant_catalog_role_to_principal_role(
-                catalog=catalog_name,
-                catalog_role=catalog_role,
-                principal_role=principal_role,
-            )
-        except Exception:
-            logger.debug(
-                f"Catalog role {catalog_role} already assigned to {principal_role}"
-            )
+        # 6. Assign the catalog role to the principal role
+        await polaris.grant_catalog_role_to_principal_role(
+            catalog=catalog_name,
+            catalog_role=catalog_role,
+            principal_role=principal_role,
+        )
 
-        # 7. Assign the principal role to the principal (ignore if already assigned)
-        try:
-            await polaris.grant_principal_role_to_principal(
-                principal=username, principal_role=principal_role
-            )
-        except Exception:
-            logger.debug(
-                f"Principal role {principal_role} already assigned to {username}"
-            )
+        # 7. Assign the principal role to the principal
+        await polaris.grant_principal_role_to_principal(
+            principal=username, principal_role=principal_role
+        )
 
         # 8. Fetch credentials (client_id, client_secret)
         # Because we cannot securely store client_secret inside Minio Manager without complexity,
@@ -137,36 +124,22 @@ async def provision_polaris_user(
 
             # Ensure the tenant catalog and roles exist (idempotent).
             # This handles groups that were created before Polaris was integrated.
-            try:
-                storage = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{base_group}/iceberg/"
-                await polaris.ensure_tenant_catalog(base_group, storage)
-            except Exception as e:
-                logger.warning(f"Failed to ensure tenant catalog for {base_group}: {e}")
+            storage = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{base_group}/iceberg/"
+            await polaris.ensure_tenant_catalog(base_group, storage)
 
             # Grant read-only principal role for this group
-            try:
-                await polaris.grant_principal_role_to_principal(
-                    username, f"{base_group}ro_member"
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to grant {base_group}ro_member to {username}: {e}"
-                )
+            await polaris.grant_principal_role_to_principal(
+                username, f"{base_group}ro_member"
+            )
         else:
             tenant_catalogs.append(f"tenant_{g}")
 
             # Ensure the tenant catalog and roles exist (idempotent).
-            try:
-                storage = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{g}/iceberg/"
-                await polaris.ensure_tenant_catalog(g, storage)
-            except Exception as e:
-                logger.warning(f"Failed to ensure tenant catalog for {g}: {e}")
+            storage = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{g}/iceberg/"
+            await polaris.ensure_tenant_catalog(g, storage)
 
             # Grant read-write principal role for this group
-            try:
-                await polaris.grant_principal_role_to_principal(username, f"{g}_member")
-            except Exception as e:
-                logger.warning(f"Failed to grant {g}_member to {username}: {e}")
+            await polaris.grant_principal_role_to_principal(username, f"{g}_member")
 
     # Remove duplicates but preserve order
     tenant_catalogs = list(dict.fromkeys(tenant_catalogs))

@@ -176,17 +176,6 @@ class TestProvisionPolarisUser:
         assert response.status_code == 200
         assert response.json()["personal_catalog"] == "user_otheruser"
 
-    def test_provision_catalog_polaris_not_configured(
-        self, mock_app_state_obj, regular_user
-    ):
-        """Test 501 when Polaris service is not configured."""
-        mock_app_state_obj.polaris_service = None
-        app = _create_test_app(mock_app_state_obj, regular_user)
-        client = TestClient(app, raise_server_exceptions=False)
-        response = client.post("/v1/polaris/user_provision/testuser")
-
-        assert response.status_code == 501
-
     def test_provision_catalog_polaris_error(self, mock_app_state_obj, regular_user):
         """Test 500 when Polaris operations fail."""
         mock_app_state_obj.polaris_service.create_catalog.side_effect = Exception(
