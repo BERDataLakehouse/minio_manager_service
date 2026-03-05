@@ -234,6 +234,8 @@ class TestDestroyAppState:
         mock_lock.close = AsyncMock()
         mock_client = MagicMock()
         mock_client.close_session = AsyncMock()
+        mock_polaris = MagicMock()
+        mock_polaris.close = AsyncMock()
 
         app.state._minio_manager_state = AppState(
             auth=MagicMock(),
@@ -243,13 +245,14 @@ class TestDestroyAppState:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             lock_manager=mock_lock,
-            polaris_service=MagicMock(),
+            polaris_service=mock_polaris,
         )
 
         await destroy_app_state(app)
 
         mock_lock.close.assert_called_once()
         mock_client.close_session.assert_called_once()
+        mock_polaris.close.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_destroy_app_state_handles_missing_state(self):
@@ -266,6 +269,8 @@ class TestDestroyAppState:
         mock_lock.close = AsyncMock(side_effect=Exception("Redis error"))
         mock_client = MagicMock()
         mock_client.close_session = AsyncMock(side_effect=Exception("MinIO error"))
+        mock_polaris = MagicMock()
+        mock_polaris.close = AsyncMock(side_effect=Exception("Polaris error"))
 
         app.state._minio_manager_state = AppState(
             auth=MagicMock(),
@@ -275,7 +280,7 @@ class TestDestroyAppState:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             lock_manager=mock_lock,
-            polaris_service=MagicMock(),
+            polaris_service=mock_polaris,
         )
 
         # Should not raise

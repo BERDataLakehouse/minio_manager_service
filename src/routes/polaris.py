@@ -3,6 +3,10 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from ..polaris.constants import (
+    ICEBERG_STORAGE_SUBDIRECTORY,
+    normalize_group_name_for_polaris,
+)
 from ..service import app_state
 from ..service.dependencies import auth
 from ..service.kb_auth import AdminPermission
@@ -58,7 +62,7 @@ async def provision_polaris_user(
         # The /iceberg/ path has its own IAM statement separate from the u_{username}__*
         # governed path, added by policy_creator._create_default_user_home_policy().
         user_config = app_state_obj.user_manager.config
-        storage_location = f"s3a://{user_config.default_bucket}/{user_config.users_sql_warehouse_prefix}/{username}/iceberg/"
+        storage_location = f"s3a://{user_config.default_bucket}/{user_config.users_sql_warehouse_prefix}/{username}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
 
         # All steps are idempotent — create_* methods return existing entities on 409,
         # and grant_* calls are wrapped in try/except to handle "already granted" (500).
@@ -118,28 +122,17 @@ async def provision_polaris_user(
     group_config = app_state_obj.user_manager.config
     tenant_catalogs = []
     for g in user_groups:
-        if g.endswith("ro"):
-            base_group = g[:-2]
-            tenant_catalogs.append(f"tenant_{base_group}")
+        base_group, is_ro = normalize_group_name_for_polaris(g)
+        tenant_catalogs.append(f"tenant_{base_group}")
 
-            # Ensure the tenant catalog and roles exist (idempotent).
-            # This handles groups that were created before Polaris was integrated.
-            storage = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{base_group}/iceberg/"
-            await polaris.ensure_tenant_catalog(base_group, storage)
+        # Ensure the tenant catalog and roles exist (idempotent).
+        # This handles groups that were created before Polaris was integrated.
+        storage = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{base_group}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
+        await polaris.ensure_tenant_catalog(base_group, storage)
 
-            # Grant read-only principal role for this group
-            await polaris.grant_principal_role_to_principal(
-                username, f"{base_group}ro_member"
-            )
-        else:
-            tenant_catalogs.append(f"tenant_{g}")
-
-            # Ensure the tenant catalog and roles exist (idempotent).
-            storage = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{g}/iceberg/"
-            await polaris.ensure_tenant_catalog(g, storage)
-
-            # Grant read-write principal role for this group
-            await polaris.grant_principal_role_to_principal(username, f"{g}_member")
+        # Grant the appropriate principal role for this group
+        principal_role = f"{base_group}ro_member" if is_ro else f"{base_group}_member"
+        await polaris.grant_principal_role_to_principal(username, principal_role)
 
     # Remove duplicates but preserve order
     tenant_catalogs = list(dict.fromkeys(tenant_catalogs))

@@ -1098,17 +1098,17 @@ class TestDeleteCleanup:
         )
 
     @pytest.mark.asyncio
-    async def test_post_delete_cleanup_polaris_error_propagates(
+    async def test_post_delete_cleanup_polaris_error_does_not_propagate(
         self, group_manager_instance, mock_minio_client
     ):
-        """Test Polaris errors during group cleanup are propagated."""
+        """Test Polaris errors during group cleanup are logged but not propagated."""
         mock_minio_client.list_objects.return_value = []
         group_manager_instance.polaris_service.drop_tenant_catalog.side_effect = (
             Exception("Polaris unavailable")
         )
 
-        with pytest.raises(Exception, match="Polaris unavailable"):
-            await group_manager_instance._post_delete_cleanup("testgroup")
+        # Should not raise — error is caught and logged as a warning
+        await group_manager_instance._post_delete_cleanup("testgroup")
 
 
 # =============================================================================

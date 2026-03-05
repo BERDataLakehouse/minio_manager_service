@@ -11,6 +11,7 @@ import os
 from typing import NamedTuple
 
 from fastapi import FastAPI, Request
+
 from src.minio.core.distributed_lock import DistributedLockManager
 from src.minio.core.minio_client import MinIOClient
 from src.minio.managers.group_manager import GroupManager
@@ -144,6 +145,13 @@ async def destroy_app_state(app: FastAPI) -> None:
             logger.info("MinIO client session closed")
         except Exception as e:
             logger.warning(f"Error closing MinIO client session: {e}")
+
+        try:
+            # Close Polaris HTTP session
+            await app.state._minio_manager_state.polaris_service.close()
+            logger.info("Polaris HTTP session closed")
+        except Exception as e:
+            logger.warning(f"Error closing Polaris HTTP session: {e}")
 
     # https://docs.aiohttp.org/en/stable/client_advanced.html#graceful-shutdown
     await asyncio.sleep(0.250)

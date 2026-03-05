@@ -814,36 +814,58 @@ class TestDeleteCleanup:
         assert mock_minio_client.delete_object.call_count >= 1
 
     @pytest.mark.asyncio
-    async def test_post_delete_cleanup_calls_polaris(
+    async def test_post_delete_cleanup_calls_polaris_in_correct_order(
         self, user_manager, mock_minio_client
     ):
-        """Test post-delete cleanup calls Polaris user resource cleanup."""
+        """Test post-delete cleanup calls Polaris in reverse creation order."""
         mock_minio_client.list_objects.return_value = []
+        call_order = []
+
+        async def track_delete_principal_role(name):
+            call_order.append(("delete_principal_role", name))
+
+        async def track_delete_principal(name):
+            call_order.append(("delete_principal", name))
+
+        async def track_delete_catalog(name):
+            call_order.append(("delete_catalog", name))
+
+        user_manager.polaris_service.delete_principal_role.side_effect = (
+            track_delete_principal_role
+        )
+        user_manager.polaris_service.delete_principal.side_effect = (
+            track_delete_principal
+        )
+        user_manager.polaris_service.delete_catalog.side_effect = track_delete_catalog
 
         await user_manager._post_delete_cleanup("testuser")
 
-        user_manager.polaris_service.delete_catalog.assert_called_once_with(
-            "user_testuser"
+        assert call_order == [
+            ("delete_principal_role", "testuser_role"),
+            ("delete_principal", "testuser"),
+            ("delete_catalog", "user_testuser"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_polaris_error_does_not_block_other_steps(
+        self, user_manager, mock_minio_client
+    ):
+        """Test one Polaris deletion failure doesn't prevent the others."""
+        mock_minio_client.list_objects.return_value = []
+        user_manager.polaris_service.delete_principal_role.side_effect = Exception(
+            "role delete failed"
         )
+
+        # Should not raise — each step is independent
+        await user_manager._post_delete_cleanup("testuser")
+
+        # The other two should still be called despite the first failing
         user_manager.polaris_service.delete_principal.assert_called_once_with(
             "testuser"
         )
-        user_manager.polaris_service.delete_principal_role.assert_called_once_with(
-            "testuser_role"
+        user_manager.polaris_service.delete_catalog.assert_called_once_with(
+            "user_testuser"
         )
-
-    @pytest.mark.asyncio
-    async def test_post_delete_cleanup_polaris_error_propagates(
-        self, user_manager, mock_minio_client
-    ):
-        """Test Polaris errors during cleanup are propagated."""
-        mock_minio_client.list_objects.return_value = []
-        user_manager.polaris_service.delete_catalog.side_effect = Exception(
-            "Polaris unavailable"
-        )
-
-        with pytest.raises(Exception, match="Polaris unavailable"):
-            await user_manager._post_delete_cleanup("testuser")
 
 
 # =============================================================================

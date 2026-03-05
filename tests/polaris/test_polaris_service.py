@@ -89,6 +89,53 @@ class TestPolarisServiceInit:
         assert svc.client_secret == "sec:ret"
 
 
+# === SESSION LIFECYCLE TESTS ===
+
+
+class TestSessionLifecycle:
+    """Tests for shared aiohttp session management."""
+
+    @pytest.mark.asyncio
+    async def test_get_session_creates_new_session(self, polaris_service):
+        """Test _get_session creates a new session when none exists."""
+        assert polaris_service._session is None
+        session = await polaris_service._get_session()
+        assert session is not None
+        assert not session.closed
+        # Cleanup
+        await polaris_service.close()
+
+    @pytest.mark.asyncio
+    async def test_get_session_reuses_existing_session(self, polaris_service):
+        """Test _get_session returns the same session on subsequent calls."""
+        session1 = await polaris_service._get_session()
+        session2 = await polaris_service._get_session()
+        assert session1 is session2
+        await polaris_service.close()
+
+    @pytest.mark.asyncio
+    async def test_get_session_recreates_after_close(self, polaris_service):
+        """Test _get_session creates a new session after close()."""
+        session1 = await polaris_service._get_session()
+        await polaris_service.close()
+        session2 = await polaris_service._get_session()
+        assert session1 is not session2
+        await polaris_service.close()
+
+    @pytest.mark.asyncio
+    async def test_close_without_session(self, polaris_service):
+        """Test close() is safe when no session exists."""
+        assert polaris_service._session is None
+        await polaris_service.close()  # Should not raise
+
+    @pytest.mark.asyncio
+    async def test_close_sets_session_to_none(self, polaris_service):
+        """Test close() cleans up the session reference."""
+        await polaris_service._get_session()
+        await polaris_service.close()
+        assert polaris_service._session is None
+
+
 # === TOKEN TESTS ===
 
 
@@ -130,58 +177,48 @@ class TestRequest:
         """Test GET request returns JSON response."""
         resp = _make_response(json_data={"name": "test_catalog"})
 
-        with patch("aiohttp.ClientSession") as MockSession:
-            session = AsyncMock()
-            session.__aenter__ = AsyncMock(return_value=session)
-            session.__aexit__ = AsyncMock(return_value=None)
+        session = AsyncMock()
+        token_resp = _make_response(json_data={"access_token": "token"})
+        session.post = MagicMock(return_value=token_resp)
+        session.request = MagicMock(return_value=resp)
+        session.closed = False
 
-            # Mock token retrieval
-            token_resp = _make_response(json_data={"access_token": "token"})
-            session.post = MagicMock(return_value=token_resp)
-            session.request = MagicMock(return_value=resp)
+        polaris_service._session = session
 
-            MockSession.return_value = session
-
-            result = await polaris_service._request("GET", "/catalogs/test")
-            assert result == {"name": "test_catalog"}
+        result = await polaris_service._request("GET", "/catalogs/test")
+        assert result == {"name": "test_catalog"}
 
     @pytest.mark.asyncio
     async def test_request_204_returns_empty(self, polaris_service):
         """Test 204 No Content returns empty dict."""
         resp = _make_response(status=204)
 
-        with patch("aiohttp.ClientSession") as MockSession:
-            session = AsyncMock()
-            session.__aenter__ = AsyncMock(return_value=session)
-            session.__aexit__ = AsyncMock(return_value=None)
+        session = AsyncMock()
+        token_resp = _make_response(json_data={"access_token": "token"})
+        session.post = MagicMock(return_value=token_resp)
+        session.request = MagicMock(return_value=resp)
+        session.closed = False
 
-            token_resp = _make_response(json_data={"access_token": "token"})
-            session.post = MagicMock(return_value=token_resp)
-            session.request = MagicMock(return_value=resp)
+        polaris_service._session = session
 
-            MockSession.return_value = session
-
-            result = await polaris_service._request("PUT", "/some/endpoint")
-            assert result == {}
+        result = await polaris_service._request("PUT", "/some/endpoint")
+        assert result == {}
 
     @pytest.mark.asyncio
     async def test_request_201_no_json_returns_empty(self, polaris_service):
         """Test 201 with non-JSON content type returns empty dict."""
         resp = _make_response(status=201, content_type="text/plain")
 
-        with patch("aiohttp.ClientSession") as MockSession:
-            session = AsyncMock()
-            session.__aenter__ = AsyncMock(return_value=session)
-            session.__aexit__ = AsyncMock(return_value=None)
+        session = AsyncMock()
+        token_resp = _make_response(json_data={"access_token": "token"})
+        session.post = MagicMock(return_value=token_resp)
+        session.request = MagicMock(return_value=resp)
+        session.closed = False
 
-            token_resp = _make_response(json_data={"access_token": "token"})
-            session.post = MagicMock(return_value=token_resp)
-            session.request = MagicMock(return_value=resp)
+        polaris_service._session = session
 
-            MockSession.return_value = session
-
-            result = await polaris_service._request("POST", "/principals")
-            assert result == {}
+        result = await polaris_service._request("POST", "/principals")
+        assert result == {}
 
     @pytest.mark.asyncio
     async def test_request_401_clears_token_cache(self, polaris_service):
@@ -201,18 +238,16 @@ class TestRequest:
         resp.raise_for_status = MagicMock(side_effect=error)
         resp.headers = {"Content-Type": "application/json"}
 
-        with patch("aiohttp.ClientSession") as MockSession:
-            session = AsyncMock()
-            session.__aenter__ = AsyncMock(return_value=session)
-            session.__aexit__ = AsyncMock(return_value=None)
-            session.request = MagicMock(return_value=resp)
+        session = AsyncMock()
+        session.request = MagicMock(return_value=resp)
+        session.closed = False
 
-            MockSession.return_value = session
+        polaris_service._session = session
 
-            with pytest.raises(aiohttp.ClientResponseError):
-                await polaris_service._request("GET", "/catalogs")
+        with pytest.raises(aiohttp.ClientResponseError):
+            await polaris_service._request("GET", "/catalogs")
 
-            assert polaris_service._token is None
+        assert polaris_service._token is None
 
 
 # === CATALOG TESTS ===

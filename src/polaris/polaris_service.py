@@ -40,6 +40,19 @@ class PolarisService:
         self.client_secret = parts[1] if len(parts) > 1 else ""
         self.minio_endpoint = minio_endpoint
         self._token: Optional[str] = None
+        self._session: Optional[aiohttp.ClientSession] = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create a shared aiohttp.ClientSession for connection reuse."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def close(self) -> None:
+        """Close the shared aiohttp session. Call during application shutdown."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
 
     async def _get_token(self, session: aiohttp.ClientSession) -> str:
         """Get or refresh OAuth token for Polaris admin access."""
@@ -62,60 +75,58 @@ class PolarisService:
         self, method: str, endpoint: str, **kwargs: Any
     ) -> Dict[str, Any]:
         """Make an authenticated request to Polaris management API."""
-        async with aiohttp.ClientSession() as session:
-            token = await self._get_token(session)
+        session = await self._get_session()
+        token = await self._get_token(session)
 
-            headers: dict[str, str] = kwargs.pop("headers", {})
-            headers["Authorization"] = f"Bearer {token}"
-            headers["Polaris-Realm"] = "POLARIS"
-            headers["Accept"] = "application/json"
+        headers: dict[str, str] = kwargs.pop("headers", {})
+        headers["Authorization"] = f"Bearer {token}"
+        headers["Polaris-Realm"] = "POLARIS"
+        headers["Accept"] = "application/json"
 
-            url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        url = f"{self.base_url}/{endpoint.lstrip('/')}"
 
-            try:
-                async with session.request(
-                    method, url, headers=headers, **kwargs
-                ) as resp:
-                    if resp.status >= 400:
-                        body_text = await resp.text()
-                        error_message: str = resp.reason or "Unknown Error"
-                        if body_text:
-                            # Try to extract the inner error message from Polaris JSON
-                            try:
-                                error_json = json.loads(body_text)
-                                if (
-                                    "error" in error_json
-                                    and "message" in error_json["error"]
-                                ):
-                                    error_message = str(error_json["error"]["message"])
-                                else:
-                                    error_message = body_text
-                            except (json.JSONDecodeError, TypeError):
+        try:
+            async with session.request(method, url, headers=headers, **kwargs) as resp:
+                if resp.status >= 400:
+                    body_text = await resp.text()
+                    error_message: str = resp.reason or "Unknown Error"
+                    if body_text:
+                        # Try to extract the inner error message from Polaris JSON
+                        try:
+                            error_json = json.loads(body_text)
+                            if (
+                                "error" in error_json
+                                and "message" in error_json["error"]
+                            ):
+                                error_message = str(error_json["error"]["message"])
+                            else:
                                 error_message = body_text
+                        except (json.JSONDecodeError, TypeError):
+                            error_message = body_text
 
-                        raise aiohttp.ClientResponseError(
-                            resp.request_info,
-                            resp.history,
-                            status=resp.status,
-                            message=error_message,
-                            headers=resp.headers,
-                        )
-
-                    # Some endpoints return 201/204 with no JSON body
-                    if resp.status == 204:
-                        return {}
-                    content_type = resp.headers.get("Content-Type", "")
-                    if resp.status == 201 and "application/json" not in content_type:
-                        return {}
-                    return await resp.json()
-            except aiohttp.ClientResponseError as e:
-                # If we get 401, token might have expired. Clear it so next request fetches a new one.
-                if e.status == 401:
-                    self._token = None
-                    logger.warning(
-                        "Polaris admin token expired or invalid, clearing cache."
+                    raise aiohttp.ClientResponseError(
+                        resp.request_info,
+                        resp.history,
+                        status=resp.status,
+                        message=error_message,
+                        headers=resp.headers,
                     )
-                raise e
+
+                # Some endpoints return 201/204 with no JSON body
+                if resp.status == 204:
+                    return {}
+                content_type = resp.headers.get("Content-Type", "")
+                if resp.status == 201 and "application/json" not in content_type:
+                    return {}
+                return await resp.json()
+        except aiohttp.ClientResponseError as e:
+            # If we get 401, token might have expired. Clear it so next request fetches a new one.
+            if e.status == 401:
+                self._token = None
+                logger.warning(
+                    "Polaris admin token expired or invalid, clearing cache."
+                )
+            raise e
 
     async def create_catalog(
         self,

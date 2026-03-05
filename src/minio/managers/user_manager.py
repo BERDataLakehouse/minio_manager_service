@@ -6,6 +6,7 @@ import string
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
+from ...polaris.constants import ICEBERG_STORAGE_SUBDIRECTORY
 from ...polaris.polaris_service import PolarisService
 from ...service.exceptions import UserOperationError
 from ..core.minio_client import MinIOClient
@@ -139,9 +140,23 @@ class UserManager(ResourceManager[UserModel]):
         except Exception as e:
             logger.warning(f"Failed to delete user system directory: {e}")
 
-        await self.polaris_service.delete_catalog(f"user_{name}")
-        await self.polaris_service.delete_principal(name)
-        await self.polaris_service.delete_principal_role(f"{name}_role")
+        # Polaris cleanup: delete in reverse creation order so that role
+        # assignments are removed before the entities they reference.
+        # Each step is independent so one failure doesn't block the rest.
+        try:
+            await self.polaris_service.delete_principal_role(f"{name}_role")
+        except Exception as e:
+            logger.warning(f"Failed to delete Polaris principal role for {name}: {e}")
+
+        try:
+            await self.polaris_service.delete_principal(name)
+        except Exception as e:
+            logger.warning(f"Failed to delete Polaris principal {name}: {e}")
+
+        try:
+            await self.polaris_service.delete_catalog(f"user_{name}")
+        except Exception as e:
+            logger.warning(f"Failed to delete Polaris catalog for {name}: {e}")
 
     # CORE USER OPERATIONS
 
@@ -214,7 +229,7 @@ class UserManager(ResourceManager[UserModel]):
             if not await self.group_manager.resource_exists(GLOBAL_USER_GROUP):
                 await self.group_manager.create_group(GLOBAL_USER_GROUP, username)
                 # Ensure Polaris catalog is created for the global group
-                storage_location = f"s3a://{self.config.default_bucket}/{self.config.tenant_sql_warehouse_prefix}/{GLOBAL_USER_GROUP}/iceberg/"
+                storage_location = f"s3a://{self.config.default_bucket}/{self.config.tenant_sql_warehouse_prefix}/{GLOBAL_USER_GROUP}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
                 await self.polaris_service.ensure_tenant_catalog(
                     GLOBAL_USER_GROUP, storage_location
                 )

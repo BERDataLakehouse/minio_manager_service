@@ -16,6 +16,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..minio.models.policy import PolicyModel, PolicyTarget
 from ..minio.models.user import UserModel
 from ..minio.utils.validators import validate_group_name
+from ..polaris.constants import (
+    ICEBERG_STORAGE_SUBDIRECTORY,
+    normalize_group_name_for_polaris,
+)
 from ..service.app_state import get_app_state
 from ..service.dependencies import auth, require_admin
 from ..service.exceptions import (
@@ -28,16 +32,6 @@ from ..service.exceptions import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/management", tags=["management"])
-
-
-# ===== INTERNAL HELPERS =====
-
-
-def _normalize_group_name_for_polaris(group_name: str) -> tuple[str, bool]:
-    """Return (base_group_name, is_read_only_group)."""
-    if group_name.endswith("ro"):
-        return group_name[:-2], True
-    return group_name, False
 
 
 # ===== RESPONSE MODELS =====
@@ -400,7 +394,7 @@ async def create_group(
     )
 
     group_config = app_state.group_manager.config
-    storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{group_name}/iceberg/"
+    storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{group_name}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
 
     await app_state.polaris_service.ensure_tenant_catalog(group_name, storage_location)
 
@@ -445,13 +439,13 @@ async def add_group_member(
 ):
     """Add a member to a group."""
     app_state = get_app_state(request)
-    base_group_name, is_read_only_group = _normalize_group_name_for_polaris(group_name)
+    base_group_name, is_read_only_group = normalize_group_name_for_polaris(group_name)
 
     await app_state.group_manager.add_user_to_group(username, group_name)
 
     # Ensure tenant catalog exists in Polaris (idempotent — handles pre-Polaris groups)
     group_config = app_state.group_manager.config
-    storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{base_group_name}/iceberg/"
+    storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{base_group_name}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
     await app_state.polaris_service.ensure_tenant_catalog(
         base_group_name, storage_location
     )
@@ -503,7 +497,7 @@ async def remove_group_member(
 ):
     """Remove a member from a group."""
     app_state = get_app_state(request)
-    base_group_name, is_read_only_group = _normalize_group_name_for_polaris(group_name)
+    base_group_name, is_read_only_group = normalize_group_name_for_polaris(group_name)
 
     await app_state.group_manager.remove_user_from_group(username, group_name)
 
