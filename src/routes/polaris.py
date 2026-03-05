@@ -3,9 +3,9 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.service import app_state
-from src.service.dependencies import auth
-from src.service.kb_auth import AdminPermission
+from ..service import app_state
+from ..service.dependencies import auth
+from ..service.kb_auth import AdminPermission
 
 logger = logging.getLogger(__name__)
 
