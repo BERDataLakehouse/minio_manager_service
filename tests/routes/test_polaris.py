@@ -215,6 +215,27 @@ class TestProvisionPolarisUser:
         # "teamBro" ends with "ro" so strips suffix
         assert "tenant_teamB" in data["tenant_catalogs"]
 
+    def test_provision_ensures_tenant_catalogs_for_groups(
+        self, mock_app_state_obj, regular_user
+    ):
+        """Test ensure_tenant_catalog is called for each group during provisioning."""
+        mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
+            return_value=["teamA", "teamBro"]
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/v1/polaris/user_provision/testuser")
+
+        assert response.status_code == 200
+
+        polaris = mock_app_state_obj.polaris_service
+        # Should call ensure_tenant_catalog for both groups
+        # "teamA" (non-ro) and "teamB" (base of "teamBro")
+        calls = polaris.ensure_tenant_catalog.call_args_list
+        call_group_names = [c[0][0] for c in calls]
+        assert "teamA" in call_group_names
+        assert "teamB" in call_group_names
+
     def test_provision_catalog_with_globalusers_group(
         self, mock_app_state_obj, regular_user
     ):

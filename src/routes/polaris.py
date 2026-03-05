@@ -128,11 +128,21 @@ async def provision_polaris_user(
     # This must happen AFTER the principal is created above, because
     # grant_principal_role_to_principal requires the principal to exist.
     user_groups = await app_state_obj.group_manager.get_user_groups(username)
+    group_config = app_state_obj.user_manager.config
     tenant_catalogs = []
     for g in user_groups:
         if g.endswith("ro"):
             base_group = g[:-2]
             tenant_catalogs.append(f"tenant_{base_group}")
+
+            # Ensure the tenant catalog and roles exist (idempotent).
+            # This handles groups that were created before Polaris was integrated.
+            try:
+                storage = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{base_group}/iceberg/"
+                await polaris.ensure_tenant_catalog(base_group, storage)
+            except Exception as e:
+                logger.warning(f"Failed to ensure tenant catalog for {base_group}: {e}")
+
             # Grant read-only principal role for this group
             try:
                 await polaris.grant_principal_role_to_principal(
@@ -144,6 +154,14 @@ async def provision_polaris_user(
                 )
         else:
             tenant_catalogs.append(f"tenant_{g}")
+
+            # Ensure the tenant catalog and roles exist (idempotent).
+            try:
+                storage = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{g}/iceberg/"
+                await polaris.ensure_tenant_catalog(g, storage)
+            except Exception as e:
+                logger.warning(f"Failed to ensure tenant catalog for {g}: {e}")
+
             # Grant read-write principal role for this group
             try:
                 await polaris.grant_principal_role_to_principal(username, f"{g}_member")
