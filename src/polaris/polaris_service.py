@@ -329,7 +329,27 @@ class PolarisService:
     async def revoke_principal_role_from_principal(
         self, principal: str, principal_role: str
     ) -> Dict[str, Any]:
-        """Revoke a principal role from a user (principal)."""
+        """Revoke a principal role from a user (principal) (idempotent — checks first)."""
+        try:
+            existing = await self.get_principal_roles_for_principal(principal)
+        except aiohttp.ClientResponseError as e:
+            if e.status == 404:
+                logger.info(
+                    "Principal '%s' not found in Polaris, skipping revoke of '%s'.",
+                    principal,
+                    principal_role,
+                )
+                return {}
+            raise
+
+        if principal_role not in existing:
+            logger.info(
+                "Principal role '%s' not assigned to principal '%s', skipping revoke.",
+                principal_role,
+                principal,
+            )
+            return {}
+
         return await self._request(
             "DELETE", f"/principals/{principal}/principal-roles/{principal_role}"
         )

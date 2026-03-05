@@ -671,14 +671,51 @@ class TestPrincipalRoles:
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.return_value = {}
+            # First call (GET) returns the role as assigned, second call (DELETE) succeeds
+            mock_req.side_effect = [{"roles": [{"name": "tgu2_role"}]}, {}]
 
             await polaris_service.revoke_principal_role_from_principal(
                 principal="tgu2", principal_role="tgu2_role"
             )
 
-            mock_req.assert_called_once_with(
+            assert mock_req.call_count == 2
+            mock_req.assert_any_call("GET", "/principals/tgu2/principal-roles")
+            mock_req.assert_any_call(
                 "DELETE", "/principals/tgu2/principal-roles/tgu2_role"
+            )
+
+    @pytest.mark.asyncio
+    async def test_revoke_principal_role_not_assigned(self, polaris_service):
+        """Test revoking a role that isn't assigned is a no-op."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = {"roles": []}
+
+            await polaris_service.revoke_principal_role_from_principal(
+                principal="tgu2", principal_role="tgu2_role"
+            )
+
+            # Only the GET check, no DELETE
+            mock_req.assert_called_once_with("GET", "/principals/tgu2/principal-roles")
+
+    @pytest.mark.asyncio
+    async def test_revoke_principal_role_principal_not_found(self, polaris_service):
+        """Test revoking from a non-existent principal is a no-op."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = aiohttp.ClientResponseError(
+                MagicMock(), (), status=404, message="Not Found"
+            )
+
+            await polaris_service.revoke_principal_role_from_principal(
+                principal="nonexistent", principal_role="tgu2_role"
+            )
+
+            # Only the GET check, no DELETE
+            mock_req.assert_called_once_with(
+                "GET", "/principals/nonexistent/principal-roles"
             )
 
 
