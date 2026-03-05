@@ -11,7 +11,6 @@ import os
 from typing import NamedTuple
 
 from fastapi import FastAPI, Request
-
 from src.minio.core.distributed_lock import DistributedLockManager
 from src.minio.core.minio_client import MinIOClient
 from src.minio.managers.group_manager import GroupManager
@@ -19,6 +18,7 @@ from src.minio.managers.policy_manager import PolicyManager
 from src.minio.managers.sharing_manager import SharingManager
 from src.minio.managers.user_manager import UserManager
 from src.minio.models.minio_config import MinIOConfig
+from src.polaris.polaris_service import PolarisService
 from src.service.arg_checkers import not_falsy
 from src.service.kb_auth import KBaseAuth, KBaseUser
 
@@ -35,6 +35,7 @@ class AppState(NamedTuple):
     policy_manager: PolicyManager
     sharing_manager: SharingManager
     lock_manager: DistributedLockManager
+    polaris_service: PolarisService
 
 
 class RequestState(NamedTuple):
@@ -85,9 +86,17 @@ async def build_app(app: FastAPI) -> None:
         )
     logger.info("Distributed lock manager initialized and Redis connection verified")
 
-    # Initialize all managers with the shared client
-    user_manager = UserManager(minio_client, config)
-    group_manager = GroupManager(minio_client, config)
+    # Initialize Polaris Service
+    logger.info("Initializing Polaris Service...")
+    polaris_uri = not_falsy(os.getenv("POLARIS_CATALOG_URI"), "POLARIS_CATALOG_URI")
+    polaris_cred = not_falsy(os.getenv("POLARIS_CREDENTIAL"), "POLARIS_CREDENTIAL")
+    minio_endpoint = str(config.endpoint)
+    polaris_service = PolarisService(polaris_uri, polaris_cred, minio_endpoint)
+    logger.info("Polaris Service initialized")
+
+    # Initialize all managers with the shared client and polaris hook
+    user_manager = UserManager(minio_client, config, polaris_service=polaris_service)
+    group_manager = GroupManager(minio_client, config, polaris_service=polaris_service)
     policy_manager = PolicyManager(minio_client, config, lock_manager=lock_manager)
     sharing_manager = SharingManager(
         minio_client,
@@ -108,6 +117,7 @@ async def build_app(app: FastAPI) -> None:
         policy_manager=policy_manager,
         sharing_manager=sharing_manager,
         lock_manager=lock_manager,
+        polaris_service=polaris_service,
     )
     logger.info("Application state initialized")
 

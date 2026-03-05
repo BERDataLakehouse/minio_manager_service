@@ -6,6 +6,7 @@ import string
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
+from ...polaris.polaris_service import PolarisService
 from ...service.exceptions import UserOperationError
 from ..core.minio_client import MinIOClient
 from ..core.policy_creator import SYSTEM_RESOURCE_CONFIG
@@ -27,10 +28,16 @@ GLOBAL_USER_GROUP = "globalusers"
 class UserManager(ResourceManager[UserModel]):
     """UserManager for basic user operations with patterns and generic CRUD."""
 
-    def __init__(self, client: MinIOClient, config: MinIOConfig) -> None:
+    def __init__(
+        self,
+        client: MinIOClient,
+        config: MinIOConfig,
+        polaris_service: Optional[PolarisService] = None,
+    ) -> None:
         super().__init__(client, config)
         self.users_general_warehouse_prefix = config.users_general_warehouse_prefix
         self.users_sql_warehouse_prefix = config.users_sql_warehouse_prefix
+        self.polaris_service: Optional[PolarisService] = polaris_service
 
         # Lazy initialization of dependent managers to avoid circular imports
         self._policy_manager = None
@@ -120,9 +127,21 @@ class UserManager(ResourceManager[UserModel]):
 
     async def _post_delete_cleanup(self, name: str) -> None:
         """Clean up user resources after deletion."""
-        # Delete user home and system directories
-        await self._delete_user_home_directory(name)
-        await self._delete_user_system_directory(name)
+        try:
+            await self._delete_user_home_directory(name)
+        except Exception as e:
+            logger.warning(f"Failed to delete user home directory: {e}")
+
+        try:
+            await self._delete_user_system_directory(name)
+        except Exception as e:
+            logger.warning(f"Failed to delete user system directory: {e}")
+
+        if self.polaris_service:
+            try:
+                await self.polaris_service.drop_tenant_catalog(name)
+            except Exception as e:
+                logger.warning(f"Failed to drop Polaris tenant catalog for {name}: {e}")
 
     # CORE USER OPERATIONS
 
@@ -194,6 +213,17 @@ class UserManager(ResourceManager[UserModel]):
 
             if not await self.group_manager.resource_exists(GLOBAL_USER_GROUP):
                 await self.group_manager.create_group(GLOBAL_USER_GROUP, username)
+                # Ensure Polaris catalog is created for the global group
+                if self.polaris_service:
+                    try:
+                        storage_location = f"s3a://{self.config.default_bucket}/{self.config.tenant_sql_warehouse_prefix}/{GLOBAL_USER_GROUP}/iceberg/"
+                        await self.polaris_service.ensure_tenant_catalog(
+                            GLOBAL_USER_GROUP, storage_location
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to create Polaris tenant catalog for {GLOBAL_USER_GROUP}: {e}"
+                        )
             await self.group_manager.add_user_to_group(username, GLOBAL_USER_GROUP)
 
             return UserModel(
