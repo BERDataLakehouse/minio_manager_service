@@ -392,9 +392,7 @@ async def create_group(
     group_config = app_state.group_manager.config
     storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{group_name}/iceberg/"
 
-    await app_state.polaris_service.ensure_tenant_catalog(
-        group_name, storage_location
-    )
+    await app_state.polaris_service.ensure_tenant_catalog(group_name, storage_location)
 
     # Ensure the creator has a Polaris principal (idempotent — handles pre-Polaris users)
     await app_state.polaris_service.create_principal(name=authenticated_user.user)

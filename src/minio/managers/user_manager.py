@@ -76,7 +76,9 @@ class UserManager(ResourceManager[UserModel]):
         if self._group_manager is None:
             from .group_manager import GroupManager
 
-            self._group_manager = GroupManager(self.client, self.config, polaris_service=self.polaris_service)
+            self._group_manager = GroupManager(
+                self.client, self.config, polaris_service=self.polaris_service
+            )
         return self._group_manager
 
     # === ResourceManager Abstract Method Implementations ===

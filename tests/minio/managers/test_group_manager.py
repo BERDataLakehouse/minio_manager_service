@@ -143,9 +143,13 @@ def mock_polaris_service():
 
 
 @pytest.fixture
-def group_manager_instance(mock_minio_client, mock_minio_config, mock_executor, mock_polaris_service):
+def group_manager_instance(
+    mock_minio_client, mock_minio_config, mock_executor, mock_polaris_service
+):
     """Create a GroupManager instance with mocked dependencies."""
-    manager = GroupManager(mock_minio_client, mock_minio_config, polaris_service=mock_polaris_service)
+    manager = GroupManager(
+        mock_minio_client, mock_minio_config, polaris_service=mock_polaris_service
+    )
     manager._executor = mock_executor
     return manager
 
@@ -197,7 +201,9 @@ class TestGroupManagerInit:
         self, mock_minio_client, mock_minio_config, mock_polaris_service
     ):
         """Test successful initialization with valid configuration."""
-        manager = GroupManager(mock_minio_client, mock_minio_config, polaris_service=mock_polaris_service)
+        manager = GroupManager(
+            mock_minio_client, mock_minio_config, polaris_service=mock_polaris_service
+        )
 
         assert manager.client == mock_minio_client
         assert manager.config == mock_minio_config
@@ -211,7 +217,9 @@ class TestGroupManagerInit:
         self, mock_minio_client, mock_minio_config, mock_polaris_service
     ):
         """Test that GroupManager properly inherits from ResourceManager."""
-        manager = GroupManager(mock_minio_client, mock_minio_config, polaris_service=mock_polaris_service)
+        manager = GroupManager(
+            mock_minio_client, mock_minio_config, polaris_service=mock_polaris_service
+        )
 
         # Check executor and command builder are initialized
         assert manager._executor is not None
@@ -1085,7 +1093,9 @@ class TestDeleteCleanup:
 
         await group_manager_instance._post_delete_cleanup("testgroup")
 
-        group_manager_instance.polaris_service.drop_tenant_catalog.assert_called_once_with("testgroup")
+        group_manager_instance.polaris_service.drop_tenant_catalog.assert_called_once_with(
+            "testgroup"
+        )
 
     @pytest.mark.asyncio
     async def test_post_delete_cleanup_polaris_error_propagates(
@@ -1093,7 +1103,9 @@ class TestDeleteCleanup:
     ):
         """Test Polaris errors during group cleanup are propagated."""
         mock_minio_client.list_objects.return_value = []
-        group_manager_instance.polaris_service.drop_tenant_catalog.side_effect = Exception("Polaris unavailable")
+        group_manager_instance.polaris_service.drop_tenant_catalog.side_effect = (
+            Exception("Polaris unavailable")
+        )
 
         with pytest.raises(Exception, match="Polaris unavailable"):
             await group_manager_instance._post_delete_cleanup("testgroup")

@@ -838,9 +838,7 @@ class TestPolarisIntegration:
             "admin", "newgroup_member"
         )
 
-    def test_add_member_ensures_user_principal(
-        self, polaris_client, polaris_app_state
-    ):
+    def test_add_member_ensures_user_principal(self, polaris_client, polaris_app_state):
         """Test add_group_member ensures the user has a Polaris principal."""
         response = polaris_client.post("/management/groups/group1/members/user2")
 

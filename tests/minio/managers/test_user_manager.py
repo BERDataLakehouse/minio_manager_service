@@ -208,7 +208,9 @@ def sample_group_policy():
 class TestUserManagerInit:
     """Tests for UserManager initialization."""
 
-    def test_init_with_dependencies(self, mock_minio_client, mock_minio_config, mock_polaris_service):
+    def test_init_with_dependencies(
+        self, mock_minio_client, mock_minio_config, mock_polaris_service
+    ):
         """Test UserManager initialization with all dependencies."""
         manager = UserManager(
             client=mock_minio_client,
@@ -222,7 +224,9 @@ class TestUserManagerInit:
         assert manager._policy_manager is None  # Lazy init
         assert manager._group_manager is None  # Lazy init
 
-    def test_warehouse_prefixes_set(self, mock_minio_client, mock_minio_config, mock_polaris_service):
+    def test_warehouse_prefixes_set(
+        self, mock_minio_client, mock_minio_config, mock_polaris_service
+    ):
         """Test that warehouse prefixes are set correctly."""
         manager = UserManager(
             client=mock_minio_client,
@@ -506,7 +510,9 @@ class TestCreateUser:
         user_manager.resource_exists = AsyncMock(return_value=False)
         mock_group_manager.resource_exists.return_value = False
 
-        user_manager.polaris_service.ensure_tenant_catalog.side_effect = Exception("Polaris down")
+        user_manager.polaris_service.ensure_tenant_catalog.side_effect = Exception(
+            "Polaris down"
+        )
 
         with pytest.raises(Exception, match="Polaris down"):
             await user_manager.create_user("testuser")
@@ -816,9 +822,15 @@ class TestDeleteCleanup:
 
         await user_manager._post_delete_cleanup("testuser")
 
-        user_manager.polaris_service.delete_catalog.assert_called_once_with("user_testuser")
-        user_manager.polaris_service.delete_principal.assert_called_once_with("testuser")
-        user_manager.polaris_service.delete_principal_role.assert_called_once_with("testuser_role")
+        user_manager.polaris_service.delete_catalog.assert_called_once_with(
+            "user_testuser"
+        )
+        user_manager.polaris_service.delete_principal.assert_called_once_with(
+            "testuser"
+        )
+        user_manager.polaris_service.delete_principal_role.assert_called_once_with(
+            "testuser_role"
+        )
 
     @pytest.mark.asyncio
     async def test_post_delete_cleanup_polaris_error_propagates(
@@ -826,7 +838,9 @@ class TestDeleteCleanup:
     ):
         """Test Polaris errors during cleanup are propagated."""
         mock_minio_client.list_objects.return_value = []
-        user_manager.polaris_service.delete_catalog.side_effect = Exception("Polaris unavailable")
+        user_manager.polaris_service.delete_catalog.side_effect = Exception(
+            "Polaris unavailable"
+        )
 
         with pytest.raises(Exception, match="Polaris unavailable"):
             await user_manager._post_delete_cleanup("testuser")
@@ -840,7 +854,9 @@ class TestDeleteCleanup:
 class TestLazyManagerInit:
     """Tests for lazy initialization of policy_manager and group_manager."""
 
-    def test_policy_manager_lazy_init(self, mock_minio_client, mock_minio_config, mock_polaris_service):
+    def test_policy_manager_lazy_init(
+        self, mock_minio_client, mock_minio_config, mock_polaris_service
+    ):
         """Test policy_manager is lazily initialized."""
         manager = UserManager(
             client=mock_minio_client,
@@ -856,7 +872,9 @@ class TestLazyManagerInit:
         # Second access returns same instance
         assert manager.policy_manager is pm
 
-    def test_group_manager_lazy_init(self, mock_minio_client, mock_minio_config, mock_polaris_service):
+    def test_group_manager_lazy_init(
+        self, mock_minio_client, mock_minio_config, mock_polaris_service
+    ):
         """Test group_manager is lazily initialized."""
         manager = UserManager(
             client=mock_minio_client,
