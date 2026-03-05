@@ -389,24 +389,18 @@ async def create_group(
         creator=authenticated_user.user,
     )
 
-    if app_state.polaris_service:
-        try:
-            group_config = app_state.group_manager.config
-            storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{group_name}/iceberg/"
+    group_config = app_state.group_manager.config
+    storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{group_name}/iceberg/"
 
-            await app_state.polaris_service.ensure_tenant_catalog(
-                group_name, storage_location
-            )
+    await app_state.polaris_service.ensure_tenant_catalog(
+        group_name, storage_location
+    )
 
-            # The creator should be automatically granted the writer role
-            writer_principal_role = f"{group_name}_member"
-            await app_state.polaris_service.grant_principal_role_to_principal(
-                authenticated_user.user, writer_principal_role
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to setup Polaris tenant catalog for {group_name}: {e}"
-            )
+    # The creator should be automatically granted the writer role
+    writer_principal_role = f"{group_name}_member"
+    await app_state.polaris_service.grant_principal_role_to_principal(
+        authenticated_user.user, writer_principal_role
+    )
 
     # Return response for the main group (read/write), including RO group info
     response = GroupManagementResponse(
@@ -443,17 +437,11 @@ async def add_group_member(
 
     await app_state.group_manager.add_user_to_group(username, group_name)
 
-    if app_state.polaris_service:
-        try:
-            # Grant the user's principal the tenant's principal role
-            principal_role_name = f"{group_name}_member"
-            await app_state.polaris_service.grant_principal_role_to_principal(
-                username, principal_role_name
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to grant Polaris tenant access to {username} for {group_name}: {e}"
-            )
+    # Grant the user's principal the tenant's principal role
+    principal_role_name = f"{group_name}_member"
+    await app_state.polaris_service.grant_principal_role_to_principal(
+        username, principal_role_name
+    )
 
     # Get updated group info
     group_info = await app_state.group_manager.get_group_info(group_name)
@@ -492,16 +480,10 @@ async def remove_group_member(
 
     await app_state.group_manager.remove_user_from_group(username, group_name)
 
-    if app_state.polaris_service:
-        try:
-            principal_role_name = f"{group_name}_member"
-            await app_state.polaris_service.revoke_principal_role_from_principal(
-                username, principal_role_name
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to revoke Polaris tenant access from {username} for {group_name}: {e}"
-            )
+    principal_role_name = f"{group_name}_member"
+    await app_state.polaris_service.revoke_principal_role_from_principal(
+        username, principal_role_name
+    )
 
     # Get updated group info
     group_info = await app_state.group_manager.get_group_info(group_name)

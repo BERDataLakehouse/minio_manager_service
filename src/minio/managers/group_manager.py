@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import List, Optional
+from typing import List
 
 from ...service.exceptions import GroupOperationError
 from ..core.minio_client import MinIOClient
@@ -24,12 +24,12 @@ class GroupManager(ResourceManager[GroupModel]):
         self,
         client: MinIOClient,
         config: MinIOConfig,
-        polaris_service: Optional[PolarisService] = None,
+        polaris_service: PolarisService,
     ):
         super().__init__(client, config)
         self.tenant_general_warehouse_prefix = config.tenant_general_warehouse_prefix
         self.tenant_sql_warehouse_prefix = config.tenant_sql_warehouse_prefix
-        self.polaris_service: Optional[PolarisService] = polaris_service
+        self.polaris_service: PolarisService = polaris_service
 
         # Lazy initialization of dependent managers to avoid circular imports
         self._policy_manager = None
@@ -220,13 +220,7 @@ class GroupManager(ResourceManager[GroupModel]):
         except Exception as e:
             self.logger.warning(f"Failed to delete group shared directory: {e}")
 
-        if self.polaris_service:
-            try:
-                await self.polaris_service.drop_tenant_catalog(name)
-            except Exception as e:
-                self.logger.warning(
-                    f"Failed to drop Polaris tenant catalog for {name}: {e}"
-                )
+        await self.polaris_service.drop_tenant_catalog(name)
 
     # === Group-Specific Operations ===
 

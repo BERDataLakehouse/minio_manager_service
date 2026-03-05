@@ -119,6 +119,12 @@ def mock_app_state():
     app_state.policy_manager.detach_policy_from_group = AsyncMock()
     app_state.policy_manager.delete_resource = AsyncMock(return_value=True)
 
+    # Mock Polaris Service
+    app_state.polaris_service = AsyncMock()
+    app_state.polaris_service.grant_principal_role_to_principal = AsyncMock()
+    app_state.polaris_service.revoke_principal_role_from_principal = AsyncMock()
+    app_state.polaris_service.ensure_tenant_catalog = AsyncMock()
+
     return app_state
 
 
@@ -840,28 +846,35 @@ class TestPolarisIntegration:
             "user1", "group1_member"
         )
 
-    def test_polaris_operations_skipped_when_none(
-        self, mock_app_state, mock_admin_user
+    def test_polaris_error_propagates_on_create_group(
+        self, polaris_client, polaris_app_state
     ):
-        """Test all Polaris operations are skipped when polaris_service is None."""
-        mock_app_state.polaris_service = None
+        """Test Polaris errors propagate and cause group creation to fail."""
+        polaris_app_state.polaris_service.ensure_tenant_catalog.side_effect = Exception(
+            "Polaris unavailable"
+        )
 
-        app = FastAPI()
-        app.include_router(router)
-        app.add_exception_handler(Exception, universal_error_handler)
-        app.dependency_overrides[require_admin] = lambda: mock_admin_user
+        response = polaris_client.post("/management/groups/newgroup")
+        assert response.status_code == 500
 
-        with patch("src.routes.management.get_app_state", return_value=mock_app_state):
-            client = TestClient(app, raise_server_exceptions=False)
+    def test_polaris_error_propagates_on_add_member(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test Polaris errors propagate and cause add member to fail."""
+        polaris_app_state.polaris_service.grant_principal_role_to_principal.side_effect = Exception(
+            "Polaris unavailable"
+        )
 
-            # Create group — should succeed without Polaris
-            response = client.post("/management/groups/newgroup")
-            assert response.status_code == 201
+        response = polaris_client.post("/management/groups/group1/members/user2")
+        assert response.status_code == 500
 
-            # Add member — should succeed without Polaris
-            response = client.post("/management/groups/group1/members/user2")
-            assert response.status_code == 200
+    def test_polaris_error_propagates_on_remove_member(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test Polaris errors propagate and cause remove member to fail."""
+        polaris_app_state.polaris_service.revoke_principal_role_from_principal.side_effect = Exception(
+            "Polaris unavailable"
+        )
 
-            # Remove member — should succeed without Polaris
-            response = client.delete("/management/groups/group1/members/user1")
-            assert response.status_code == 200
+        response = polaris_client.delete("/management/groups/group1/members/user1")
+        assert response.status_code == 500

@@ -32,12 +32,12 @@ class UserManager(ResourceManager[UserModel]):
         self,
         client: MinIOClient,
         config: MinIOConfig,
-        polaris_service: Optional[PolarisService] = None,
+        polaris_service: PolarisService,
     ) -> None:
         super().__init__(client, config)
         self.users_general_warehouse_prefix = config.users_general_warehouse_prefix
         self.users_sql_warehouse_prefix = config.users_sql_warehouse_prefix
-        self.polaris_service: Optional[PolarisService] = polaris_service
+        self.polaris_service: PolarisService = polaris_service
 
         # Lazy initialization of dependent managers to avoid circular imports
         self._policy_manager = None
@@ -76,7 +76,7 @@ class UserManager(ResourceManager[UserModel]):
         if self._group_manager is None:
             from .group_manager import GroupManager
 
-            self._group_manager = GroupManager(self.client, self.config)
+            self._group_manager = GroupManager(self.client, self.config, polaris_service=self.polaris_service)
         return self._group_manager
 
     # === ResourceManager Abstract Method Implementations ===
@@ -137,15 +137,9 @@ class UserManager(ResourceManager[UserModel]):
         except Exception as e:
             logger.warning(f"Failed to delete user system directory: {e}")
 
-        if self.polaris_service:
-            try:
-                await self.polaris_service.delete_catalog(f"user_{name}")
-                await self.polaris_service.delete_principal(name)
-                await self.polaris_service.delete_principal_role(f"{name}_role")
-            except Exception as e:
-                logger.warning(
-                    f"Failed to clean up Polaris resources for user {name}: {e}"
-                )
+        await self.polaris_service.delete_catalog(f"user_{name}")
+        await self.polaris_service.delete_principal(name)
+        await self.polaris_service.delete_principal_role(f"{name}_role")
 
     # CORE USER OPERATIONS
 
@@ -218,16 +212,10 @@ class UserManager(ResourceManager[UserModel]):
             if not await self.group_manager.resource_exists(GLOBAL_USER_GROUP):
                 await self.group_manager.create_group(GLOBAL_USER_GROUP, username)
                 # Ensure Polaris catalog is created for the global group
-                if self.polaris_service:
-                    try:
-                        storage_location = f"s3a://{self.config.default_bucket}/{self.config.tenant_sql_warehouse_prefix}/{GLOBAL_USER_GROUP}/iceberg/"
-                        await self.polaris_service.ensure_tenant_catalog(
-                            GLOBAL_USER_GROUP, storage_location
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to create Polaris tenant catalog for {GLOBAL_USER_GROUP}: {e}"
-                        )
+                storage_location = f"s3a://{self.config.default_bucket}/{self.config.tenant_sql_warehouse_prefix}/{GLOBAL_USER_GROUP}/iceberg/"
+                await self.polaris_service.ensure_tenant_catalog(
+                    GLOBAL_USER_GROUP, storage_location
+                )
             await self.group_manager.add_user_to_group(username, GLOBAL_USER_GROUP)
 
             return UserModel(
