@@ -438,6 +438,11 @@ async def add_group_member(
 
     await app_state.group_manager.add_user_to_group(username, group_name)
 
+    # Ensure tenant catalog exists in Polaris (idempotent — handles pre-Polaris groups)
+    group_config = app_state.group_manager.config
+    storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{group_name}/iceberg/"
+    await app_state.polaris_service.ensure_tenant_catalog(group_name, storage_location)
+
     # Ensure the user has a Polaris principal (idempotent — handles pre-Polaris users)
     await app_state.polaris_service.create_principal(name=username)
 

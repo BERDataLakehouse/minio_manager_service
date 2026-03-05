@@ -579,7 +579,8 @@ class TestPrincipalRoles:
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.return_value = {}
+            # First call (GET) returns no existing roles, second call (PUT) succeeds
+            mock_req.side_effect = [{"roles": []}, {}]
 
             await polaris_service.grant_catalog_role_to_principal_role(
                 catalog="user_tgu2",
@@ -587,10 +588,37 @@ class TestPrincipalRoles:
                 principal_role="tgu2_role",
             )
 
-            mock_req.assert_called_once_with(
+            assert mock_req.call_count == 2
+            mock_req.assert_any_call(
+                "GET",
+                "/principal-roles/tgu2_role/catalog-roles/user_tgu2",
+            )
+            mock_req.assert_any_call(
                 "PUT",
                 "/principal-roles/tgu2_role/catalog-roles/user_tgu2",
                 json={"catalogRole": {"name": "catalog_admin"}},
+            )
+
+    @pytest.mark.asyncio
+    async def test_grant_catalog_role_to_principal_role_already_granted(
+        self, polaris_service
+    ):
+        """Test that granting an already-assigned catalog role is a no-op."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = {"roles": [{"name": "catalog_admin"}]}
+
+            await polaris_service.grant_catalog_role_to_principal_role(
+                catalog="user_tgu2",
+                catalog_role="catalog_admin",
+                principal_role="tgu2_role",
+            )
+
+            # Only the GET check, no PUT
+            mock_req.assert_called_once_with(
+                "GET",
+                "/principal-roles/tgu2_role/catalog-roles/user_tgu2",
             )
 
     @pytest.mark.asyncio
@@ -599,16 +627,42 @@ class TestPrincipalRoles:
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.return_value = {}
+            # First call (GET) returns no existing roles, second call (PUT) succeeds
+            mock_req.side_effect = [{"roles": []}, {}]
 
             await polaris_service.grant_principal_role_to_principal(
                 principal="tgu2", principal_role="tgu2_role"
             )
 
-            mock_req.assert_called_once_with(
+            assert mock_req.call_count == 2
+            mock_req.assert_any_call(
+                "GET",
+                "/principals/tgu2/principal-roles",
+            )
+            mock_req.assert_any_call(
                 "PUT",
                 "/principals/tgu2/principal-roles",
                 json={"principalRole": {"name": "tgu2_role"}},
+            )
+
+    @pytest.mark.asyncio
+    async def test_grant_principal_role_to_principal_already_granted(
+        self, polaris_service
+    ):
+        """Test that granting an already-assigned principal role is a no-op."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = {"roles": [{"name": "tgu2_role"}]}
+
+            await polaris_service.grant_principal_role_to_principal(
+                principal="tgu2", principal_role="tgu2_role"
+            )
+
+            # Only the GET check, no PUT
+            mock_req.assert_called_once_with(
+                "GET",
+                "/principals/tgu2/principal-roles",
             )
 
     @pytest.mark.asyncio

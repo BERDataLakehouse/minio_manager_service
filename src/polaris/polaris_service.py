@@ -274,10 +274,33 @@ class PolarisService:
                 return await self._request("GET", f"/principal-roles/{role_name}")
             raise e
 
+    async def get_catalog_roles_for_principal_role(
+        self, principal_role: str, catalog: str
+    ) -> List[str]:
+        """List catalog role names granted to a principal role for a specific catalog."""
+        resp = await self._request(
+            "GET", f"/principal-roles/{principal_role}/catalog-roles/{catalog}"
+        )
+        roles = resp.get("roles", [])
+        return [r.get("name", "") for r in roles if r.get("name")]
+
     async def grant_catalog_role_to_principal_role(
         self, catalog: str, catalog_role: str, principal_role: str
     ) -> Dict[str, Any]:
-        """Grant a catalog role to a principal role."""
+        """Grant a catalog role to a principal role (idempotent — checks first)."""
+        # Check if already granted to avoid Polaris duplicate key errors
+        existing = await self.get_catalog_roles_for_principal_role(
+            principal_role, catalog
+        )
+        if catalog_role in existing:
+            logger.info(
+                "Catalog role '%s' already granted to principal role '%s' on catalog '%s', skipping.",
+                catalog_role,
+                principal_role,
+                catalog,
+            )
+            return {}
+
         payload = {"catalogRole": {"name": catalog_role}}
         return await self._request(
             "PUT",
@@ -288,7 +311,16 @@ class PolarisService:
     async def grant_principal_role_to_principal(
         self, principal: str, principal_role: str
     ) -> Dict[str, Any]:
-        """Assign a principal role to a user (principal)."""
+        """Assign a principal role to a user (principal) (idempotent — checks first)."""
+        existing = await self.get_principal_roles_for_principal(principal)
+        if principal_role in existing:
+            logger.info(
+                "Principal role '%s' already assigned to principal '%s', skipping.",
+                principal_role,
+                principal,
+            )
+            return {}
+
         payload = {"principalRole": {"name": principal_role}}
         return await self._request(
             "PUT", f"/principals/{principal}/principal-roles", json=payload

@@ -838,6 +838,16 @@ class TestPolarisIntegration:
             "admin", "newgroup_member"
         )
 
+    def test_add_member_ensures_tenant_catalog(self, polaris_client, polaris_app_state):
+        """Test add_group_member calls ensure_tenant_catalog for pre-Polaris groups."""
+        response = polaris_client.post("/management/groups/group1/members/user2")
+
+        assert response.status_code == 200
+        polaris_app_state.polaris_service.ensure_tenant_catalog.assert_called_once_with(
+            "group1",
+            "s3a://cdm-lake/tenant-sql-warehouse/group1/iceberg/",
+        )
+
     def test_add_member_ensures_user_principal(self, polaris_client, polaris_app_state):
         """Test add_group_member ensures the user has a Polaris principal."""
         response = polaris_client.post("/management/groups/group1/members/user2")
