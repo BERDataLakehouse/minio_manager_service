@@ -769,3 +769,99 @@ class TestManagementIntegration:
         data = response.json()
 
         assert data["performed_by"] == "admin"
+
+
+# === POLARIS INTEGRATION TESTS ===
+
+
+class TestPolarisIntegration:
+    """Tests for Polaris service interactions in management routes."""
+
+    @pytest.fixture
+    def polaris_app_state(self, mock_app_state):
+        """Create mock app_state with explicit Polaris service mock."""
+        polaris = AsyncMock()
+        mock_app_state.polaris_service = polaris
+        mock_app_state.group_manager.config = MagicMock()
+        mock_app_state.group_manager.config.default_bucket = "cdm-lake"
+        mock_app_state.group_manager.config.tenant_sql_warehouse_prefix = (
+            "tenant-sql-warehouse"
+        )
+        return mock_app_state
+
+    @pytest.fixture
+    def polaris_client(self, test_app, polaris_app_state):
+        """Create test client with Polaris-enabled app state."""
+        with patch(
+            "src.routes.management.get_app_state", return_value=polaris_app_state
+        ):
+            yield TestClient(test_app, raise_server_exceptions=False)
+
+    def test_create_group_calls_ensure_tenant_catalog(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test create_group calls ensure_tenant_catalog with correct args."""
+        response = polaris_client.post("/management/groups/newgroup")
+
+        assert response.status_code == 201
+        polaris_app_state.polaris_service.ensure_tenant_catalog.assert_called_once_with(
+            "newgroup",
+            "s3a://cdm-lake/tenant-sql-warehouse/newgroup/iceberg/",
+        )
+
+    def test_create_group_grants_writer_role_to_creator(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test create_group grants the writer principal role to the creator."""
+        response = polaris_client.post("/management/groups/newgroup")
+
+        assert response.status_code == 201
+        polaris_app_state.polaris_service.grant_principal_role_to_principal.assert_called_once_with(
+            "admin", "newgroup_member"
+        )
+
+    def test_add_member_grants_principal_role(self, polaris_client, polaris_app_state):
+        """Test add_group_member grants tenant principal role to the user."""
+        response = polaris_client.post("/management/groups/group1/members/user2")
+
+        assert response.status_code == 200
+        polaris_app_state.polaris_service.grant_principal_role_to_principal.assert_called_once_with(
+            "user2", "group1_member"
+        )
+
+    def test_remove_member_revokes_principal_role(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test remove_group_member revokes tenant principal role from the user."""
+        response = polaris_client.delete("/management/groups/group1/members/user1")
+
+        assert response.status_code == 200
+        polaris_app_state.polaris_service.revoke_principal_role_from_principal.assert_called_once_with(
+            "user1", "group1_member"
+        )
+
+    def test_polaris_operations_skipped_when_none(
+        self, mock_app_state, mock_admin_user
+    ):
+        """Test all Polaris operations are skipped when polaris_service is None."""
+        mock_app_state.polaris_service = None
+
+        app = FastAPI()
+        app.include_router(router)
+        app.add_exception_handler(Exception, universal_error_handler)
+        app.dependency_overrides[require_admin] = lambda: mock_admin_user
+
+        with patch("src.routes.management.get_app_state", return_value=mock_app_state):
+            client = TestClient(app, raise_server_exceptions=False)
+
+            # Create group — should succeed without Polaris
+            response = client.post("/management/groups/newgroup")
+            assert response.status_code == 201
+
+            # Add member — should succeed without Polaris
+            response = client.post("/management/groups/group1/members/user2")
+            assert response.status_code == 200
+
+            # Remove member — should succeed without Polaris
+            response = client.delete("/management/groups/group1/members/user1")
+            assert response.status_code == 200

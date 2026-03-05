@@ -1069,6 +1069,43 @@ class TestDeleteCleanup:
         # Should not raise
         await group_manager_instance._post_delete_cleanup("testgroup")
 
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_calls_polaris(
+        self, group_manager_instance, mock_minio_client
+    ):
+        """Test _post_delete_cleanup calls drop_tenant_catalog when Polaris is configured."""
+        mock_minio_client.list_objects.return_value = []
+        polaris = AsyncMock()
+        group_manager_instance.polaris_service = polaris
+
+        await group_manager_instance._post_delete_cleanup("testgroup")
+
+        polaris.drop_tenant_catalog.assert_called_once_with("testgroup")
+
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_skips_polaris_when_none(
+        self, group_manager_instance, mock_minio_client
+    ):
+        """Test _post_delete_cleanup skips Polaris when service is not set."""
+        mock_minio_client.list_objects.return_value = []
+        group_manager_instance.polaris_service = None
+
+        # Should not raise
+        await group_manager_instance._post_delete_cleanup("testgroup")
+
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_polaris_error_handled(
+        self, group_manager_instance, mock_minio_client
+    ):
+        """Test Polaris errors during group cleanup are logged but not re-raised."""
+        mock_minio_client.list_objects.return_value = []
+        polaris = AsyncMock()
+        polaris.drop_tenant_catalog.side_effect = Exception("Polaris unavailable")
+        group_manager_instance.polaris_service = polaris
+
+        # Should not raise despite Polaris error
+        await group_manager_instance._post_delete_cleanup("testgroup")
+
 
 # =============================================================================
 # TEST DIRECTORY CREATION
