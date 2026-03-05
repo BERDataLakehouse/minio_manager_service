@@ -16,6 +16,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..minio.models.policy import PolicyModel, PolicyTarget
 from ..minio.models.user import UserModel
 from ..minio.utils.validators import validate_group_name
+from ..polaris.constants import (
+    ICEBERG_STORAGE_SUBDIRECTORY,
+    normalize_group_name_for_polaris,
+)
 from ..service.app_state import get_app_state
 from ..service.dependencies import auth, require_admin
 from ..service.exceptions import (
@@ -389,6 +393,20 @@ async def create_group(
         creator=authenticated_user.user,
     )
 
+    group_config = app_state.group_manager.config
+    storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{group_name}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
+
+    await app_state.polaris_service.ensure_tenant_catalog(group_name, storage_location)
+
+    # Ensure the creator has a Polaris principal (idempotent — handles pre-Polaris users)
+    await app_state.polaris_service.create_principal(name=authenticated_user.user)
+
+    # The creator should be automatically granted the writer role
+    writer_principal_role = f"{group_name}_member"
+    await app_state.polaris_service.grant_principal_role_to_principal(
+        authenticated_user.user, writer_principal_role
+    )
+
     # Return response for the main group (read/write), including RO group info
     response = GroupManagementResponse(
         group_name=group_info.group_name,
@@ -421,14 +439,36 @@ async def add_group_member(
 ):
     """Add a member to a group."""
     app_state = get_app_state(request)
+    base_group_name, is_read_only_group = normalize_group_name_for_polaris(group_name)
 
     await app_state.group_manager.add_user_to_group(username, group_name)
+
+    # Ensure tenant catalog exists in Polaris (idempotent — handles pre-Polaris groups)
+    group_config = app_state.group_manager.config
+    storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{base_group_name}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
+    await app_state.polaris_service.ensure_tenant_catalog(
+        base_group_name, storage_location
+    )
+
+    # Ensure the user has a Polaris principal (idempotent — handles pre-Polaris users)
+    await app_state.polaris_service.create_principal(name=username)
+
+    # Grant the user's principal the correct tenant principal role.
+    principal_role_name = (
+        f"{base_group_name}ro_member"
+        if is_read_only_group
+        else f"{base_group_name}_member"
+    )
+    await app_state.polaris_service.grant_principal_role_to_principal(
+        username, principal_role_name
+    )
 
     # Get updated group info
     group_info = await app_state.group_manager.get_group_info(group_name)
 
     response = GroupManagementResponse(
         group_name=group_info.group_name,
+        ro_group_name=f"{base_group_name}ro",
         members=group_info.members,
         member_count=len(group_info.members),
         policy_name=str(group_info.policy_name),
@@ -457,14 +497,25 @@ async def remove_group_member(
 ):
     """Remove a member from a group."""
     app_state = get_app_state(request)
+    base_group_name, is_read_only_group = normalize_group_name_for_polaris(group_name)
 
     await app_state.group_manager.remove_user_from_group(username, group_name)
+
+    principal_role_name = (
+        f"{base_group_name}ro_member"
+        if is_read_only_group
+        else f"{base_group_name}_member"
+    )
+    await app_state.polaris_service.revoke_principal_role_from_principal(
+        username, principal_role_name
+    )
 
     # Get updated group info
     group_info = await app_state.group_manager.get_group_info(group_name)
 
     response = GroupManagementResponse(
         group_name=group_info.group_name,
+        ro_group_name=f"{base_group_name}ro",
         members=group_info.members,
         member_count=len(group_info.members),
         policy_name=str(group_info.policy_name),

@@ -119,6 +119,13 @@ def mock_app_state():
     app_state.policy_manager.detach_policy_from_group = AsyncMock()
     app_state.policy_manager.delete_resource = AsyncMock(return_value=True)
 
+    # Mock Polaris Service
+    app_state.polaris_service = AsyncMock()
+    app_state.polaris_service.create_principal = AsyncMock(return_value={})
+    app_state.polaris_service.grant_principal_role_to_principal = AsyncMock()
+    app_state.polaris_service.revoke_principal_role_from_principal = AsyncMock()
+    app_state.polaris_service.ensure_tenant_catalog = AsyncMock()
+
     return app_state
 
 
@@ -769,3 +776,162 @@ class TestManagementIntegration:
         data = response.json()
 
         assert data["performed_by"] == "admin"
+
+
+# === POLARIS INTEGRATION TESTS ===
+
+
+class TestPolarisIntegration:
+    """Tests for Polaris service interactions in management routes."""
+
+    @pytest.fixture
+    def polaris_app_state(self, mock_app_state):
+        """Create mock app_state with explicit Polaris service mock."""
+        polaris = AsyncMock()
+        mock_app_state.polaris_service = polaris
+        mock_app_state.group_manager.config = MagicMock()
+        mock_app_state.group_manager.config.default_bucket = "cdm-lake"
+        mock_app_state.group_manager.config.tenant_sql_warehouse_prefix = (
+            "tenant-sql-warehouse"
+        )
+        return mock_app_state
+
+    @pytest.fixture
+    def polaris_client(self, test_app, polaris_app_state):
+        """Create test client with Polaris-enabled app state."""
+        with patch(
+            "src.routes.management.get_app_state", return_value=polaris_app_state
+        ):
+            yield TestClient(test_app, raise_server_exceptions=False)
+
+    def test_create_group_calls_ensure_tenant_catalog(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test create_group calls ensure_tenant_catalog with correct args."""
+        response = polaris_client.post("/management/groups/newgroup")
+
+        assert response.status_code == 201
+        polaris_app_state.polaris_service.ensure_tenant_catalog.assert_called_once_with(
+            "newgroup",
+            "s3a://cdm-lake/tenant-sql-warehouse/newgroup/iceberg/",
+        )
+
+    def test_create_group_ensures_creator_principal(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test create_group ensures the creator has a Polaris principal."""
+        response = polaris_client.post("/management/groups/newgroup")
+
+        assert response.status_code == 201
+        polaris_app_state.polaris_service.create_principal.assert_called_once_with(
+            name="admin"
+        )
+
+    def test_create_group_grants_writer_role_to_creator(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test create_group grants the writer principal role to the creator."""
+        response = polaris_client.post("/management/groups/newgroup")
+
+        assert response.status_code == 201
+        polaris_app_state.polaris_service.grant_principal_role_to_principal.assert_called_once_with(
+            "admin", "newgroup_member"
+        )
+
+    def test_add_member_ensures_tenant_catalog(self, polaris_client, polaris_app_state):
+        """Test add_group_member calls ensure_tenant_catalog for pre-Polaris groups."""
+        response = polaris_client.post("/management/groups/group1/members/user2")
+
+        assert response.status_code == 200
+        polaris_app_state.polaris_service.ensure_tenant_catalog.assert_called_once_with(
+            "group1",
+            "s3a://cdm-lake/tenant-sql-warehouse/group1/iceberg/",
+        )
+
+    def test_add_member_ensures_user_principal(self, polaris_client, polaris_app_state):
+        """Test add_group_member ensures the user has a Polaris principal."""
+        response = polaris_client.post("/management/groups/group1/members/user2")
+
+        assert response.status_code == 200
+        polaris_app_state.polaris_service.create_principal.assert_called_once_with(
+            name="user2"
+        )
+
+    def test_add_member_grants_principal_role(self, polaris_client, polaris_app_state):
+        """Test add_group_member grants tenant principal role to the user."""
+        response = polaris_client.post("/management/groups/group1/members/user2")
+
+        assert response.status_code == 200
+        polaris_app_state.polaris_service.grant_principal_role_to_principal.assert_called_once_with(
+            "user2", "group1_member"
+        )
+
+    def test_add_ro_member_uses_base_group_for_catalog_and_reader_role(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test add_group_member for *ro groups maps to base tenant catalog and reader role."""
+        response = polaris_client.post("/management/groups/group1ro/members/user2")
+
+        assert response.status_code == 200
+        polaris_app_state.polaris_service.ensure_tenant_catalog.assert_called_once_with(
+            "group1",
+            "s3a://cdm-lake/tenant-sql-warehouse/group1/iceberg/",
+        )
+        polaris_app_state.polaris_service.grant_principal_role_to_principal.assert_called_once_with(
+            "user2", "group1ro_member"
+        )
+
+    def test_remove_member_revokes_principal_role(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test remove_group_member revokes tenant principal role from the user."""
+        response = polaris_client.delete("/management/groups/group1/members/user1")
+
+        assert response.status_code == 200
+        polaris_app_state.polaris_service.revoke_principal_role_from_principal.assert_called_once_with(
+            "user1", "group1_member"
+        )
+
+    def test_remove_ro_member_revokes_reader_role(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test remove_group_member for *ro groups revokes reader role."""
+        response = polaris_client.delete("/management/groups/group1ro/members/user1")
+
+        assert response.status_code == 200
+        polaris_app_state.polaris_service.revoke_principal_role_from_principal.assert_called_once_with(
+            "user1", "group1ro_member"
+        )
+
+    def test_polaris_error_propagates_on_create_group(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test Polaris errors propagate and cause group creation to fail."""
+        polaris_app_state.polaris_service.ensure_tenant_catalog.side_effect = Exception(
+            "Polaris unavailable"
+        )
+
+        response = polaris_client.post("/management/groups/newgroup")
+        assert response.status_code == 500
+
+    def test_polaris_error_propagates_on_add_member(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test Polaris errors propagate and cause add member to fail."""
+        polaris_app_state.polaris_service.grant_principal_role_to_principal.side_effect = Exception(
+            "Polaris unavailable"
+        )
+
+        response = polaris_client.post("/management/groups/group1/members/user2")
+        assert response.status_code == 500
+
+    def test_polaris_error_propagates_on_remove_member(
+        self, polaris_client, polaris_app_state
+    ):
+        """Test Polaris errors propagate and cause remove member to fail."""
+        polaris_app_state.polaris_service.revoke_principal_role_from_principal.side_effect = Exception(
+            "Polaris unavailable"
+        )
+
+        response = polaris_client.delete("/management/groups/group1/members/user1")
+        assert response.status_code == 500
