@@ -76,7 +76,7 @@ flowchart TD
 
 | Endpoint                  | Method | Description                                              |
 |---------------------------|--------|----------------------------------------------------------|
-| `/v1/polaris/user_provision/{user}`| POST | Provision Polaris user environment (catalog, principal, roles, credentials, tenant access). |
+| `/polaris/user_provision/{user}`| POST | Provision Polaris user environment (catalog, principal, roles, credentials, tenant access). |
 | `/credentials/`           | GET    | Get/refresh MinIO user credentials and current policy.   |
 | `/users/{user}/share`     | POST   | Grant path-level access between users/groups (Delta).    |
 | `/groups/{group}`         | POST   | Create/update group, creating S3 policy & Polaris catalog.|
