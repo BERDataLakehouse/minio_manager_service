@@ -447,6 +447,86 @@ class TestCreateUser:
         # Should call put_object for directory markers and welcome file
         assert mock_minio_client.put_object.call_count >= 1
 
+    @pytest.mark.asyncio
+    async def test_create_user_calls_polaris_ensure_tenant_catalog(
+        self,
+        user_manager,
+        mock_executor,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
+    ):
+        """Test that create_user calls ensure_tenant_catalog when creating globalusers group."""
+        mock_executor._execute_command.return_value = MagicMock(success=True, stderr="")
+        mock_policy_manager.ensure_user_policies.return_value = (
+            sample_user_home_policy,
+            sample_user_system_policy,
+        )
+        user_manager.resource_exists = AsyncMock(return_value=False)
+        mock_group_manager.resource_exists.return_value = False  # Group doesn't exist
+
+        polaris = AsyncMock()
+        user_manager.polaris_service = polaris
+
+        await user_manager.create_user("testuser")
+
+        polaris.ensure_tenant_catalog.assert_called_once_with(
+            GLOBAL_USER_GROUP,
+            f"s3a://test-bucket/tenant-sql-warehouse/{GLOBAL_USER_GROUP}/iceberg/",
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_user_skips_polaris_when_none(
+        self,
+        user_manager,
+        mock_executor,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
+    ):
+        """Test create_user skips Polaris when service is not configured."""
+        mock_executor._execute_command.return_value = MagicMock(success=True, stderr="")
+        mock_policy_manager.ensure_user_policies.return_value = (
+            sample_user_home_policy,
+            sample_user_system_policy,
+        )
+        user_manager.resource_exists = AsyncMock(return_value=False)
+        mock_group_manager.resource_exists.return_value = False
+        user_manager.polaris_service = None
+
+        # Should not raise
+        result = await user_manager.create_user("testuser")
+        assert result.username == "testuser"
+
+    @pytest.mark.asyncio
+    async def test_create_user_polaris_error_handled(
+        self,
+        user_manager,
+        mock_executor,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
+    ):
+        """Test Polaris errors during create_user are logged but not re-raised."""
+        mock_executor._execute_command.return_value = MagicMock(success=True, stderr="")
+        mock_policy_manager.ensure_user_policies.return_value = (
+            sample_user_home_policy,
+            sample_user_system_policy,
+        )
+        user_manager.resource_exists = AsyncMock(return_value=False)
+        mock_group_manager.resource_exists.return_value = False
+
+        polaris = AsyncMock()
+        polaris.ensure_tenant_catalog.side_effect = Exception("Polaris down")
+        user_manager.polaris_service = polaris
+
+        # Should not raise despite Polaris error
+        result = await user_manager.create_user("testuser")
+        assert result.username == "testuser"
+
 
 # =============================================================================
 # Test: Get User
@@ -742,6 +822,45 @@ class TestDeleteCleanup:
         # Should list and delete objects
         assert mock_minio_client.list_objects.call_count >= 1
         assert mock_minio_client.delete_object.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_calls_polaris(
+        self, user_manager, mock_minio_client
+    ):
+        """Test post-delete cleanup calls Polaris user resource cleanup."""
+        mock_minio_client.list_objects.return_value = []
+        polaris = AsyncMock()
+        user_manager.polaris_service = polaris
+
+        await user_manager._post_delete_cleanup("testuser")
+
+        polaris.delete_catalog.assert_called_once_with("user_testuser")
+        polaris.delete_principal.assert_called_once_with("testuser")
+        polaris.delete_principal_role.assert_called_once_with("testuser_role")
+
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_skips_polaris_when_none(
+        self, user_manager, mock_minio_client
+    ):
+        """Test post-delete cleanup skips Polaris when service is not set."""
+        mock_minio_client.list_objects.return_value = []
+        user_manager.polaris_service = None
+
+        # Should not raise
+        await user_manager._post_delete_cleanup("testuser")
+
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_polaris_error_handled(
+        self, user_manager, mock_minio_client
+    ):
+        """Test Polaris errors during cleanup are logged but not re-raised."""
+        mock_minio_client.list_objects.return_value = []
+        polaris = AsyncMock()
+        polaris.delete_catalog.side_effect = Exception("Polaris unavailable")
+        user_manager.polaris_service = polaris
+
+        # Should not raise despite Polaris error
+        await user_manager._post_delete_cleanup("testuser")
 
 
 # =============================================================================
