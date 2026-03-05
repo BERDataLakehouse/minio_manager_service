@@ -109,33 +109,36 @@ async def provision_polaris_user(
         # In this architecture, JupyterHub gets the credentials and injects them into the pod ENV.
         creds = await polaris.rotate_principal_credentials(name=username)
 
-    except Exception as e:
-        logger.exception(f"Failed to provision Polaris catalog for {username}")
+        # Check for group memberships to determine tenant catalogs and grant access.
+        # This must happen AFTER the principal is created above, because
+        # grant_principal_role_to_principal requires the principal to exist.
+        user_groups = await app_state_obj.group_manager.get_user_groups(username)
+        group_config = app_state_obj.user_manager.config
+        tenant_catalogs = []
+        for g in user_groups:
+            base_group, is_ro = normalize_group_name_for_polaris(g)
+            tenant_catalogs.append(f"tenant_{base_group}")
+
+            # Ensure the tenant catalog and roles exist (idempotent).
+            # This handles groups that were created before Polaris was integrated.
+            storage = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{base_group}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
+            await polaris.ensure_tenant_catalog(base_group, storage)
+
+            # Grant the appropriate principal role for this group
+            principal_role = (
+                f"{base_group}ro_member" if is_ro else f"{base_group}_member"
+            )
+            await polaris.grant_principal_role_to_principal(username, principal_role)
+
+        # Remove duplicates but preserve order
+        tenant_catalogs = list(dict.fromkeys(tenant_catalogs))
+
+    except Exception:
+        logger.exception(f"Failed to provision Polaris environment for {username}")
         raise HTTPException(
-            status_code=500, detail=f"Failed to provision Polaris catalog: {str(e)}"
+            status_code=500,
+            detail=f"Failed to provision Polaris environment for {username}",
         )
-
-    # Check for group memberships to determine tenant catalogs and grant access.
-    # This must happen AFTER the principal is created above, because
-    # grant_principal_role_to_principal requires the principal to exist.
-    user_groups = await app_state_obj.group_manager.get_user_groups(username)
-    group_config = app_state_obj.user_manager.config
-    tenant_catalogs = []
-    for g in user_groups:
-        base_group, is_ro = normalize_group_name_for_polaris(g)
-        tenant_catalogs.append(f"tenant_{base_group}")
-
-        # Ensure the tenant catalog and roles exist (idempotent).
-        # This handles groups that were created before Polaris was integrated.
-        storage = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{base_group}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
-        await polaris.ensure_tenant_catalog(base_group, storage)
-
-        # Grant the appropriate principal role for this group
-        principal_role = f"{base_group}ro_member" if is_ro else f"{base_group}_member"
-        await polaris.grant_principal_role_to_principal(username, principal_role)
-
-    # Remove duplicates but preserve order
-    tenant_catalogs = list(dict.fromkeys(tenant_catalogs))
 
     return {
         "client_id": creds.get("credentials", {}).get("clientId"),

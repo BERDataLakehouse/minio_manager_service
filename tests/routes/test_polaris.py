@@ -186,7 +186,7 @@ class TestProvisionPolarisUser:
         response = client.post("/polaris/user_provision/testuser")
 
         assert response.status_code == 500
-        assert "Failed to provision Polaris catalog" in response.json()["detail"]
+        assert "Failed to provision Polaris environment" in response.json()["detail"]
 
     def test_provision_catalog_with_group_memberships(
         self, mock_app_state_obj, regular_user
@@ -266,3 +266,42 @@ class TestProvisionPolarisUser:
 
         data = response.json()
         assert data["tenant_catalogs"].count("tenant_globalusers") == 1
+
+    def test_provision_tenant_catalog_failure_returns_500(
+        self, mock_app_state_obj, regular_user
+    ):
+        """Test that a failure in ensure_tenant_catalog returns a clean 500."""
+        mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
+            return_value=["teamA"]
+        )
+        mock_app_state_obj.polaris_service.ensure_tenant_catalog = AsyncMock(
+            side_effect=Exception("Polaris connection refused")
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/polaris/user_provision/testuser")
+
+        assert response.status_code == 500
+        data = response.json()
+        assert "Failed to provision Polaris environment" in data["detail"]
+        # Internal error details should not leak to the client
+        assert "connection refused" not in data["detail"].lower()
+
+    def test_provision_grant_tenant_role_failure_returns_500(
+        self, mock_app_state_obj, regular_user
+    ):
+        """Test that a failure in grant_principal_role_to_principal for tenant returns 500."""
+        mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
+            return_value=["teamA"]
+        )
+        mock_app_state_obj.polaris_service.grant_principal_role_to_principal = (
+            AsyncMock(side_effect=Exception("grant failed"))
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/polaris/user_provision/testuser")
+
+        assert response.status_code == 500
+        data = response.json()
+        assert "Failed to provision Polaris environment" in data["detail"]
+        assert "grant failed" not in data["detail"]
