@@ -50,7 +50,7 @@ class GroupManager(ResourceManager[GroupModel]):
         if self._user_manager is None:
             from .user_manager import UserManager
 
-            self._user_manager = UserManager(self.client, self.config)
+            self._user_manager = UserManager(self.client, self.config, polaris_service=self.polaris_service)
         return self._user_manager
 
     @property
