@@ -2,9 +2,11 @@
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import aiohttp
 
 from src.polaris.polaris_service import PolarisService
+from src.service.exceptions import PolarisOperationError
 
 
 # === FIXTURES ===
@@ -244,7 +246,7 @@ class TestRequest:
 
         polaris_service._session = session
 
-        with pytest.raises(aiohttp.ClientResponseError):
+        with pytest.raises(PolarisOperationError):
             await polaris_service._request("GET", "/catalogs")
 
         assert polaris_service._token is None
@@ -328,9 +330,7 @@ class TestCreateCatalog:
     @pytest.mark.asyncio
     async def test_create_catalog_conflict_returns_existing(self, polaris_service):
         """Test 409 conflict falls back to get_catalog."""
-        conflict_error = aiohttp.ClientResponseError(
-            request_info=MagicMock(), history=(), status=409, message="Conflict"
-        )
+        conflict_error = PolarisOperationError("Conflict", status=409)
 
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
@@ -348,16 +348,14 @@ class TestCreateCatalog:
     @pytest.mark.asyncio
     async def test_create_catalog_non_conflict_error_raises(self, polaris_service):
         """Test non-409 errors are re-raised."""
-        server_error = aiohttp.ClientResponseError(
-            request_info=MagicMock(), history=(), status=500, message="Server Error"
-        )
+        server_error = PolarisOperationError("Server Error", status=500)
 
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
             mock_req.side_effect = server_error
 
-            with pytest.raises(aiohttp.ClientResponseError) as exc_info:
+            with pytest.raises(PolarisOperationError) as exc_info:
                 await polaris_service.create_catalog("test", "s3://bucket/path/")
             assert exc_info.value.status == 500
 
@@ -390,9 +388,7 @@ class TestCreatePrincipal:
     @pytest.mark.asyncio
     async def test_create_principal_conflict_returns_existing(self, polaris_service):
         """Test 409 conflict falls back to get_principal."""
-        conflict = aiohttp.ClientResponseError(
-            request_info=MagicMock(), history=(), status=409, message="Conflict"
-        )
+        conflict = PolarisOperationError("Conflict", status=409)
 
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
@@ -474,9 +470,7 @@ class TestCatalogRoles:
     @pytest.mark.asyncio
     async def test_create_catalog_role_conflict(self, polaris_service):
         """Test 409 conflict falls back to GET existing role."""
-        conflict = aiohttp.ClientResponseError(
-            request_info=MagicMock(), history=(), status=409, message="Conflict"
-        )
+        conflict = PolarisOperationError("Conflict", status=409)
 
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
@@ -519,9 +513,7 @@ class TestCatalogRoles:
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.side_effect = aiohttp.ClientResponseError(
-                request_info=MagicMock(), history=(), status=409, message="Conflict"
-            )
+            mock_req.side_effect = PolarisOperationError("Conflict", status=409)
 
             result = await polaris_service.grant_catalog_privilege(
                 "cat", "role", "SOME_PRIV"
@@ -534,14 +526,11 @@ class TestCatalogRoles:
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.side_effect = aiohttp.ClientResponseError(
-                request_info=MagicMock(),
-                history=(),
-                status=500,
-                message="Unexpected server failure",
+            mock_req.side_effect = PolarisOperationError(
+                "Unexpected server failure", status=500
             )
 
-            with pytest.raises(aiohttp.ClientResponseError) as exc_info:
+            with pytest.raises(PolarisOperationError) as exc_info:
                 await polaris_service.grant_catalog_privilege(
                     "cat", "role", "SOME_PRIV"
                 )
@@ -555,11 +544,9 @@ class TestCatalogRoles:
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.side_effect = aiohttp.ClientResponseError(
-                request_info=MagicMock(),
-                history=(),
+            mock_req.side_effect = PolarisOperationError(
+                "duplicate key value violates unique constraint already exists",
                 status=500,
-                message="duplicate key value violates unique constraint already exists",
             )
 
             result = await polaris_service.grant_catalog_privilege(
@@ -593,9 +580,7 @@ class TestPrincipalRoles:
     @pytest.mark.asyncio
     async def test_create_principal_role_conflict(self, polaris_service):
         """Test 409 conflict falls back to GET existing role."""
-        conflict = aiohttp.ClientResponseError(
-            request_info=MagicMock(), history=(), status=409, message="Conflict"
-        )
+        conflict = PolarisOperationError("Conflict", status=409)
 
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
@@ -740,9 +725,7 @@ class TestPrincipalRoles:
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.side_effect = aiohttp.ClientResponseError(
-                MagicMock(), (), status=404, message="Not Found"
-            )
+            mock_req.side_effect = PolarisOperationError("Not Found", status=404)
 
             await polaris_service.revoke_principal_role_from_principal(
                 principal="nonexistent", principal_role="tgu2_role"
@@ -818,9 +801,7 @@ class TestDeletions:
     @pytest.mark.asyncio
     async def test_delete_principal_not_found(self, polaris_service):
         """Test deleting a principal ignores 404 cleanly."""
-        not_found = aiohttp.ClientResponseError(
-            request_info=MagicMock(), history=(), status=404, message="Not Found"
-        )
+        not_found = PolarisOperationError("Not Found", status=404)
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:

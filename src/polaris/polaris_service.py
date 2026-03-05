@@ -1,7 +1,10 @@
 import json
 import logging
 from typing import Any, Dict, List, Optional
+
 import aiohttp
+
+from ..service.exceptions import PolarisOperationError
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +129,7 @@ class PolarisService:
                 logger.warning(
                     "Polaris admin token expired or invalid, clearing cache."
                 )
-            raise e
+            raise PolarisOperationError(str(e.message), status=e.status) from e
 
     async def create_catalog(
         self,
@@ -172,7 +175,7 @@ class PolarisService:
         }
         try:
             return await self._request("POST", "/catalogs", json=payload)
-        except aiohttp.ClientResponseError as e:
+        except PolarisOperationError as e:
             if e.status == 409:  # Conflict - already exists
                 return await self.get_catalog(name)
             raise e
@@ -191,7 +194,7 @@ class PolarisService:
         payload = {"principal": {"name": name, "type": "USER", "properties": {}}}
         try:
             return await self._request("POST", "/principals", json=payload)
-        except aiohttp.ClientResponseError as e:
+        except PolarisOperationError as e:
             if e.status == 409:
                 return await self.get_principal(name)
             raise e
@@ -236,7 +239,7 @@ class PolarisService:
             return await self._request(
                 "POST", f"/catalogs/{catalog}/catalog-roles", json=payload
             )
-        except aiohttp.ClientResponseError as e:
+        except PolarisOperationError as e:
             if e.status == 409:
                 return await self._request(
                     "GET", f"/catalogs/{catalog}/catalog-roles/{role_name}"
@@ -254,10 +257,8 @@ class PolarisService:
                 f"/catalogs/{catalog}/catalog-roles/{role_name}/grants",
                 json=payload,
             )
-        except aiohttp.ClientResponseError as e:
-            if e.status == 409 or (
-                e.status == 500 and "already exists" in str(e.message)
-            ):
+        except PolarisOperationError as e:
+            if e.status == 409 or (e.status == 500 and "already exists" in str(e)):
                 logger.warning(
                     "Conflict while granting catalog privilege '%s' on catalog "
                     "'%s' to role '%s'; assuming privilege is already granted.",
@@ -280,7 +281,7 @@ class PolarisService:
         payload = {"principalRole": {"name": role_name, "properties": {}}}
         try:
             return await self._request("POST", "/principal-roles", json=payload)
-        except aiohttp.ClientResponseError as e:
+        except PolarisOperationError as e:
             if e.status == 409:
                 return await self._request("GET", f"/principal-roles/{role_name}")
             raise e
@@ -343,7 +344,7 @@ class PolarisService:
         """Revoke a principal role from a user (principal) (idempotent — checks first)."""
         try:
             existing = await self.get_principal_roles_for_principal(principal)
-        except aiohttp.ClientResponseError as e:
+        except PolarisOperationError as e:
             if e.status == 404:
                 logger.info(
                     "Principal '%s' not found in Polaris, skipping revoke of '%s'.",
@@ -414,7 +415,7 @@ class PolarisService:
         try:
             await self._request("DELETE", f"/principals/{name}")
             logger.info(f"Deleted Polaris principal {name}")
-        except aiohttp.ClientResponseError as e:
+        except PolarisOperationError as e:
             if e.status == 404:
                 logger.info(f"Polaris principal {name} not found, ignoring deletion.")
             else:
@@ -425,7 +426,7 @@ class PolarisService:
         try:
             await self._request("DELETE", f"/catalogs/{name}")
             logger.info(f"Deleted Polaris catalog {name}")
-        except aiohttp.ClientResponseError as e:
+        except PolarisOperationError as e:
             if e.status == 404:
                 logger.info(f"Polaris catalog {name} not found, ignoring deletion.")
             else:
@@ -436,7 +437,7 @@ class PolarisService:
         try:
             await self._request("DELETE", f"/principal-roles/{name}")
             logger.info(f"Deleted Polaris principal role {name}")
-        except aiohttp.ClientResponseError as e:
+        except PolarisOperationError as e:
             if e.status == 404:
                 logger.info(
                     f"Polaris principal role {name} not found, ignoring deletion."
