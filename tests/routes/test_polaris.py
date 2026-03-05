@@ -122,7 +122,7 @@ class TestProvisionPolarisUser:
 
         mock_app_state_obj.polaris_service.create_catalog.assert_called_once_with(
             name="user_testuser",
-            storage_location="s3://cdm-lake/users-sql-warehouse/testuser/iceberg/",
+            storage_location="s3a://cdm-lake/users-sql-warehouse/testuser/iceberg/",
         )
 
     def test_provision_catalog_creates_all_polaris_resources(
