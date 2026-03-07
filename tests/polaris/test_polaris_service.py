@@ -486,11 +486,51 @@ class TestCatalogRoles:
             assert result == {"catalogRole": {"name": "catalog_admin"}}
 
     @pytest.mark.asyncio
-    async def test_grant_catalog_privilege(self, polaris_service):
-        """Test granting a privilege on a catalog to a role."""
+    async def test_get_grants_for_catalog_role(self, polaris_service):
+        """Test listing privilege names for a catalog role."""
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
+            mock_req.return_value = {
+                "grants": [
+                    {"type": "catalog", "privilege": "CATALOG_MANAGE_CONTENT"},
+                    {"type": "catalog", "privilege": "TABLE_READ_DATA"},
+                ]
+            }
+
+            result = await polaris_service.get_grants_for_catalog_role("cat", "role")
+
+            assert result == ["CATALOG_MANAGE_CONTENT", "TABLE_READ_DATA"]
+            mock_req.assert_called_once_with(
+                "GET", "/catalogs/cat/catalog-roles/role/grants"
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_grants_for_catalog_role_empty(self, polaris_service):
+        """Test returns empty list when no grants exist."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = {"grants": []}
+
+            result = await polaris_service.get_grants_for_catalog_role("cat", "role")
+
+            assert result == []
+
+    @pytest.mark.asyncio
+    async def test_grant_catalog_privilege(self, polaris_service):
+        """Test granting a privilege on a catalog to a role."""
+        with (
+            patch.object(
+                polaris_service,
+                "get_grants_for_catalog_role",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(
+                polaris_service, "_request", new_callable=AsyncMock
+            ) as mock_req,
+        ):
             mock_req.return_value = {}
 
             await polaris_service.grant_catalog_privilege(
@@ -506,53 +546,27 @@ class TestCatalogRoles:
             )
 
     @pytest.mark.asyncio
-    async def test_grant_catalog_privilege_conflict_returns_empty(
+    async def test_grant_catalog_privilege_already_granted_skips(
         self, polaris_service
     ):
-        """Test 409 conflict returns empty dict (already granted)."""
-        with patch.object(
-            polaris_service, "_request", new_callable=AsyncMock
-        ) as mock_req:
-            mock_req.side_effect = PolarisOperationError("Conflict", status=409)
-
+        """Test skips PUT when privilege is already granted (check-first pattern)."""
+        with (
+            patch.object(
+                polaris_service,
+                "get_grants_for_catalog_role",
+                new_callable=AsyncMock,
+                return_value=["CATALOG_MANAGE_CONTENT"],
+            ),
+            patch.object(
+                polaris_service, "_request", new_callable=AsyncMock
+            ) as mock_req,
+        ):
             result = await polaris_service.grant_catalog_privilege(
-                "cat", "role", "SOME_PRIV"
+                "cat", "role", "CATALOG_MANAGE_CONTENT"
             )
+
             assert result == {}
-
-    @pytest.mark.asyncio
-    async def test_grant_catalog_privilege_non_conflict_raises(self, polaris_service):
-        """Test non-conflict 500 errors are re-raised."""
-        with patch.object(
-            polaris_service, "_request", new_callable=AsyncMock
-        ) as mock_req:
-            mock_req.side_effect = PolarisOperationError(
-                "Unexpected server failure", status=500
-            )
-
-            with pytest.raises(PolarisOperationError) as exc_info:
-                await polaris_service.grant_catalog_privilege(
-                    "cat", "role", "SOME_PRIV"
-                )
-            assert exc_info.value.status == 500
-
-    @pytest.mark.asyncio
-    async def test_grant_catalog_privilege_duplicate_key_returns_empty(
-        self, polaris_service
-    ):
-        """Test 500 with 'already exists' (Polaris duplicate key bug) returns empty dict."""
-        with patch.object(
-            polaris_service, "_request", new_callable=AsyncMock
-        ) as mock_req:
-            mock_req.side_effect = PolarisOperationError(
-                "duplicate key value violates unique constraint already exists",
-                status=500,
-            )
-
-            result = await polaris_service.grant_catalog_privilege(
-                "cat", "role", "SOME_PRIV"
-            )
-            assert result == {}
+            mock_req.assert_not_called()
 
 
 # === PRINCIPAL ROLE TESTS ===
