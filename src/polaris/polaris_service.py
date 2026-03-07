@@ -246,35 +246,36 @@ class PolarisService:
                 )
             raise e
 
+    async def get_grants_for_catalog_role(
+        self, catalog: str, role_name: str
+    ) -> List[str]:
+        """List privilege names already granted to a catalog role."""
+        resp = await self._request(
+            "GET", f"/catalogs/{catalog}/catalog-roles/{role_name}/grants"
+        )
+        grants = resp.get("grants", [])
+        return [g.get("privilege", "") for g in grants if g.get("privilege")]
+
     async def grant_catalog_privilege(
         self, catalog: str, role_name: str, privilege: str = "CATALOG_MANAGE_CONTENT"
     ) -> Dict[str, Any]:
-        """Grant a privilege on the catalog to a catalog role."""
-        payload = {"grant": {"type": "catalog", "privilege": privilege}}
-        try:
-            return await self._request(
-                "PUT",
-                f"/catalogs/{catalog}/catalog-roles/{role_name}/grants",
-                json=payload,
-            )
-        except PolarisOperationError as e:
-            if e.status == 409 or (e.status == 500 and "already exists" in str(e)):
-                logger.warning(
-                    "Conflict while granting catalog privilege '%s' on catalog "
-                    "'%s' to role '%s'; assuming privilege is already granted.",
-                    privilege,
-                    catalog,
-                    role_name,
-                )
-                return {}
-            logger.warning(
-                "Failed to grant catalog privilege '%s' on catalog '%s' to role '%s': %s",
+        """Grant a privilege on the catalog to a catalog role (idempotent — checks first)."""
+        existing = await self.get_grants_for_catalog_role(catalog, role_name)
+        if privilege in existing:
+            logger.info(
+                "Privilege '%s' already granted to role '%s' on catalog '%s', skipping.",
                 privilege,
-                catalog,
                 role_name,
-                e,
+                catalog,
             )
-            raise
+            return {}
+
+        payload = {"grant": {"type": "catalog", "privilege": privilege}}
+        return await self._request(
+            "PUT",
+            f"/catalogs/{catalog}/catalog-roles/{role_name}/grants",
+            json=payload,
+        )
 
     async def create_principal_role(self, role_name: str) -> Dict[str, Any]:
         """Create a principal role."""
