@@ -546,9 +546,7 @@ class TestCatalogRoles:
             )
 
     @pytest.mark.asyncio
-    async def test_grant_catalog_privilege_already_granted_skips(
-        self, polaris_service
-    ):
+    async def test_grant_catalog_privilege_already_granted_skips(self, polaris_service):
         """Test skips PUT when privilege is already granted (check-first pattern)."""
         with (
             patch.object(
