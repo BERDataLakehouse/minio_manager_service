@@ -141,7 +141,40 @@ class GroupNamesResponse(BaseModel):
     total_count: Annotated[int, Field(description="Total number of groups", ge=0)]
 
 
+class UserNamesResponse(BaseModel):
+    """Response model for listing usernames only (lightweight alternative to full user list)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    usernames: Annotated[list[str], Field(description="List of all usernames")]
+    total_count: Annotated[int, Field(description="Total number of users", ge=0)]
+
+
 # ===== USER MANAGEMENT ENDPOINTS =====
+
+
+@router.get(
+    "/users/names",
+    response_model=UserNamesResponse,
+    summary="List all usernames",
+    description="Get a list of all usernames in the system without fetching full user details. Much faster than the full user list endpoint.",
+)
+async def list_user_names(
+    request: Request,
+    authenticated_user=Depends(require_admin),
+):
+    """List all usernames in the system (lightweight)."""
+    app_state = get_app_state(request)
+
+    all_usernames = await app_state.user_manager.list_resources()
+
+    logger.info(
+        f"Admin {authenticated_user.user} listed {len(all_usernames)} usernames"
+    )
+    return UserNamesResponse(
+        usernames=all_usernames,
+        total_count=len(all_usernames),
+    )
 
 
 @router.get(
