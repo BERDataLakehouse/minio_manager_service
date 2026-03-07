@@ -21,8 +21,11 @@ from fastapi.testclient import TestClient
 from src.minio.models.policy import PolicyDocument, PolicyModel, PolicyTarget
 from src.minio.models.user import UserModel
 from src.routes.management import (
+    EnsurePolarisResponse,
     GroupManagementResponse,
     GroupNamesResponse,
+    MigrationError,
+    RegeneratePoliciesResponse,
     ResourceDeleteResponse,
     UserListResponse,
     UserManagementResponse,
@@ -935,3 +938,346 @@ class TestPolarisIntegration:
 
         response = polaris_client.delete("/management/groups/group1/members/user1")
         assert response.status_code == 500
+
+
+# === MIGRATION ENDPOINT TESTS ===
+
+
+class TestRegeneratePoliciesEndpoint:
+    """Tests for regenerate_all_policies migration endpoint."""
+
+    @pytest.fixture
+    def migration_app_state(self, mock_app_state):
+        """App state configured for migration endpoints."""
+        mock_app_state.user_manager.list_resources = AsyncMock(
+            return_value=["alice", "bob"]
+        )
+        mock_app_state.group_manager.list_resources = AsyncMock(
+            return_value=["team1", "team1ro", "team2", "team2ro"]
+        )
+        mock_app_state.policy_manager.regenerate_user_home_policy = AsyncMock()
+        mock_app_state.policy_manager.regenerate_group_home_policy = AsyncMock()
+        return mock_app_state
+
+    @pytest.fixture
+    def migration_client(self, test_app, migration_app_state):
+        with patch(
+            "src.routes.management.get_app_state", return_value=migration_app_state
+        ):
+            yield TestClient(test_app, raise_server_exceptions=False)
+
+    def test_regenerate_policies_success(self, migration_client, migration_app_state):
+        """Test successful regeneration of all policies."""
+        response = migration_client.post("/management/migrate/regenerate-policies")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_updated"] == 2
+        # 2 base groups × 2 (RW + RO) = 4
+        assert data["groups_updated"] == 4
+        assert data["errors"] == []
+        assert data["performed_by"] == "admin"
+
+    def test_regenerate_policies_calls_user_regenerate(
+        self, migration_client, migration_app_state
+    ):
+        """Test that regenerate is called for each user."""
+        migration_client.post("/management/migrate/regenerate-policies")
+
+        calls = migration_app_state.policy_manager.regenerate_user_home_policy.call_args_list
+        assert len(calls) == 2
+        assert calls[0].args == ("alice",)
+        assert calls[1].args == ("bob",)
+
+    def test_regenerate_policies_calls_group_rw_and_ro(
+        self, migration_client, migration_app_state
+    ):
+        """Test that both RW and RO policies are regenerated for each base group."""
+        migration_client.post("/management/migrate/regenerate-policies")
+
+        calls = migration_app_state.policy_manager.regenerate_group_home_policy.call_args_list
+        # team1 RW, team1ro RO, team2 RW, team2ro RO
+        assert len(calls) == 4
+
+        # team1 RW
+        assert calls[0].kwargs == {"group_name": "team1", "read_only": False}
+        # team1 RO
+        assert calls[1].kwargs == {
+            "group_name": "team1ro",
+            "read_only": True,
+            "path_target": "team1",
+        }
+        # team2 RW
+        assert calls[2].kwargs == {"group_name": "team2", "read_only": False}
+        # team2 RO
+        assert calls[3].kwargs == {
+            "group_name": "team2ro",
+            "read_only": True,
+            "path_target": "team2",
+        }
+
+    def test_regenerate_policies_user_error_continues(
+        self, migration_client, migration_app_state
+    ):
+        """Test that a user error does not block other users."""
+        migration_app_state.policy_manager.regenerate_user_home_policy.side_effect = [
+            Exception("alice policy failed"),
+            AsyncMock(),  # bob succeeds
+        ]
+
+        response = migration_client.post("/management/migrate/regenerate-policies")
+
+        data = response.json()
+        assert data["users_updated"] == 1
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["resource_name"] == "alice"
+        assert "alice policy failed" in data["errors"][0]["error"]
+
+    def test_regenerate_policies_group_error_continues(
+        self, migration_client, migration_app_state
+    ):
+        """Test that a group error does not block other groups."""
+        migration_app_state.policy_manager.regenerate_group_home_policy.side_effect = [
+            Exception("team1 RW failed"),  # team1 RW fails
+            AsyncMock(),  # team1 RO succeeds
+            AsyncMock(),  # team2 RW succeeds
+            AsyncMock(),  # team2 RO succeeds
+        ]
+
+        response = migration_client.post("/management/migrate/regenerate-policies")
+
+        data = response.json()
+        assert data["groups_updated"] == 3
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["resource_name"] == "team1"
+
+    def test_regenerate_policies_no_users_no_groups(
+        self, migration_client, migration_app_state
+    ):
+        """Test with empty user and group lists."""
+        migration_app_state.user_manager.list_resources.return_value = []
+        migration_app_state.group_manager.list_resources.return_value = []
+
+        response = migration_client.post("/management/migrate/regenerate-policies")
+
+        data = response.json()
+        assert data["users_updated"] == 0
+        assert data["groups_updated"] == 0
+        assert data["errors"] == []
+
+
+class TestEnsurePolarisResourcesEndpoint:
+    """Tests for ensure_all_polaris_resources migration endpoint."""
+
+    @pytest.fixture
+    def polaris_migration_state(self, mock_app_state):
+        """App state configured for Polaris migration endpoint."""
+        mock_app_state.user_manager.list_resources = AsyncMock(
+            return_value=["alice", "bob"]
+        )
+        mock_app_state.user_manager.config = MagicMock()
+        mock_app_state.user_manager.config.default_bucket = "cdm-lake"
+        mock_app_state.user_manager.config.users_sql_warehouse_prefix = (
+            "users-sql-warehouse"
+        )
+        mock_app_state.group_manager.list_resources = AsyncMock(
+            return_value=["team1", "team1ro"]
+        )
+        mock_app_state.group_manager.config = MagicMock()
+        mock_app_state.group_manager.config.default_bucket = "cdm-lake"
+        mock_app_state.group_manager.config.tenant_sql_warehouse_prefix = (
+            "tenant-sql-warehouse"
+        )
+        mock_app_state.group_manager.get_user_groups = AsyncMock(return_value=["team1"])
+
+        polaris = AsyncMock()
+        mock_app_state.polaris_service = polaris
+        return mock_app_state
+
+    @pytest.fixture
+    def polaris_migration_client(self, test_app, polaris_migration_state):
+        with patch(
+            "src.routes.management.get_app_state",
+            return_value=polaris_migration_state,
+        ):
+            yield TestClient(test_app, raise_server_exceptions=False)
+
+    def test_ensure_polaris_success(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Test successful Polaris resource provisioning."""
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources"
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_provisioned"] == 2
+        assert data["groups_provisioned"] == 1  # only base group team1
+        assert data["errors"] == []
+
+    def test_ensure_polaris_creates_tenant_catalogs(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Test tenant catalogs are created for base groups only."""
+        polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
+
+        polaris = polaris_migration_state.polaris_service
+        polaris.ensure_tenant_catalog.assert_called_once_with(
+            "team1",
+            "s3a://cdm-lake/tenant-sql-warehouse/team1/iceberg/",
+        )
+
+    def test_ensure_polaris_creates_user_catalogs(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Test personal catalogs are created for each user."""
+        polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
+
+        polaris = polaris_migration_state.polaris_service
+        # Check create_catalog was called for both users
+        catalog_calls = polaris.create_catalog.call_args_list
+        assert len(catalog_calls) == 2
+        assert catalog_calls[0].kwargs == {
+            "name": "user_alice",
+            "storage_location": "s3a://cdm-lake/users-sql-warehouse/alice/iceberg/",
+        }
+        assert catalog_calls[1].kwargs == {
+            "name": "user_bob",
+            "storage_location": "s3a://cdm-lake/users-sql-warehouse/bob/iceberg/",
+        }
+
+    def test_ensure_polaris_creates_principals(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Test principals are created for each user."""
+        polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
+
+        polaris = polaris_migration_state.polaris_service
+        principal_calls = polaris.create_principal.call_args_list
+        assert len(principal_calls) == 2
+        assert principal_calls[0].kwargs == {"name": "alice"}
+        assert principal_calls[1].kwargs == {"name": "bob"}
+
+    def test_ensure_polaris_grants_group_roles(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Test principal roles are granted based on group membership."""
+        polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
+
+        polaris = polaris_migration_state.polaris_service
+        # Both alice and bob are members of team1 (from get_user_groups mock)
+        grant_calls = polaris.grant_principal_role_to_principal.call_args_list
+        # Each user gets: personal role + team1_member role = 2 calls per user = 4 total
+        assert len(grant_calls) == 4
+
+    def test_ensure_polaris_ro_group_membership(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Test RO group membership grants ro_member role."""
+        polaris_migration_state.group_manager.get_user_groups.return_value = ["team1ro"]
+
+        polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
+
+        polaris = polaris_migration_state.polaris_service
+        # Look for grant_principal_role_to_principal calls with ro_member
+        grant_calls = polaris.grant_principal_role_to_principal.call_args_list
+        ro_calls = [c for c in grant_calls if "ro_member" in str(c)]
+        assert len(ro_calls) == 2  # both users get team1ro_member
+
+    def test_ensure_polaris_user_error_continues(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Test that a user error does not block other users."""
+        polaris = polaris_migration_state.polaris_service
+        # First call to create_catalog (alice) fails, second (bob) succeeds
+        polaris.create_catalog.side_effect = [
+            Exception("Polaris down for alice"),
+            AsyncMock(),
+        ]
+
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources"
+        )
+
+        data = response.json()
+        assert data["users_provisioned"] == 1
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["resource_name"] == "alice"
+
+    def test_ensure_polaris_group_error_continues(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Test that a group error does not block other groups."""
+        polaris_migration_state.group_manager.list_resources.return_value = [
+            "team1",
+            "team1ro",
+            "team2",
+            "team2ro",
+        ]
+        polaris = polaris_migration_state.polaris_service
+        polaris.ensure_tenant_catalog.side_effect = [
+            Exception("team1 failed"),
+            AsyncMock(),  # team2 succeeds
+        ]
+
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources"
+        )
+
+        data = response.json()
+        assert data["groups_provisioned"] == 1
+        assert len([e for e in data["errors"] if e["resource_type"] == "group"]) == 1
+
+    def test_ensure_polaris_empty_system(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Test with no users or groups."""
+        polaris_migration_state.user_manager.list_resources.return_value = []
+        polaris_migration_state.group_manager.list_resources.return_value = []
+
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources"
+        )
+
+        data = response.json()
+        assert data["users_provisioned"] == 0
+        assert data["groups_provisioned"] == 0
+        assert data["errors"] == []
+
+
+class TestMigrationResponseModels:
+    """Tests for migration response model validation."""
+
+    def test_migration_error_model(self):
+        error = MigrationError(
+            resource_type="user", resource_name="alice", error="Something broke"
+        )
+        assert error.resource_type == "user"
+        assert error.resource_name == "alice"
+
+    def test_regenerate_policies_response_model(self):
+        response = RegeneratePoliciesResponse(
+            users_updated=5,
+            groups_updated=3,
+            errors=[],
+            performed_by="admin",
+            timestamp=datetime.now(),
+        )
+        assert response.users_updated == 5
+        assert response.groups_updated == 3
+
+    def test_ensure_polaris_response_model(self):
+        response = EnsurePolarisResponse(
+            users_provisioned=10,
+            groups_provisioned=4,
+            errors=[
+                MigrationError(
+                    resource_type="user", resource_name="bob", error="timeout"
+                )
+            ],
+            performed_by="admin",
+            timestamp=datetime.now(),
+        )
+        assert response.users_provisioned == 10
+        assert len(response.errors) == 1
