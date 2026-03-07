@@ -1,5 +1,7 @@
 """Tests for the PolarisService module."""
 
+import json
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -45,6 +47,33 @@ def _make_response(status=200, json_data=None, content_type="application/json"):
     resp.__aenter__ = AsyncMock(return_value=resp)
     resp.__aexit__ = AsyncMock(return_value=None)
     return resp
+
+
+def _make_error_response(status=400, body_text="", reason="Bad Request"):
+    """Helper to create a mock aiohttp response that triggers the error path in _request.
+
+    Unlike _make_response, this sets up text() and request_info so the code path
+    through lines 93-116 (status >= 400 error handling) is properly exercised.
+    """
+    resp = AsyncMock()
+    resp.status = status
+    resp.reason = reason
+    resp.headers = {"Content-Type": "application/json"}
+    resp.text = AsyncMock(return_value=body_text)
+    resp.request_info = MagicMock()
+    resp.history = ()
+    resp.__aenter__ = AsyncMock(return_value=resp)
+    resp.__aexit__ = AsyncMock(return_value=None)
+    return resp
+
+
+def _setup_session_with_response(polaris_service, resp):
+    """Attach a mock session with a token and given response to a PolarisService."""
+    session = AsyncMock()
+    session.request = MagicMock(return_value=resp)
+    session.closed = False
+    polaris_service._session = session
+    polaris_service._token = "preloaded-token"
 
 
 # === INIT TESTS ===
@@ -1007,3 +1036,216 @@ class TestEnsureTenantCatalog:
 
             # Stops at first failing reader privilege grant
             assert mock_grant.call_count == 2
+
+
+# === ERROR BODY PARSING TESTS (lines 100-106) ===
+
+
+class TestRequestErrorParsing:
+    """Tests for _request error body parsing — covers lines 100-106."""
+
+    @pytest.mark.asyncio
+    async def test_request_error_with_polaris_json_error_message(self, polaris_service):
+        """Test error response with Polaris-style JSON: {"error": {"message": "..."}}."""
+        body = json.dumps({"error": {"message": "Catalog not found"}})
+        resp = _make_error_response(status=404, body_text=body, reason="Not Found")
+        _setup_session_with_response(polaris_service, resp)
+
+        with pytest.raises(PolarisOperationError, match="Catalog not found"):
+            await polaris_service._request("GET", "/catalogs/missing")
+
+    @pytest.mark.asyncio
+    async def test_request_error_with_non_polaris_json_body(self, polaris_service):
+        """Test error response with JSON that lacks error.message structure (lines 105-106)."""
+        body = json.dumps({"detail": "bad request", "code": 42})
+        resp = _make_error_response(status=400, body_text=body, reason="Bad Request")
+        _setup_session_with_response(polaris_service, resp)
+
+        with pytest.raises(PolarisOperationError) as exc_info:
+            await polaris_service._request("POST", "/catalogs")
+        # Falls back to raw body_text
+        assert "detail" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_request_error_with_invalid_json_body(self, polaris_service):
+        """Test error response with non-JSON body text (JSONDecodeError path, line 107-108)."""
+        resp = _make_error_response(
+            status=500, body_text="Internal Server Error", reason="Server Error"
+        )
+        _setup_session_with_response(polaris_service, resp)
+
+        with pytest.raises(PolarisOperationError, match="Internal Server Error"):
+            await polaris_service._request("GET", "/catalogs")
+
+    @pytest.mark.asyncio
+    async def test_request_error_with_empty_body(self, polaris_service):
+        """Test error response with empty body falls back to reason."""
+        resp = _make_error_response(status=403, body_text="", reason="Forbidden")
+        _setup_session_with_response(polaris_service, resp)
+
+        with pytest.raises(PolarisOperationError, match="Forbidden"):
+            await polaris_service._request("GET", "/catalogs")
+
+
+# === NON-CONFLICT ERROR RE-RAISE TESTS ===
+
+
+class TestNonConflictErrors:
+    """Tests for non-409 errors re-raised in create methods (lines 200, 247, 288)."""
+
+    @pytest.mark.asyncio
+    async def test_create_principal_non_conflict_error_raises(self, polaris_service):
+        """Test create_principal re-raises non-409 errors (line 200)."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Server Error", status=500)
+
+            with pytest.raises(PolarisOperationError) as exc_info:
+                await polaris_service.create_principal("testuser")
+            assert exc_info.value.status == 500
+
+    @pytest.mark.asyncio
+    async def test_create_catalog_role_non_conflict_error_raises(self, polaris_service):
+        """Test create_catalog_role re-raises non-409 errors (line 247)."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Bad Request", status=400)
+
+            with pytest.raises(PolarisOperationError) as exc_info:
+                await polaris_service.create_catalog_role("cat", "role")
+            assert exc_info.value.status == 400
+
+    @pytest.mark.asyncio
+    async def test_create_principal_role_non_conflict_error_raises(
+        self, polaris_service
+    ):
+        """Test create_principal_role re-raises non-409 errors (line 288)."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Forbidden", status=403)
+
+            with pytest.raises(PolarisOperationError) as exc_info:
+                await polaris_service.create_principal_role("role")
+            assert exc_info.value.status == 403
+
+
+# === UNCOVERED GET/LIST METHODS ===
+
+
+class TestGetPrincipalRoleAndListPrincipalRoles:
+    """Tests for get_principal_role (line 208) and list_principal_roles (lines 218-219)."""
+
+    @pytest.mark.asyncio
+    async def test_get_principal_role(self, polaris_service):
+        """Test getting a specific principal role by name."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = {"principalRole": {"name": "admin_role"}}
+
+            result = await polaris_service.get_principal_role("admin_role")
+
+            mock_req.assert_called_once_with("GET", "/principal-roles/admin_role")
+            assert result["principalRole"]["name"] == "admin_role"
+
+    @pytest.mark.asyncio
+    async def test_list_principal_roles(self, polaris_service):
+        """Test listing all principal roles."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = {"roles": [{"name": "role_a"}, {"name": "role_b"}]}
+
+            result = await polaris_service.list_principal_roles()
+
+            mock_req.assert_called_once_with("GET", "/principal-roles")
+            assert len(result) == 2
+            assert result[0]["name"] == "role_a"
+
+    @pytest.mark.asyncio
+    async def test_list_principal_roles_empty(self, polaris_service):
+        """Test listing principal roles when none exist."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = {}
+
+            result = await polaris_service.list_principal_roles()
+            assert result == []
+
+
+# === REVOKE NON-404 ERROR TEST (line 356) ===
+
+
+class TestRevokeNonNotFoundError:
+    """Test revoke_principal_role_from_principal re-raises non-404 errors."""
+
+    @pytest.mark.asyncio
+    async def test_revoke_principal_role_non_404_error_raises(self, polaris_service):
+        """Test non-404 error during lookup is re-raised (line 356)."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Server Error", status=500)
+
+            with pytest.raises(PolarisOperationError) as exc_info:
+                await polaris_service.revoke_principal_role_from_principal(
+                    principal="user1", principal_role="role1"
+                )
+            assert exc_info.value.status == 500
+
+
+# === DELETION NON-404 ERROR TESTS (lines 423, 430-434, 441-447) ===
+
+
+class TestDeletionNonNotFoundErrors:
+    """Tests for delete methods handling non-404 errors (logs warning, doesn't raise)."""
+
+    @pytest.mark.asyncio
+    async def test_delete_principal_non_404_logs_warning(self, polaris_service):
+        """Test delete_principal with non-404 error logs warning (line 423)."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Forbidden", status=403)
+            # Should not raise — just logs warning
+            await polaris_service.delete_principal("testuser")
+
+    @pytest.mark.asyncio
+    async def test_delete_catalog_not_found(self, polaris_service):
+        """Test delete_catalog with 404 logs info (lines 430-432)."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Not Found", status=404)
+            await polaris_service.delete_catalog("ghost_catalog")
+
+    @pytest.mark.asyncio
+    async def test_delete_catalog_non_404_logs_warning(self, polaris_service):
+        """Test delete_catalog with non-404 error logs warning (lines 433-434)."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Forbidden", status=403)
+            await polaris_service.delete_catalog("tenant_foo")
+
+    @pytest.mark.asyncio
+    async def test_delete_principal_role_not_found(self, polaris_service):
+        """Test delete_principal_role with 404 logs info (lines 441-445)."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Not Found", status=404)
+            await polaris_service.delete_principal_role("ghost_role")
+
+    @pytest.mark.asyncio
+    async def test_delete_principal_role_non_404_logs_warning(self, polaris_service):
+        """Test delete_principal_role with non-404 error logs warning (lines 446-447)."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Server Error", status=500)
+            await polaris_service.delete_principal_role("some_role")
