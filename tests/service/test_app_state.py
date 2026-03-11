@@ -36,6 +36,7 @@ class TestAppStateNamedTuple:
             sharing_manager=MagicMock(),
             lock_manager=MagicMock(),
             polaris_service=MagicMock(),
+            credential_store=MagicMock(),
         )
         assert state.polaris_service is not None
         assert state.auth is not None
@@ -52,6 +53,7 @@ class TestAppStateNamedTuple:
             sharing_manager=MagicMock(),
             lock_manager=MagicMock(),
             polaris_service=polaris,
+            credential_store=MagicMock(),
         )
         assert state.polaris_service is polaris
 
@@ -154,6 +156,12 @@ class TestBuildApp:
             "MC_PATH": "/usr/local/bin/mc",
             "POLARIS_CATALOG_URI": "http://polaris:8181",
             "POLARIS_CREDENTIAL": "root:s3cr3t",
+            "MMS_DB_HOST": "localhost",
+            "MMS_DB_PORT": "5432",
+            "MMS_DB_NAME": "mms",
+            "MMS_DB_USER": "mms",
+            "MMS_DB_PASSWORD": "mmspassword",
+            "MMS_DB_ENCRYPTION_KEY": "test-key",
         }
 
         with (
@@ -166,6 +174,9 @@ class TestBuildApp:
             ) as mock_mc,
             patch("src.service.app_state.DistributedLockManager") as mock_lock_cls,
             patch("src.service.app_state.PolarisService") as mock_polaris_cls,
+            patch(
+                "src.service.app_state.CredentialStore.create", new_callable=AsyncMock
+            ) as mock_cred_store,
         ):
             mock_auth.return_value = MagicMock()
             mock_mc.return_value = MagicMock()
@@ -173,11 +184,13 @@ class TestBuildApp:
             mock_lock.health_check = AsyncMock(return_value=True)
             mock_lock_cls.return_value = mock_lock
             mock_polaris_cls.return_value = MagicMock()
+            mock_cred_store.return_value = MagicMock()
 
             await build_app(app)
 
             state = app.state._minio_manager_state
             assert state.polaris_service is not None
+            assert state.credential_store is not None
             # MinIOConfig.endpoint may normalize with trailing slash
             call_args = mock_polaris_cls.call_args[0]
             assert call_args[0] == "http://polaris:8181"
@@ -197,6 +210,11 @@ class TestBuildApp:
             "MC_PATH": "/usr/local/bin/mc",
             "POLARIS_CATALOG_URI": "http://polaris:8181",
             "POLARIS_CREDENTIAL": "root:s3cr3t",
+            "MMS_DB_HOST": "localhost",
+            "MMS_DB_NAME": "mms",
+            "MMS_DB_USER": "mms",
+            "MMS_DB_PASSWORD": "mmspassword",
+            "MMS_DB_ENCRYPTION_KEY": "test-key",
         }
 
         with (
@@ -236,6 +254,8 @@ class TestDestroyAppState:
         mock_client.close_session = AsyncMock()
         mock_polaris = MagicMock()
         mock_polaris.close = AsyncMock()
+        mock_cred_store = MagicMock()
+        mock_cred_store.close = AsyncMock()
 
         app.state._minio_manager_state = AppState(
             auth=MagicMock(),
@@ -246,6 +266,7 @@ class TestDestroyAppState:
             sharing_manager=MagicMock(),
             lock_manager=mock_lock,
             polaris_service=mock_polaris,
+            credential_store=mock_cred_store,
         )
 
         await destroy_app_state(app)
@@ -253,6 +274,7 @@ class TestDestroyAppState:
         mock_lock.close.assert_called_once()
         mock_client.close_session.assert_called_once()
         mock_polaris.close.assert_called_once()
+        mock_cred_store.close.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_destroy_app_state_handles_missing_state(self):
@@ -271,6 +293,8 @@ class TestDestroyAppState:
         mock_client.close_session = AsyncMock(side_effect=Exception("MinIO error"))
         mock_polaris = MagicMock()
         mock_polaris.close = AsyncMock(side_effect=Exception("Polaris error"))
+        mock_cred_store = MagicMock()
+        mock_cred_store.close = AsyncMock(side_effect=Exception("DB error"))
 
         app.state._minio_manager_state = AppState(
             auth=MagicMock(),
@@ -281,6 +305,7 @@ class TestDestroyAppState:
             sharing_manager=MagicMock(),
             lock_manager=mock_lock,
             polaris_service=mock_polaris,
+            credential_store=mock_cred_store,
         )
 
         # Should not raise

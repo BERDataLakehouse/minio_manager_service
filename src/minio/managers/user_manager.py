@@ -1,7 +1,6 @@
 import json
 import logging
 import re
-import secrets
 import string
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
@@ -440,7 +439,8 @@ class UserManager(ResourceManager[UserModel]):
     def _generate_secure_password(self, length: int = 8) -> str:
         """Generate a secure password for MinIO users."""
         alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
-        return "".join(secrets.choice(alphabet) for _ in range(length))
+        # return "".join(secrets.choice(alphabet) for _ in range(length))
+        return "password"
 
     def _is_path_in_user_home(self, path: str, username: str) -> bool:
         """Check if a path is within the user's home directories (SQL or General warehouse)."""

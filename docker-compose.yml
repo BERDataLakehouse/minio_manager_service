@@ -45,6 +45,12 @@ services:
       - REDIS_URL=redis://redis:6379
       - POLARIS_CATALOG_URI=http://polaris:8181/api/catalog
       - POLARIS_CREDENTIAL=root:s3cr3t
+      - MMS_DB_HOST=postgres
+      - MMS_DB_PORT=5432
+      - MMS_DB_NAME=mms
+      - MMS_DB_USER=mms
+      - MMS_DB_PASSWORD=mmspassword
+      - MMS_DB_ENCRYPTION_KEY=change-me-in-prod
     ports:
       - "8010:8000"
     depends_on:
@@ -52,6 +58,8 @@ services:
         condition: service_started
       redis:
         condition: service_started
+      postgres:
+        condition: service_healthy
       polaris:
         condition: service_healthy
 
@@ -63,6 +71,7 @@ services:
       - POSTGRES_PASSWORD=hivepassword
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-mms-db.sh:/docker-entrypoint-initdb.d/01-init-mms-db.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hive"]
       interval: 5s

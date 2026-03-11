@@ -2,9 +2,10 @@
 Comprehensive tests for the routes.credentials module.
 
 Tests cover:
-- get_credentials endpoint
+- get_credentials endpoint (cache-first behavior)
+- rotate_credentials endpoint
 - User auto-creation for new users
-- Credential rotation for existing users
+- Credential caching via CredentialStore
 - Authentication dependency integration
 - Response model validation
 - Error handling scenarios
@@ -17,7 +18,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.routes.credentials import CredentialsResponse, get_credentials, router
+from src.routes.credentials import (
+    CredentialsResponse,
+    get_credentials,
+    rotate_credentials,
+    router,
+)
 from src.service.app_state import AppState
 from src.service.dependencies import auth
 from src.service.kb_auth import AdminPermission, KBaseUser
@@ -51,6 +57,12 @@ def mock_app_state():
     mock_user_model.secret_key = "new-secret-key-123"
     app_state.user_manager.create_user = AsyncMock(return_value=mock_user_model)
 
+    # Mock credential store — default: cache miss
+    app_state.credential_store = AsyncMock()
+    app_state.credential_store.get_credentials = AsyncMock(return_value=None)
+    app_state.credential_store.store_credentials = AsyncMock()
+    app_state.credential_store.delete_credentials = AsyncMock()
+
     return app_state
 
 
@@ -65,14 +77,6 @@ def test_app(mock_app_state, mock_auth_user):
     """Create a test FastAPI application with mocked dependencies."""
     app = FastAPI()
     app.include_router(router)
-
-    # Store app state
-    app.state.minio_client = MagicMock()
-    app.state.minio_config = MagicMock()
-    app.state.policy_manager = MagicMock()
-    app.state.user_manager = mock_app_state.user_manager
-    app.state.group_manager = MagicMock()
-    app.state.sharing_manager = MagicMock()
 
     # Override auth dependency
     app.dependency_overrides[auth] = lambda: mock_auth_user
@@ -147,11 +151,14 @@ class TestCredentialsResponse:
 
 
 class TestGetCredentialsEndpoint:
-    """Tests for get_credentials endpoint."""
+    """Tests for get_credentials endpoint (cache-first behavior)."""
 
-    def test_get_credentials_existing_user(self, client, mock_app_state):
-        """Test getting credentials for an existing user."""
-        mock_app_state.user_manager.resource_exists.return_value = True
+    def test_get_credentials_cache_hit(self, client, mock_app_state):
+        """Test returning cached credentials from credential store."""
+        mock_app_state.credential_store.get_credentials.return_value = (
+            "testuser",
+            "cached-secret-key-123",
+        )
 
         response = client.get("/credentials/")
 
@@ -159,35 +166,104 @@ class TestGetCredentialsEndpoint:
         data = response.json()
         assert data["username"] == "testuser"
         assert data["access_key"] == "testuser"
+        assert data["secret_key"] == "cached-secret-key-123"
+
+        # Should NOT call MinIO user manager
+        mock_app_state.user_manager.resource_exists.assert_not_called()
+        mock_app_state.user_manager.get_or_rotate_user_credentials.assert_not_called()
+
+    def test_get_credentials_cache_miss_existing_user(self, client, mock_app_state):
+        """Test cache miss for existing user — rotates and stores."""
+        mock_app_state.credential_store.get_credentials.return_value = None
+        mock_app_state.user_manager.resource_exists.return_value = True
+
+        response = client.get("/credentials/")
+
+        assert response.status_code == 200
+        data = response.json()
         assert data["secret_key"] == "test-secret-key-123"
 
-    def test_get_credentials_new_user_auto_create(self, client, mock_app_state):
-        """Test auto-creating a new user when they don't exist."""
+        # Should store in credential store
+        mock_app_state.credential_store.store_credentials.assert_called_once_with(
+            "testuser", "testuser", "test-secret-key-123"
+        )
+
+    def test_get_credentials_cache_miss_new_user(self, client, mock_app_state):
+        """Test cache miss for new user — creates and stores."""
+        mock_app_state.credential_store.get_credentials.return_value = None
         mock_app_state.user_manager.resource_exists.return_value = False
 
         response = client.get("/credentials/")
 
         assert response.status_code == 200
         data = response.json()
-        assert data["username"] == "testuser"
-        assert data["access_key"] == "testuser"
         assert data["secret_key"] == "new-secret-key-123"
 
-        # Verify create_user was called
         mock_app_state.user_manager.create_user.assert_called_once_with(
             username="testuser"
         )
+        mock_app_state.credential_store.store_credentials.assert_called_once_with(
+            "testuser", "testuser", "new-secret-key-123"
+        )
 
-    def test_get_credentials_rotates_existing_user_credentials(
-        self, client, mock_app_state
-    ):
-        """Test that credentials are rotated for existing users."""
+    def test_get_credentials_idempotent(self, client, mock_app_state):
+        """Test that multiple calls return same cached credentials."""
+        mock_app_state.credential_store.get_credentials.return_value = (
+            "testuser",
+            "cached-secret-key-123",
+        )
+
+        response1 = client.get("/credentials/")
+        response2 = client.get("/credentials/")
+
+        assert response1.json() == response2.json()
+        # MinIO rotation should never be called
+        mock_app_state.user_manager.get_or_rotate_user_credentials.assert_not_called()
+
+
+# === ROTATE CREDENTIALS ENDPOINT TESTS ===
+
+
+class TestRotateCredentialsEndpoint:
+    """Tests for POST /credentials/rotate endpoint."""
+
+    def test_rotate_credentials_existing_user(self, client, mock_app_state):
+        """Test rotating credentials for an existing user."""
         mock_app_state.user_manager.resource_exists.return_value = True
 
-        client.get("/credentials/")
+        response = client.post("/credentials/rotate")
 
+        assert response.status_code == 200
+        data = response.json()
+        assert data["username"] == "testuser"
+        assert data["secret_key"] == "test-secret-key-123"
+
+        # Should delete old, rotate, then store new
+        mock_app_state.credential_store.delete_credentials.assert_called_once_with(
+            "testuser"
+        )
         mock_app_state.user_manager.get_or_rotate_user_credentials.assert_called_once_with(
             "testuser"
+        )
+        mock_app_state.credential_store.store_credentials.assert_called_once_with(
+            "testuser", "testuser", "test-secret-key-123"
+        )
+
+    def test_rotate_credentials_new_user(self, client, mock_app_state):
+        """Test rotating credentials creates user if not exists."""
+        mock_app_state.user_manager.resource_exists.return_value = False
+
+        response = client.post("/credentials/rotate")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["secret_key"] == "new-secret-key-123"
+
+        mock_app_state.credential_store.delete_credentials.assert_called_once_with(
+            "testuser"
+        )
+        mock_app_state.user_manager.create_user.assert_called_once_with(
+            username="testuser"
         )
 
 
@@ -198,40 +274,51 @@ class TestGetCredentialsAsync:
     """Async tests for get_credentials function."""
 
     @pytest.mark.asyncio
-    async def test_get_credentials_existing_user_async(self, mock_app_state):
-        """Test get_credentials for existing user."""
-
+    async def test_get_credentials_cache_hit_async(self, mock_app_state):
+        """Test get_credentials returns cached credentials."""
         mock_request = MagicMock()
-        mock_request.app.state = mock_app_state
+        mock_app_state.credential_store.get_credentials.return_value = (
+            "alice",
+            "cached-secret-123",
+        )
 
         with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
-            mock_app_state.user_manager.resource_exists.return_value = True
-
             user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
             response = await get_credentials(user, mock_request)
 
             assert response.username == "alice"
-            mock_app_state.user_manager.get_or_rotate_user_credentials.assert_called_once_with(
-                "alice"
-            )
+            assert response.secret_key == "cached-secret-123"
+            mock_app_state.user_manager.resource_exists.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_get_credentials_new_user_async(self, mock_app_state):
-        """Test get_credentials auto-creates new user."""
-
+    async def test_get_credentials_cache_miss_async(self, mock_app_state):
+        """Test get_credentials creates and stores on cache miss."""
         mock_request = MagicMock()
-        mock_request.app.state = mock_app_state
+        mock_app_state.credential_store.get_credentials.return_value = None
+        mock_app_state.user_manager.resource_exists.return_value = True
 
         with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
-            mock_app_state.user_manager.resource_exists.return_value = False
-
-            user = KBaseUser(user="newuser", admin_perm=AdminPermission.FULL)
+            user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
             response = await get_credentials(user, mock_request)
 
-            assert response.username == "newuser"
-            mock_app_state.user_manager.create_user.assert_called_once_with(
-                username="newuser"
+            assert response.username == "alice"
+            mock_app_state.credential_store.store_credentials.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_rotate_credentials_async(self, mock_app_state):
+        """Test rotate_credentials deletes, rotates, and stores."""
+        mock_request = MagicMock()
+        mock_app_state.user_manager.resource_exists.return_value = True
+
+        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+            user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
+            response = await rotate_credentials(user, mock_request)
+
+            assert response.username == "alice"
+            mock_app_state.credential_store.delete_credentials.assert_called_once_with(
+                "alice"
             )
+            mock_app_state.credential_store.store_credentials.assert_called_once()
 
 
 # === ERROR HANDLING TESTS ===
@@ -243,10 +330,10 @@ class TestGetCredentialsErrors:
     @pytest.mark.asyncio
     async def test_get_credentials_user_creation_error(self, mock_app_state):
         """Test handling of user creation errors."""
-
         mock_request = MagicMock()
 
         with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+            mock_app_state.credential_store.get_credentials.return_value = None
             mock_app_state.user_manager.resource_exists.return_value = False
             mock_app_state.user_manager.create_user.side_effect = Exception(
                 "Creation failed"
@@ -262,10 +349,10 @@ class TestGetCredentialsErrors:
     @pytest.mark.asyncio
     async def test_get_credentials_rotation_error(self, mock_app_state):
         """Test handling of credential rotation errors."""
-
         mock_request = MagicMock()
 
         with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+            mock_app_state.credential_store.get_credentials.return_value = None
             mock_app_state.user_manager.resource_exists.return_value = True
             mock_app_state.user_manager.get_or_rotate_user_credentials.side_effect = (
                 Exception("Rotation failed")
@@ -285,27 +372,39 @@ class TestGetCredentialsErrors:
 class TestCredentialsIntegration:
     """Integration-like tests for credentials workflow."""
 
-    def test_credentials_workflow_new_user(self, client, mock_app_state):
-        """Test complete workflow for new user."""
+    def test_credentials_workflow_cache_then_rotate(self, client, mock_app_state):
+        """Test complete workflow: cache miss → cached → rotate."""
+        # First request: cache miss, creates user
+        mock_app_state.credential_store.get_credentials.return_value = None
         mock_app_state.user_manager.resource_exists.return_value = False
 
-        # First request - user is created
         response1 = client.get("/credentials/")
         assert response1.status_code == 200
+        assert response1.json()["secret_key"] == "new-secret-key-123"
 
-        # Simulate user now exists
-        mock_app_state.user_manager.resource_exists.return_value = True
+        # Second request: cache hit
+        mock_app_state.credential_store.get_credentials.return_value = (
+            "testuser",
+            "new-secret-key-123",
+        )
 
-        # Second request - credentials are rotated
         response2 = client.get("/credentials/")
         assert response2.status_code == 200
+        assert response2.json()["secret_key"] == "new-secret-key-123"
 
-        # Verify both create and rotate were called
-        mock_app_state.user_manager.create_user.assert_called_once()
-        mock_app_state.user_manager.get_or_rotate_user_credentials.assert_called_once()
+        # Rotate: forces new credentials
+        mock_app_state.user_manager.resource_exists.return_value = True
+        response3 = client.post("/credentials/rotate")
+        assert response3.status_code == 200
+        assert response3.json()["secret_key"] == "test-secret-key-123"
 
     def test_credentials_response_format(self, client, mock_app_state):
         """Test that response format matches expected schema."""
+        mock_app_state.credential_store.get_credentials.return_value = (
+            "testuser",
+            "cached-secret-key-123",
+        )
+
         response = client.get("/credentials/")
         data = response.json()
 
