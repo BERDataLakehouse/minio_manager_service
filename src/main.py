@@ -3,13 +3,14 @@ Main application module for the MinIO Manager API.
 """
 
 import logging
+import os
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security.utils import get_authorization_scheme_param
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from src.routes import credentials, health, management, sharing, workspaces
+from src.routes import credentials, health, management, sharing, workspaces, polaris
 from src.service import app_state
 from src.service.config import configure_logging, get_settings
 from src.service.exception_handlers import universal_error_handler
@@ -59,6 +60,7 @@ def create_application() -> FastAPI:
         title=settings.app_name,
         description=settings.app_description,
         version=settings.api_version,
+        root_path=os.getenv("ROOT_PATH", ""),
         responses={
             "4XX": {"model": ErrorResponse},
             "5XX": {"model": ErrorResponse},
@@ -75,6 +77,7 @@ def create_application() -> FastAPI:
     # Include routers
     app.include_router(health.router, tags=["health"])
     app.include_router(credentials.router, tags=["credentials"])
+    app.include_router(polaris.router, tags=["polaris"])
     app.include_router(sharing.router, tags=["sharing"])
     app.include_router(workspaces.router, tags=["workspaces"])
     app.include_router(management.router, tags=["management"])
