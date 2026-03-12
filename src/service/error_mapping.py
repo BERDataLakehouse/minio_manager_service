@@ -22,7 +22,6 @@ from src.service.exceptions import (  # MinIO specific exceptions
     MinIOManagerError,
     MissingRoleError,
     MissingTokenError,
-    PolarisOperationError,
     PolicyOperationError,
     PolicyValidationError,
     UserOperationError,
@@ -64,7 +63,6 @@ _ERR_MAP = {
     UserOperationError: ErrorMapping(ErrorType.USER_OPERATION_ERROR, _H400),
     GroupOperationError: ErrorMapping(ErrorType.GROUP_OPERATION_ERROR, _H400),
     DataGovernanceError: ErrorMapping(ErrorType.DATA_GOVERNANCE_ERROR, _H403),
-    PolarisOperationError: ErrorMapping(ErrorType.POLARIS_OPERATION_ERROR, _H500),
     ValidationError: ErrorMapping(ErrorType.VALIDATION_ERROR, _H400),
     ConnectionError: ErrorMapping(ErrorType.CONNECTION_ERROR, _H503),
     # Base error fallback
