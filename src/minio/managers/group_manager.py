@@ -10,7 +10,6 @@ from ..models.minio_config import MinIOConfig
 from ..models.policy import PolicyModel, PolicyType
 from ..utils.validators import validate_group_name
 from .resource_manager import ResourceManager
-from ...polaris.polaris_service import PolarisService
 
 logger = logging.getLogger(__name__)
 
@@ -20,16 +19,10 @@ RESOURCE_TYPE = "group"
 class GroupManager(ResourceManager[GroupModel]):
     """GroupManager for basic group operations with patterns and generic CRUD."""
 
-    def __init__(
-        self,
-        client: MinIOClient,
-        config: MinIOConfig,
-        polaris_service: PolarisService,
-    ):
+    def __init__(self, client: MinIOClient, config: MinIOConfig):
         super().__init__(client, config)
         self.tenant_general_warehouse_prefix = config.tenant_general_warehouse_prefix
         self.tenant_sql_warehouse_prefix = config.tenant_sql_warehouse_prefix
-        self.polaris_service: PolarisService = polaris_service
 
         # Lazy initialization of dependent managers to avoid circular imports
         self._policy_manager = None
@@ -50,9 +43,7 @@ class GroupManager(ResourceManager[GroupModel]):
         if self._user_manager is None:
             from .user_manager import UserManager
 
-            self._user_manager = UserManager(
-                self.client, self.config, polaris_service=self.polaris_service
-            )
+            self._user_manager = UserManager(self.client, self.config)
         return self._user_manager
 
     @property
@@ -221,11 +212,6 @@ class GroupManager(ResourceManager[GroupModel]):
             await self._delete_group_shared_directory(name)
         except Exception as e:
             self.logger.warning(f"Failed to delete group shared directory: {e}")
-
-        try:
-            await self.polaris_service.drop_tenant_catalog(name)
-        except Exception as e:
-            self.logger.warning(f"Failed to drop tenant catalog: {e}")
 
     # === Group-Specific Operations ===
 
