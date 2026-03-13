@@ -59,6 +59,7 @@ def create_application() -> FastAPI:
         title=settings.app_name,
         description=settings.app_description,
         version=settings.api_version,
+        root_path=settings.service_root_path,
         responses={
             "4XX": {"model": ErrorResponse},
             "5XX": {"model": ErrorResponse},
