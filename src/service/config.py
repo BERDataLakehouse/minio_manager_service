@@ -8,7 +8,7 @@ import logging
 import os
 from functools import lru_cache
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 APP_VERSION = "0.1.0"
 
@@ -21,11 +21,31 @@ class Settings(BaseModel):
     app_name: str = "MinIO Manager Service"
     app_description: str = "FastAPI service to manage MinIO users, groups, and policies for data governance with KBase authentication integration"
     api_version: str = APP_VERSION
-    service_root_path: str = os.getenv("SERVICE_ROOT_PATH", "/")
+    service_root_path: str = os.getenv("SERVICE_ROOT_PATH", "")
     log_level: str = Field(
         default=os.getenv("LOG_LEVEL", "INFO"),
         description="Logging level for the application",
     )
+
+    @validator("service_root_path", pre=True)
+    def normalize_service_root_path(cls, v: str) -> str:
+        """
+        Normalize the service root path to either:
+        - an empty string (root), or
+        - a single-leading-slash prefix with no trailing slash.
+        """
+        if v is None:
+            return ""
+        v = str(v).strip()
+        # Treat "/" as root (empty string), matching FastAPI/Starlette default behavior.
+        if v == "" or v == "/":
+            return ""
+        if not v.startswith("/"):
+            v = "/" + v
+        # Remove trailing slash for non-root paths.
+        if v.endswith("/") and v != "/":
+            v = v.rstrip("/")
+        return v
 
 
 @lru_cache()
