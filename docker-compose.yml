@@ -54,6 +54,8 @@ services:
     ports:
       - "8010:8000"
     depends_on:
+      - minio
+      - redis
       minio:
         condition: service_started
       redis:

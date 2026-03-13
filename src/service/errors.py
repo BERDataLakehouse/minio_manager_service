@@ -55,9 +55,6 @@ class ErrorType(Enum):
     DATA_GOVERNANCE_ERROR = (20042, "Data governance policy violation")
     """ A data governance policy was violated. """
 
-    POLARIS_OPERATION_ERROR = (20045, "Polaris catalog operation error")
-    """ An Apache Polaris catalog operation failed. """
-
     CONNECTION_ERROR = (20050, "MinIO connection error")
     """ MinIO server connection failed. """
 
