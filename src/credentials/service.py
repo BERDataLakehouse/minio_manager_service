@@ -87,6 +87,10 @@ class CredentialService:
             return user_model.access_key, user_model.secret_key
         return await self._user_manager.get_or_rotate_user_credentials(username)
 
+    async def delete_credentials(self, username: str) -> None:
+        """Delete cached credentials for a user (e.g. on user deletion)."""
+        await self._credential_store.delete_credentials(username)
+
     async def close(self) -> None:
         """Close the underlying credential store connection pool."""
         await self._credential_store.close()

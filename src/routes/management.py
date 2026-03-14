@@ -281,6 +281,9 @@ async def delete_user(
     if not success:
         raise UserOperationError(f"Failed to delete user {username}")
 
+    # Clean up cached credentials from the credential store
+    await app_state.credential_service.delete_credentials(username)
+
     response = ResourceDeleteResponse(
         resource_type="user",
         resource_name=username,
