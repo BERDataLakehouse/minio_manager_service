@@ -17,7 +17,7 @@ The MinIO Manager Service enables:
 
 ### User Management
 - Auto-create MinIO users with unique access/secret key pairs
-- Rotate credentials on each request for enhanced security
+- Credentials cached in PostgreSQL and returned on subsequent requests until explicitly rotated via `POST /credentials/rotate`
 - Assign per-user home directories:
   - `s3a://cdm-lake/users-general-warehouse/{username}/` - General data storage
   - `s3a://cdm-lake/users-sql-warehouse/{username}/` - Spark SQL warehouse
@@ -72,6 +72,7 @@ docker compose logs -f minio-manager
 | `MMS_DB_NAME` | Yes | - | PostgreSQL database name |
 | `MMS_DB_USER` | Yes | - | PostgreSQL username |
 | `MMS_DB_PASSWORD` | Yes | - | PostgreSQL password |
+| `MMS_DB_ENCRYPTION_KEY` | Yes | - | Symmetric key for pgcrypto credential encryption. Use a strong random string; rotating this key requires re-encrypting existing rows. |
 
 
 ## JupyterHub Integration

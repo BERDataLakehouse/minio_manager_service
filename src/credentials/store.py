@@ -69,12 +69,22 @@ class CredentialStore:
         )
         await pool.open()
 
-        # Ensure the table exists
         async with pool.connection() as conn:
+            # Fail fast if pgcrypto is not installed
+            cur = await conn.execute(
+                "SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto'"
+            )
+            if await cur.fetchone() is None:
+                await pool.close()
+                raise RuntimeError(
+                    "pgcrypto extension is not installed. "
+                    "Run 'CREATE EXTENSION pgcrypto;' as a superuser."
+                )
+            # Ensure the table exists
             await conn.execute(_CREATE_TABLE)
             await conn.commit()
 
-        logger.info("CredentialStore initialized (table ensured)")
+        logger.info("CredentialStore initialized (pgcrypto verified, table ensured)")
         return cls(pool, encryption_key)
 
     async def get_credentials(self, username: str) -> tuple[str, str] | None:
