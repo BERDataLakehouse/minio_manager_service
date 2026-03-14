@@ -12,6 +12,7 @@ Tests cover:
 """
 
 import os
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,6 +27,7 @@ from src.routes.credentials import (
 )
 from src.service.app_state import AppState
 from src.service.dependencies import auth
+from src.service.exceptions import CredentialOperationError
 from src.service.kb_auth import AdminPermission, KBaseUser
 
 
@@ -37,6 +39,16 @@ def mock_mc_path():
     """Ensure MC_PATH is set for all tests."""
     with patch.dict(os.environ, {"MC_PATH": "/usr/local/bin/mc"}):
         yield
+
+
+def _make_credential_lock():
+    """Create a mock credential_lock async context manager."""
+
+    @asynccontextmanager
+    async def credential_lock(username, timeout=None):
+        yield MagicMock()
+
+    return credential_lock
 
 
 @pytest.fixture
@@ -62,6 +74,10 @@ def mock_app_state():
     app_state.credential_store.get_credentials = AsyncMock(return_value=None)
     app_state.credential_store.store_credentials = AsyncMock()
     app_state.credential_store.delete_credentials = AsyncMock()
+
+    # Mock lock manager with credential_lock as async context manager
+    app_state.lock_manager = MagicMock()
+    app_state.lock_manager.credential_lock = _make_credential_lock()
 
     return app_state
 
@@ -412,3 +428,141 @@ class TestCredentialsIntegration:
         assert "access_key" in data
         assert "secret_key" in data
         assert len(data) == 3  # Only these three fields
+
+
+# === DISTRIBUTED LOCK BEHAVIOR TESTS ===
+
+
+class TestCredentialLocking:
+    """Tests for distributed lock behavior in credential routes."""
+
+    @pytest.mark.asyncio
+    async def test_get_credentials_double_check_returns_cached(self, mock_app_state):
+        """Test double-check pattern: cache populated between fast-path and lock."""
+        mock_request = MagicMock()
+        call_count = 0
+
+        async def get_credentials_side_effect(username):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return None  # Fast path: cache miss
+            return ("alice", "populated-secret-123")  # Post-lock: cache hit
+
+        mock_app_state.credential_store.get_credentials = AsyncMock(
+            side_effect=get_credentials_side_effect
+        )
+        mock_app_state.lock_manager.credential_lock = _make_credential_lock()
+
+        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+            user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
+            response = await get_credentials(user, mock_request)
+
+            assert response.secret_key == "populated-secret-123"
+            # Should NOT have called MinIO since cache was populated post-lock
+            mock_app_state.user_manager.resource_exists.assert_not_called()
+            mock_app_state.credential_store.store_credentials.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_credentials_lock_contention_raises(self, mock_app_state):
+        """Test that lock contention raises CredentialOperationError."""
+        mock_request = MagicMock()
+        mock_app_state.credential_store.get_credentials = AsyncMock(return_value=None)
+
+        @asynccontextmanager
+        async def failing_lock(username, timeout=None):
+            raise CredentialOperationError(
+                f"Credential operation for user '{username}' is already in progress."
+            )
+            yield  # pragma: no cover
+
+        mock_app_state.lock_manager.credential_lock = failing_lock
+
+        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+            user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
+
+            with pytest.raises(CredentialOperationError, match="already in progress"):
+                await get_credentials(user, mock_request)
+
+    @pytest.mark.asyncio
+    async def test_rotate_credentials_lock_contention_raises(self, mock_app_state):
+        """Test that rotate lock contention raises CredentialOperationError."""
+        mock_request = MagicMock()
+
+        @asynccontextmanager
+        async def failing_lock(username, timeout=None):
+            raise CredentialOperationError(
+                f"Credential operation for user '{username}' is already in progress."
+            )
+            yield  # pragma: no cover
+
+        mock_app_state.lock_manager.credential_lock = failing_lock
+
+        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+            user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
+
+            with pytest.raises(CredentialOperationError, match="already in progress"):
+                await rotate_credentials(user, mock_request)
+
+    @pytest.mark.asyncio
+    async def test_get_credentials_lock_acquired_for_cache_miss(self, mock_app_state):
+        """Test that lock is acquired when cache misses."""
+        mock_request = MagicMock()
+        lock_acquired = []
+
+        @asynccontextmanager
+        async def tracking_lock(username, timeout=None):
+            lock_acquired.append(username)
+            yield MagicMock()
+
+        mock_app_state.credential_store.get_credentials = AsyncMock(return_value=None)
+        mock_app_state.user_manager.resource_exists = AsyncMock(return_value=True)
+        mock_app_state.lock_manager.credential_lock = tracking_lock
+
+        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+            user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
+            await get_credentials(user, mock_request)
+
+            assert lock_acquired == ["alice"]
+
+    @pytest.mark.asyncio
+    async def test_get_credentials_no_lock_on_cache_hit(self, mock_app_state):
+        """Test that no lock is acquired when cache hits on fast path."""
+        mock_request = MagicMock()
+        lock_acquired = []
+
+        @asynccontextmanager
+        async def tracking_lock(username, timeout=None):
+            lock_acquired.append(username)
+            yield MagicMock()
+
+        mock_app_state.credential_store.get_credentials = AsyncMock(
+            return_value=("alice", "cached-secret-123")
+        )
+        mock_app_state.lock_manager.credential_lock = tracking_lock
+
+        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+            user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
+            await get_credentials(user, mock_request)
+
+            assert lock_acquired == []
+
+    @pytest.mark.asyncio
+    async def test_rotate_credentials_always_acquires_lock(self, mock_app_state):
+        """Test that rotate always acquires the lock."""
+        mock_request = MagicMock()
+        lock_acquired = []
+
+        @asynccontextmanager
+        async def tracking_lock(username, timeout=None):
+            lock_acquired.append(username)
+            yield MagicMock()
+
+        mock_app_state.user_manager.resource_exists = AsyncMock(return_value=True)
+        mock_app_state.lock_manager.credential_lock = tracking_lock
+
+        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+            user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
+            await rotate_credentials(user, mock_request)
+
+            assert lock_acquired == ["alice"]

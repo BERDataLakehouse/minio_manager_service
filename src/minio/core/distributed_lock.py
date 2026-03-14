@@ -5,7 +5,7 @@ from typing import Optional
 
 import redis.asyncio as redis
 
-from ...service.exceptions import PolicyOperationError
+from ...service.exceptions import CredentialOperationError, PolicyOperationError
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,43 @@ class DistributedLockManager:
                 logger.info(f"Released lock on '{policy_name}'")
             except Exception as e:
                 logger.warning(f"Failed to release lock '{lock_key}': {e}")
+
+    @asynccontextmanager
+    async def credential_lock(self, username: str, timeout: Optional[int] = None):
+        """
+        Acquire a distributed lock for credential operations on a specific user.
+
+        Prevents TOCTOU race conditions when multiple requests attempt to
+        create/rotate credentials for the same user simultaneously.
+
+        Args:
+            username: The user whose credentials are being operated on
+            timeout: Lock timeout in seconds (uses default if None)
+
+        Raises:
+            CredentialOperationError: If the lock cannot be acquired
+        """
+        timeout = timeout or self.default_timeout
+
+        lock_key = f"credential_lock:{username}"
+
+        lock = self.redis.lock(name=lock_key, timeout=timeout)
+
+        if not await lock.acquire(blocking=False):
+            raise CredentialOperationError(
+                f"Credential operation for user '{username}' is already in progress. "
+                "Try again later."
+            )
+
+        logger.info(f"Acquired credential lock for user '{username}'")
+        try:
+            yield lock
+        finally:
+            try:
+                await lock.release()
+                logger.info(f"Released credential lock for user '{username}'")
+            except Exception as e:
+                logger.warning(f"Failed to release credential lock '{lock_key}': {e}")
 
     async def is_policy_locked(self, policy_name: str) -> bool:
         """

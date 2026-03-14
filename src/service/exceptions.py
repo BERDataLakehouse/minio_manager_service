@@ -96,6 +96,12 @@ class ValidationError(MinIOManagerError):
     pass
 
 
+class CredentialOperationError(MinIOManagerError):
+    """Raised when credential operations fail (e.g., lock contention)."""
+
+    pass
+
+
 class ConnectionError(MinIOManagerError):
     """Raised when MinIO server connection fails."""
 
