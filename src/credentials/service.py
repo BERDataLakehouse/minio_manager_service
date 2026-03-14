@@ -89,7 +89,8 @@ class CredentialService:
 
     async def delete_credentials(self, username: str) -> None:
         """Delete cached credentials for a user (e.g. on user deletion)."""
-        await self._credential_store.delete_credentials(username)
+        async with self._lock_manager.credential_lock(username):
+            await self._credential_store.delete_credentials(username)
 
     async def close(self) -> None:
         """Close the underlying credential store connection pool."""

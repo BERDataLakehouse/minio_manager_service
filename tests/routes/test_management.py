@@ -358,6 +358,8 @@ class TestDeleteUserEndpoint:
         response = client.delete("/management/users/user1")
 
         assert response.status_code == 500
+        # MinIO user should NOT be deleted if credential cleanup failed first
+        mock_app_state.user_manager.delete_resource.assert_not_called()
 
 
 # === GROUP MANAGEMENT ENDPOINT TESTS ===

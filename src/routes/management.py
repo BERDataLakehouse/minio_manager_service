@@ -277,12 +277,13 @@ async def delete_user(
     """Delete a user account."""
     app_state = get_app_state(request)
 
+    # Clean up cached credentials before deleting the MinIO user so that
+    # a retry after partial failure doesn't fail on a missing user.
+    await app_state.credential_service.delete_credentials(username)
+
     success = await app_state.user_manager.delete_resource(username)
     if not success:
         raise UserOperationError(f"Failed to delete user {username}")
-
-    # Clean up cached credentials from the credential store
-    await app_state.credential_service.delete_credentials(username)
 
     response = ResourceDeleteResponse(
         resource_type="user",

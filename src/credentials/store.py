@@ -7,6 +7,7 @@ the same MinIO credentials for a user until explicitly rotated.
 
 import logging
 
+from psycopg.conninfo import make_conninfo
 from psycopg_pool import AsyncConnectionPool
 
 logger = logging.getLogger(__name__)
@@ -60,8 +61,8 @@ class CredentialStore:
         password: str,
         encryption_key: str,
     ) -> "CredentialStore":
-        conninfo = (
-            f"host={host} port={port} dbname={dbname} user={user} password={password}"
+        conninfo = make_conninfo(
+            host=host, port=port, dbname=dbname, user=user, password=password
         )
         pool = AsyncConnectionPool(
             conninfo=conninfo, min_size=1, max_size=10, open=False

@@ -406,6 +406,25 @@ class TestDeleteCredentials:
         mock_credential_store.delete_credentials.assert_called_once_with("testuser")
 
     @pytest.mark.asyncio
+    async def test_delete_acquires_lock(
+        self, service, mock_credential_store, mock_lock_manager
+    ):
+        """Test that delete_credentials acquires the credential lock."""
+        lock_acquired = []
+
+        @asynccontextmanager
+        async def tracking_lock(username, timeout=None):
+            lock_acquired.append(username)
+            yield MagicMock()
+
+        mock_lock_manager.credential_lock = tracking_lock
+        service._lock_manager = mock_lock_manager
+
+        await service.delete_credentials("testuser")
+
+        assert lock_acquired == ["testuser"]
+
+    @pytest.mark.asyncio
     async def test_delete_propagates_errors(self, service, mock_credential_store):
         """Test that store errors propagate from delete_credentials."""
         mock_credential_store.delete_credentials.side_effect = Exception("DB error")
