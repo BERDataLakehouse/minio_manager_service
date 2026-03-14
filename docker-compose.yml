@@ -64,7 +64,7 @@ services:
     ports:
       - "5442:5432"
     environment:
-      - POSTGRES_DB=polaris
+      - POSTGRES_DB=hive
       - POSTGRES_USER=hive
       - POSTGRES_PASSWORD=hivepassword
     volumes:
