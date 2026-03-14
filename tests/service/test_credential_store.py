@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.service.credential_store import CredentialStore
+from src.credentials.store import CredentialStore
 
 
 @pytest.fixture
@@ -138,7 +138,7 @@ class TestCredentialStoreCreate:
     @pytest.mark.asyncio
     async def test_create_opens_pool_and_creates_table(self):
         """Test create() opens the pool and ensures the table exists."""
-        with patch("src.service.credential_store.AsyncConnectionPool") as mock_pool_cls:
+        with patch("src.credentials.store.AsyncConnectionPool") as mock_pool_cls:
             mock_pool = MagicMock()
             mock_pool.open = AsyncMock()
             mock_pool.close = AsyncMock()

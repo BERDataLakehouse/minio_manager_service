@@ -52,18 +52,22 @@ services:
     ports:
       - "8010:8000"
     depends_on:
-      - minio
-      - redis
-      - postgres
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
 
   postgres:
     image: postgres:15
+    ports:
+      - "5442:5432"
     environment:
       - POSTGRES_DB=polaris
       - POSTGRES_USER=hive
       - POSTGRES_PASSWORD=hivepassword
     volumes:
-      - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-mms-db.sh:/docker-entrypoint-initdb.d/01-init-mms-db.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hive"]

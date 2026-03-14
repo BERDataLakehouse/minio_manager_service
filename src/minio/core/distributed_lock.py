@@ -90,12 +90,17 @@ class DistributedLockManager:
         Prevents TOCTOU race conditions when multiple requests attempt to
         create/rotate credentials for the same user simultaneously.
 
+        Unlike policy_update_lock (which fails fast), this lock blocks and
+        waits because callers expect to receive credentials back — they
+        should wait for the current operation to finish rather than fail.
+
         Args:
             username: The user whose credentials are being operated on
-            timeout: Lock timeout in seconds (uses default if None)
+            timeout: Lock expiry in seconds (uses default if None).
+                     Also used as the blocking wait timeout.
 
         Raises:
-            CredentialOperationError: If the lock cannot be acquired
+            CredentialOperationError: If the lock cannot be acquired within the timeout
         """
         timeout = timeout or self.default_timeout
 
@@ -103,10 +108,10 @@ class DistributedLockManager:
 
         lock = self.redis.lock(name=lock_key, timeout=timeout)
 
-        if not await lock.acquire(blocking=False):
+        if not await lock.acquire(blocking=True, blocking_timeout=timeout):
             raise CredentialOperationError(
-                f"Credential operation for user '{username}' is already in progress. "
-                "Try again later."
+                f"Credential operation for user '{username}' timed out after "
+                f"{timeout}s. Try again later."
             )
 
         logger.info(f"Acquired credential lock for user '{username}'")

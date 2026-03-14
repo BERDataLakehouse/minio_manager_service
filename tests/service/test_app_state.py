@@ -38,10 +38,10 @@ class TestAppStateNamedTuple:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             lock_manager=MagicMock(),
-            credential_store=MagicMock(),
+            credential_service=MagicMock(),
         )
         assert state.auth is not None
-        assert state.credential_store is not None
+        assert state.credential_service is not None
 
 
 # === REQUEST STATE TESTS ===
@@ -171,7 +171,7 @@ class TestBuildApp:
             await build_app(app)
 
             state = app.state._minio_manager_state
-            assert state.credential_store is not None
+            assert state.credential_service is not None
             mock_cred_store.assert_called_once()
 
     @pytest.mark.asyncio
@@ -226,8 +226,8 @@ class TestDestroyAppState:
         mock_lock.close = AsyncMock()
         mock_client = MagicMock()
         mock_client.close_session = AsyncMock()
-        mock_cred_store = MagicMock()
-        mock_cred_store.close = AsyncMock()
+        mock_cred_service = MagicMock()
+        mock_cred_service.close = AsyncMock()
 
         app.state._minio_manager_state = AppState(
             auth=MagicMock(),
@@ -237,14 +237,14 @@ class TestDestroyAppState:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             lock_manager=mock_lock,
-            credential_store=mock_cred_store,
+            credential_service=mock_cred_service,
         )
 
         await destroy_app_state(app)
 
         mock_lock.close.assert_called_once()
         mock_client.close_session.assert_called_once()
-        mock_cred_store.close.assert_called_once()
+        mock_cred_service.close.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_destroy_app_state_handles_missing_state(self):
@@ -261,8 +261,8 @@ class TestDestroyAppState:
         mock_lock.close = AsyncMock(side_effect=Exception("Redis error"))
         mock_client = MagicMock()
         mock_client.close_session = AsyncMock(side_effect=Exception("MinIO error"))
-        mock_cred_store = MagicMock()
-        mock_cred_store.close = AsyncMock(side_effect=Exception("DB error"))
+        mock_cred_service = MagicMock()
+        mock_cred_service.close = AsyncMock(side_effect=Exception("DB error"))
 
         app.state._minio_manager_state = AppState(
             auth=MagicMock(),
@@ -272,7 +272,7 @@ class TestDestroyAppState:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             lock_manager=mock_lock,
-            credential_store=mock_cred_store,
+            credential_service=mock_cred_service,
         )
 
         # Should not raise

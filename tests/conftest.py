@@ -31,7 +31,7 @@ from src.minio.models.policy import (
 )
 from src.minio.models.user import UserModel
 from src.minio.models.group import GroupModel
-from src.service.credential_store import CredentialStore
+from src.credentials.store import CredentialStore
 from src.service.dependencies import auth
 from src.service.exceptions import PolicyOperationError
 from src.service.kb_auth import AdminPermission, KBaseUser

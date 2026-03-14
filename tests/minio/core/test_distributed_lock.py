@@ -269,7 +269,9 @@ class TestCredentialLock:
         mock_lock = mock_redis_client.lock.return_value
 
         async with lock_manager_with_mock_redis.credential_lock("alice"):
-            mock_lock.acquire.assert_called_once_with(blocking=False)
+            mock_lock.acquire.assert_called_once_with(
+                blocking=True, blocking_timeout=REDIS_LOCK_TIMEOUT
+            )
 
         mock_lock.release.assert_called_once()
 
@@ -305,7 +307,7 @@ class TestCredentialLock:
         mock_lock = mock_redis_client.lock.return_value
         mock_lock.acquire.return_value = False
 
-        with pytest.raises(CredentialOperationError, match="already in progress"):
+        with pytest.raises(CredentialOperationError, match="timed out"):
             async with lock_manager_with_mock_redis.credential_lock("alice"):
                 pass
 

@@ -241,10 +241,8 @@ async def rotate_user_credentials(
     """Rotate credentials for a user."""
     app_state = get_app_state(request)
 
-    (
-        access_key,
-        secret_key,
-    ) = await app_state.user_manager.get_or_rotate_user_credentials(username)
+    access_key, secret_key = await app_state.credential_service.rotate(username)
+
     user_info = await app_state.user_manager.get_user(username)
 
     response = UserManagementResponse(

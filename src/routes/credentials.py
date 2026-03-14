@@ -55,46 +55,8 @@ async def get_credentials(
     """Get idempotent MinIO credentials (cache-first with distributed lock)."""
     app_state = get_app_state(request)
     username = authenticated_user.user
-    credential_store = app_state.credential_store
 
-    # Fast path: check cache without lock
-    cached = await credential_store.get_credentials(username)
-    if cached is not None:
-        access_key, secret_key = cached
-        logger.info(f"Returning cached credentials for user {username}")
-        return CredentialsResponse(
-            username=username,
-            access_key=access_key,
-            secret_key=secret_key,  # type: ignore
-        )
-
-    # Cache miss — acquire lock, then double-check cache to prevent duplicate work
-    async with app_state.lock_manager.credential_lock(username):
-        # Double-check: another request may have populated the cache while we waited
-        cached = await credential_store.get_credentials(username)
-        if cached is not None:
-            access_key, secret_key = cached
-            logger.info(f"Returning cached credentials for user {username} (post-lock)")
-            return CredentialsResponse(
-                username=username,
-                access_key=access_key,
-                secret_key=secret_key,  # type: ignore
-            )
-
-        # Create or rotate in MinIO and store
-        user_exists = await app_state.user_manager.resource_exists(username)
-        if not user_exists:
-            logger.info(f"Auto-creating user {username} for credential request")
-            user_model = await app_state.user_manager.create_user(username=username)
-            access_key, secret_key = user_model.access_key, user_model.secret_key
-        else:
-            (
-                access_key,
-                secret_key,
-            ) = await app_state.user_manager.get_or_rotate_user_credentials(username)
-
-        await credential_store.store_credentials(username, access_key, secret_key)
-        logger.info(f"Issued and cached new credentials for user {username}")
+    access_key, secret_key = await app_state.credential_service.get_or_create(username)
 
     return CredentialsResponse(
         username=username,
@@ -120,27 +82,8 @@ async def rotate_credentials(
     """Force-rotate MinIO credentials and update cache."""
     app_state = get_app_state(request)
     username = authenticated_user.user
-    credential_store = app_state.credential_store
 
-    # Lock the entire rotate operation to prevent concurrent rotations
-    async with app_state.lock_manager.credential_lock(username):
-        # Clear any cached credentials
-        await credential_store.delete_credentials(username)
-
-        # Ensure user exists, then rotate
-        user_exists = await app_state.user_manager.resource_exists(username)
-        if not user_exists:
-            logger.info(f"Auto-creating user {username} for rotate request")
-            user_model = await app_state.user_manager.create_user(username=username)
-            access_key, secret_key = user_model.access_key, user_model.secret_key
-        else:
-            (
-                access_key,
-                secret_key,
-            ) = await app_state.user_manager.get_or_rotate_user_credentials(username)
-
-        await credential_store.store_credentials(username, access_key, secret_key)
-        logger.info(f"Rotated and cached new credentials for user {username}")
+    access_key, secret_key = await app_state.credential_service.rotate(username)
 
     return CredentialsResponse(
         username=username,

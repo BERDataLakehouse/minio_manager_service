@@ -101,6 +101,12 @@ def mock_app_state():
     app_state.group_manager.remove_user_from_group = AsyncMock()
     app_state.group_manager.delete_resource = AsyncMock(return_value=True)
 
+    # Mock credential service
+    app_state.credential_service = AsyncMock()
+    app_state.credential_service.rotate = AsyncMock(
+        return_value=("user1", "new-secret-key")
+    )
+
     # Mock policy manager
     app_state.policy_manager = AsyncMock()
     mock_policy = PolicyModel(
