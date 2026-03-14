@@ -196,7 +196,9 @@ class TestCredentialStoreCreate:
             mock_pool = self._make_mock_pool(pgcrypto_installed=False)
             mock_pool_cls.return_value = mock_pool
 
-            with pytest.raises(RuntimeError, match="pgcrypto extension is not installed"):
+            with pytest.raises(
+                RuntimeError, match="pgcrypto extension is not installed"
+            ):
                 await CredentialStore.create(
                     host="localhost",
                     port=5432,
