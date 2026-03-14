@@ -392,6 +392,28 @@ class TestRotate:
         mock_credential_store.store_credentials.assert_not_called()
 
 
+# === DELETE CREDENTIALS TESTS ===
+
+
+class TestDeleteCredentials:
+    """Tests for CredentialService.delete_credentials."""
+
+    @pytest.mark.asyncio
+    async def test_delete_delegates_to_store(self, service, mock_credential_store):
+        """Test delete_credentials delegates to the credential store."""
+        await service.delete_credentials("testuser")
+
+        mock_credential_store.delete_credentials.assert_called_once_with("testuser")
+
+    @pytest.mark.asyncio
+    async def test_delete_propagates_errors(self, service, mock_credential_store):
+        """Test that store errors propagate from delete_credentials."""
+        mock_credential_store.delete_credentials.side_effect = Exception("DB error")
+
+        with pytest.raises(Exception, match="DB error"):
+            await service.delete_credentials("testuser")
+
+
 # === CONSTRUCTOR TESTS ===
 
 

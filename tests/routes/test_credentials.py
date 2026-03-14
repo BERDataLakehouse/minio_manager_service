@@ -168,9 +168,7 @@ class TestGetCredentialsEndpoint:
         """Test get_credentials async function directly."""
         mock_request = MagicMock()
 
-        with patch(
-            "src.routes.credentials.get_app_state", return_value=mock_app_state
-        ):
+        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
             user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
             response = await get_credentials(user, mock_request)
 
@@ -187,9 +185,7 @@ class TestGetCredentialsEndpoint:
             "Service failure"
         )
 
-        with patch(
-            "src.routes.credentials.get_app_state", return_value=mock_app_state
-        ):
+        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
             user = KBaseUser(user="testuser", admin_perm=AdminPermission.FULL)
             with pytest.raises(Exception, match="Service failure"):
                 await get_credentials(user, mock_request)
@@ -217,9 +213,7 @@ class TestRotateCredentialsEndpoint:
         """Test rotate_credentials async function directly."""
         mock_request = MagicMock()
 
-        with patch(
-            "src.routes.credentials.get_app_state", return_value=mock_app_state
-        ):
+        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
             user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
             response = await rotate_credentials(user, mock_request)
 
@@ -234,9 +228,7 @@ class TestRotateCredentialsEndpoint:
             "Rotation failed"
         )
 
-        with patch(
-            "src.routes.credentials.get_app_state", return_value=mock_app_state
-        ):
+        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
             user = KBaseUser(user="testuser", admin_perm=AdminPermission.FULL)
             with pytest.raises(Exception, match="Rotation failed"):
                 await rotate_credentials(user, mock_request)
