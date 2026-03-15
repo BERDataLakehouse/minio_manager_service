@@ -324,6 +324,57 @@ class PolicyManager(ResourceManager[PolicyModel]):
         """Create user system policy"""
         return self._create_policy_model(PolicyType.USER_SYSTEM, username)
 
+    async def regenerate_user_home_policy(self, username: str) -> PolicyModel:
+        """Force-regenerate user HOME policy from the current template.
+
+        Unlike ensure_user_policies() which skips existing policies, this method
+        overwrites the existing policy with a freshly generated one. This is used
+        during migration to add new path statements (e.g., Iceberg paths) to
+        pre-existing policies.
+
+        Uses the shadow policy pattern for zero-downtime updates.
+
+        Args:
+            username: Username whose HOME policy to regenerate
+        """
+        async with self.operation_context("regenerate_user_home_policy"):
+            fresh_policy = self._create_user_home_policy(username)
+            await self._update_minio_policy(fresh_policy)
+            logger.info(f"Regenerated user home policy: {fresh_policy.policy_name}")
+            return fresh_policy
+
+    async def regenerate_group_home_policy(
+        self, group_name: str, read_only: bool = False, path_target: str | None = None
+    ) -> PolicyModel:
+        """Force-regenerate group HOME policy from the current template.
+
+        Unlike ensure_group_policy() which skips existing policies, this method
+        overwrites the existing policy with a freshly generated one. This is used
+        during migration to add new path statements (e.g., Iceberg paths) to
+        pre-existing policies.
+
+        Uses the shadow policy pattern for zero-downtime updates.
+
+        Args:
+            group_name: Group name for policy naming (e.g., "kbasero")
+            read_only: If True, regenerate policy with READ-only permissions
+            path_target: Target name for path generation (defaults to group_name).
+                         For RO groups, this should be the main group name.
+        """
+        async with self.operation_context("regenerate_group_home_policy"):
+            policy_type = (
+                PolicyType.GROUP_HOME_RO if read_only else PolicyType.GROUP_HOME
+            )
+            fresh_policy = self._create_policy_model(
+                policy_type, group_name, path_target_name=path_target
+            )
+            await self._update_minio_policy(fresh_policy)
+            suffix = " (read-only)" if read_only else ""
+            logger.info(
+                f"Regenerated group home policy{suffix}: {fresh_policy.policy_name}"
+            )
+            return fresh_policy
+
     async def ensure_group_policy(
         self, group_name: str, read_only: bool = False, path_target: str | None = None
     ) -> PolicyModel:
