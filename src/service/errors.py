@@ -58,6 +58,9 @@ class ErrorType(Enum):
     POLARIS_OPERATION_ERROR = (20045, "Polaris catalog operation error")
     """ An Apache Polaris catalog operation failed. """
 
+    CREDENTIAL_OPERATION_ERROR = (20046, "Credential operation error")
+    """ A credential operation failed (e.g., lock contention). """
+
     CONNECTION_ERROR = (20050, "MinIO connection error")
     """ MinIO server connection failed. """
 

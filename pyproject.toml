@@ -13,9 +13,11 @@ dependencies = [
     "pydantic==2.12.5",
     "aiohttp==3.13.3",
     "cacheout==0.16.0",
-    "aiobotocore==3.2.0",
-    "redis==7.2.1",
-    "ruff==0.15.4",
+    "aiobotocore==3.2.1",
+    "redis==7.3.0",
+    "ruff==0.15.6",
+    "psycopg[binary]==3.3.3",
+    "psycopg-pool==3.3.0",
 ]
 
 [dependency-groups]

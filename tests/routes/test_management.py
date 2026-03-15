@@ -106,6 +106,12 @@ def mock_app_state():
     app_state.group_manager.remove_user_from_group = AsyncMock()
     app_state.group_manager.delete_resource = AsyncMock(return_value=True)
 
+    # Mock credential service
+    app_state.credential_service = AsyncMock()
+    app_state.credential_service.rotate = AsyncMock(
+        return_value=("user1", "new-secret-key")
+    )
+
     # Mock policy manager
     app_state.policy_manager = AsyncMock()
     mock_policy = PolicyModel(
@@ -336,6 +342,15 @@ class TestDeleteUserEndpoint:
         assert data["resource_type"] == "user"
         assert data["resource_name"] == "user1"
 
+    def test_delete_user_cleans_up_credential_db(self, client, mock_app_state):
+        """Test deleting a user also deletes their credential DB record."""
+        response = client.delete("/management/users/user1")
+
+        assert response.status_code == 200
+        mock_app_state.credential_service.delete_credentials.assert_called_once_with(
+            "user1"
+        )
+
     def test_delete_user_failure(self, client, mock_app_state):
         """Test handling delete failure."""
         mock_app_state.user_manager.delete_resource.return_value = False
@@ -343,6 +358,20 @@ class TestDeleteUserEndpoint:
         response = client.delete("/management/users/user1")
 
         assert response.status_code == 400  # UserOperationError maps to 400
+
+    def test_delete_user_credential_cleanup_failure_propagates(
+        self, client, mock_app_state
+    ):
+        """Test that credential cleanup failure propagates as a server error."""
+        mock_app_state.credential_service.delete_credentials.side_effect = Exception(
+            "DB error"
+        )
+
+        response = client.delete("/management/users/user1")
+
+        assert response.status_code == 500
+        # MinIO user should NOT be deleted if credential cleanup failed first
+        mock_app_state.user_manager.delete_resource.assert_not_called()
 
 
 # === GROUP MANAGEMENT ENDPOINT TESTS ===

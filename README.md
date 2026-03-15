@@ -18,7 +18,7 @@ The KBERDL Data Governance Service enables:
 
 ### User Management
 - Auto-create MinIO users and Polaris principals with unique credential pairs
-- Rotate credentials on each request for enhanced security
+- Credentials cached in PostgreSQL and returned on subsequent requests until explicitly rotated via `POST /credentials/rotate`
 - Assign per-user isolated storage and catalogs:
   - `s3a://cdm-lake/users-general-warehouse/{username}/` - General data storage
   - `s3a://cdm-lake/users-sql-warehouse/{username}/` - Spark SQL / Delta warehouse
@@ -37,9 +37,10 @@ The KBERDL Data Governance Service enables:
 
 ### Security
 - KBase authentication with role-based access control
-- User credentials generated transiently (not stored in the service database)
+- User credentials encrypted at rest in PostgreSQL (pgcrypto)
 - Service holds only root/admin credentials for MinIO and Polaris
 - Distributed locking via Redis for concurrent operations
+- Credential rotation with blocking locks to prevent race conditions
 
 ## Quick Start
 
@@ -71,6 +72,12 @@ docker compose logs -f minio-manager
 | `KBASE_ADMIN_ROLES` | No | `KBASE_ADMIN` | Comma-separated admin roles |
 | `KBASE_REQUIRED_ROLES` | No | `BERDL_USER` | Required roles for access |
 | `REDIS_URL` | Yes | - | Redis URL (e.g., `redis://redis:6379`) |
+| `MMS_DB_HOST` | Yes | - | PostgreSQL host for credential storage |
+| `MMS_DB_PORT` | No | `5432` | PostgreSQL port |
+| `MMS_DB_NAME` | Yes | - | PostgreSQL database name |
+| `MMS_DB_USER` | Yes | - | PostgreSQL username |
+| `MMS_DB_PASSWORD` | Yes | - | PostgreSQL password |
+| `MMS_DB_ENCRYPTION_KEY` | Yes | - | Symmetric key for pgcrypto credential encryption. Use a strong random string; rotating this key requires re-encrypting existing rows. |
 
 
 ## JupyterHub Integration
@@ -78,7 +85,7 @@ docker compose logs -f minio-manager
 The service integrates seamlessly with JupyterHub and Spark Connect:
 
 1. **On user login**: JupyterHub startup scripts (`01-credentials.py`) call the governance API endpoints
-2. **Credentials issued**: Service creates user/principal (if needed) and returns fresh MinIO and Polaris credentials
+2. **Credentials issued**: Service creates user/principal (if needed), caches credentials in PostgreSQL, and returns MinIO and Polaris credentials
 3. **Spark configured**: Credentials and catalog mappings injected into Spark session configuration
 4. **Transparent access**: Spark jobs access Iceberg tables and S3 paths with strictly enforced permissions
 

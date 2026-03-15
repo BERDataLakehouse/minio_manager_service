@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.minio.core.distributed_lock import DistributedLockManager, REDIS_LOCK_TIMEOUT
-from src.service.exceptions import PolicyOperationError
+from src.service.exceptions import CredentialOperationError, PolicyOperationError
 
 
 # =============================================================================
@@ -251,6 +251,102 @@ class TestPolicyUpdateLock:
 # =============================================================================
 # TEST IS POLICY LOCKED
 # =============================================================================
+
+
+# =============================================================================
+# TEST CREDENTIAL LOCK
+# =============================================================================
+
+
+class TestCredentialLock:
+    """Tests for credential_lock context manager."""
+
+    @pytest.mark.asyncio
+    async def test_acquire_and_release_credential_lock(
+        self, lock_manager_with_mock_redis, mock_redis_client
+    ):
+        """Test successfully acquiring and releasing a credential lock."""
+        mock_lock = mock_redis_client.lock.return_value
+
+        async with lock_manager_with_mock_redis.credential_lock("alice"):
+            mock_lock.acquire.assert_called_once_with(
+                blocking=True, blocking_timeout=REDIS_LOCK_TIMEOUT
+            )
+
+        mock_lock.release.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_credential_lock_key_format(
+        self, lock_manager_with_mock_redis, mock_redis_client
+    ):
+        """Test credential lock key uses correct prefix."""
+        async with lock_manager_with_mock_redis.credential_lock("bob"):
+            pass
+
+        mock_redis_client.lock.assert_called_once_with(
+            name="credential_lock:bob", timeout=REDIS_LOCK_TIMEOUT
+        )
+
+    @pytest.mark.asyncio
+    async def test_credential_lock_custom_timeout(
+        self, lock_manager_with_mock_redis, mock_redis_client
+    ):
+        """Test credential lock with custom timeout."""
+        async with lock_manager_with_mock_redis.credential_lock("alice", timeout=60):
+            pass
+
+        mock_redis_client.lock.assert_called_once_with(
+            name="credential_lock:alice", timeout=60
+        )
+
+    @pytest.mark.asyncio
+    async def test_credential_lock_contention_raises(
+        self, lock_manager_with_mock_redis, mock_redis_client
+    ):
+        """Test lock contention raises CredentialOperationError."""
+        mock_lock = mock_redis_client.lock.return_value
+        mock_lock.acquire.return_value = False
+
+        with pytest.raises(CredentialOperationError, match="timed out"):
+            async with lock_manager_with_mock_redis.credential_lock("alice"):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_credential_lock_release_failure_handled(
+        self, lock_manager_with_mock_redis, mock_redis_client
+    ):
+        """Test credential lock release failure is logged, not raised."""
+        mock_lock = mock_redis_client.lock.return_value
+        mock_lock.release.side_effect = Exception("Release failed")
+
+        # Should not raise
+        async with lock_manager_with_mock_redis.credential_lock("alice"):
+            pass
+
+        mock_lock.release.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_credential_lock_releases_on_exception(
+        self, lock_manager_with_mock_redis, mock_redis_client
+    ):
+        """Test credential lock releases even when exception occurs in context."""
+        mock_lock = mock_redis_client.lock.return_value
+
+        with pytest.raises(RuntimeError):
+            async with lock_manager_with_mock_redis.credential_lock("alice"):
+                raise RuntimeError("Simulated error")
+
+        mock_lock.release.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_credential_lock_yields_lock_object(
+        self, lock_manager_with_mock_redis, mock_redis_client
+    ):
+        """Test the context manager yields the lock object."""
+        mock_lock = mock_redis_client.lock.return_value
+
+        async with lock_manager_with_mock_redis.credential_lock("alice") as lock:
+            assert lock is mock_lock
 
 
 class TestIsPolicyLocked:
