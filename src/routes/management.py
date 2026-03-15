@@ -137,7 +137,40 @@ class GroupNamesResponse(BaseModel):
     total_count: Annotated[int, Field(description="Total number of groups", ge=0)]
 
 
+class UserNamesResponse(BaseModel):
+    """Response model for listing usernames only (lightweight alternative to full user list)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    usernames: Annotated[list[str], Field(description="List of all usernames")]
+    total_count: Annotated[int, Field(description="Total number of users", ge=0)]
+
+
 # ===== USER MANAGEMENT ENDPOINTS =====
+
+
+@router.get(
+    "/users/names",
+    response_model=UserNamesResponse,
+    summary="List all usernames",
+    description="Get a list of all usernames in the system without fetching full user details. Much faster than the full user list endpoint.",
+)
+async def list_user_names(
+    request: Request,
+    authenticated_user=Depends(require_admin),
+):
+    """List all usernames in the system (lightweight)."""
+    app_state = get_app_state(request)
+
+    all_usernames = await app_state.user_manager.list_resources()
+
+    logger.info(
+        f"Admin {authenticated_user.user} listed {len(all_usernames)} usernames"
+    )
+    return UserNamesResponse(
+        usernames=all_usernames,
+        total_count=len(all_usernames),
+    )
 
 
 @router.get(
@@ -431,6 +464,7 @@ async def add_group_member(
 
     response = GroupManagementResponse(
         group_name=group_info.group_name,
+        ro_group_name=None,  # RO group name is only returned on group creation
         members=group_info.members,
         member_count=len(group_info.members),
         policy_name=str(group_info.policy_name),
@@ -467,6 +501,7 @@ async def remove_group_member(
 
     response = GroupManagementResponse(
         group_name=group_info.group_name,
+        ro_group_name=None,  # RO group name is only returned on group creation
         members=group_info.members,
         member_count=len(group_info.members),
         policy_name=str(group_info.policy_name),
@@ -644,3 +679,125 @@ async def delete_policy(
     except Exception as e:
         logger.error(f"Unexpected error deleting policy {policy_name}: {e}")
         raise PolicyOperationError(f"Failed to delete policy {policy_name}") from e
+
+
+# ===== MIGRATION ENDPOINTS =====
+
+
+class MigrationError(BaseModel):
+    """A single error encountered during migration."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    resource_type: Annotated[str, Field(description="Type of resource (user/group)")]
+    resource_name: Annotated[str, Field(description="Name of the resource")]
+    error: Annotated[str, Field(description="Error message")]
+
+
+class RegeneratePoliciesResponse(BaseModel):
+    """Response model for bulk policy regeneration."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    users_updated: Annotated[
+        int, Field(description="Number of user policies regenerated", ge=0)
+    ]
+    groups_updated: Annotated[
+        int, Field(description="Number of group policies regenerated", ge=0)
+    ]
+    errors: Annotated[list[MigrationError], Field(description="Errors encountered")]
+    performed_by: Annotated[str, Field(description="Admin who performed the operation")]
+    timestamp: Annotated[datetime, Field(description="When operation was performed")]
+
+
+@router.post(
+    "/migrate/regenerate-policies",
+    response_model=RegeneratePoliciesResponse,
+    summary="Regenerate all IAM policies",
+    description=(
+        "Force-regenerate HOME policies for all users and groups from the current template. "
+        "This updates pre-existing policies to include new path statements. "
+        "Each regeneration is independent — errors do not block others."
+    ),
+)
+async def regenerate_all_policies(
+    request: Request,
+    authenticated_user=Depends(require_admin),
+):
+    """Regenerate all user and group HOME policies from current templates."""
+    app_state = get_app_state(request)
+    errors: list[MigrationError] = []
+    users_updated = 0
+    groups_updated = 0
+
+    # Regenerate user HOME policies
+    all_usernames = await app_state.user_manager.list_resources()
+    logger.info(f"Regenerating HOME policies for {len(all_usernames)} users")
+
+    for username in all_usernames:
+        try:
+            await app_state.policy_manager.regenerate_user_home_policy(username)
+            users_updated += 1
+        except Exception as e:
+            logger.warning(f"Failed to regenerate policy for user {username}: {e}")
+            errors.append(
+                MigrationError(
+                    resource_type="user", resource_name=username, error=str(e)
+                )
+            )
+
+    # Regenerate group HOME policies (both RW and RO)
+    all_group_names = await app_state.group_manager.list_resources()
+
+    # Filter to base groups only (exclude *ro groups)
+    base_groups = [g for g in all_group_names if not g.endswith("ro")]
+    logger.info(
+        f"Regenerating HOME policies for {len(base_groups)} base groups (RW + RO)"
+    )
+
+    for base_group in base_groups:
+        # Regenerate RW policy
+        try:
+            await app_state.policy_manager.regenerate_group_home_policy(
+                group_name=base_group, read_only=False
+            )
+            groups_updated += 1
+        except Exception as e:
+            logger.warning(
+                f"Failed to regenerate RW policy for group {base_group}: {e}"
+            )
+            errors.append(
+                MigrationError(
+                    resource_type="group", resource_name=base_group, error=str(e)
+                )
+            )
+
+        # Regenerate RO policy
+        ro_group_name = f"{base_group}ro"
+        try:
+            await app_state.policy_manager.regenerate_group_home_policy(
+                group_name=ro_group_name, read_only=True, path_target=base_group
+            )
+            groups_updated += 1
+        except Exception as e:
+            logger.warning(
+                f"Failed to regenerate RO policy for group {ro_group_name}: {e}"
+            )
+            errors.append(
+                MigrationError(
+                    resource_type="group", resource_name=ro_group_name, error=str(e)
+                )
+            )
+
+    logger.info(
+        f"Admin {authenticated_user.user} regenerated policies: "
+        f"{users_updated} users, {groups_updated} groups, {len(errors)} errors"
+    )
+
+    return RegeneratePoliciesResponse(
+        users_updated=users_updated,
+        groups_updated=groups_updated,
+        errors=errors,
+        performed_by=authenticated_user.user,
+        timestamp=datetime.now(),
+    )

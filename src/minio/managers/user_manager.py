@@ -120,9 +120,15 @@ class UserManager(ResourceManager[UserModel]):
 
     async def _post_delete_cleanup(self, name: str) -> None:
         """Clean up user resources after deletion."""
-        # Delete user home and system directories
-        await self._delete_user_home_directory(name)
-        await self._delete_user_system_directory(name)
+        try:
+            await self._delete_user_home_directory(name)
+        except Exception as e:
+            logger.warning(f"Failed to delete user home directory: {e}")
+
+        try:
+            await self._delete_user_system_directory(name)
+        except Exception as e:
+            logger.warning(f"Failed to delete user system directory: {e}")
 
     # CORE USER OPERATIONS
 

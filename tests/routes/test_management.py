@@ -26,9 +26,11 @@ from src.routes.management import (
     ResourceDeleteResponse,
     UserListResponse,
     UserManagementResponse,
+    UserNamesResponse,
     create_user,
     delete_policy,
     list_group_names,
+    list_user_names,
     list_users,
     router,
 )
@@ -798,3 +800,209 @@ class TestManagementIntegration:
         data = response.json()
 
         assert data["performed_by"] == "admin"
+
+
+class TestListUserNamesEndpoint:
+    """Tests for list_user_names endpoint (admin-only, lightweight)."""
+
+    def test_list_user_names_success(self, client, mock_app_state):
+        """Test listing usernames successfully."""
+        mock_app_state.user_manager.list_resources.return_value = [
+            "user1",
+            "user2",
+            "user3",
+        ]
+
+        response = client.get("/management/users/names")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["usernames"] == ["user1", "user2", "user3"]
+        assert data["total_count"] == 3
+
+    def test_list_user_names_empty(self, client, mock_app_state):
+        """Test listing usernames when none exist."""
+        mock_app_state.user_manager.list_resources.return_value = []
+
+        response = client.get("/management/users/names")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 0
+        assert data["usernames"] == []
+
+    def test_list_user_names_response_model_validation(self, client, mock_app_state):
+        """Test that response matches UserNamesResponse model."""
+        mock_app_state.user_manager.list_resources.return_value = ["testuser"]
+
+        response = client.get("/management/users/names")
+
+        assert response.status_code == 200
+        parsed = UserNamesResponse(**response.json())
+        assert parsed.usernames == ["testuser"]
+        assert parsed.total_count == 1
+
+    def test_list_user_names_does_not_call_get_user(self, client, mock_app_state):
+        """Test that the lightweight endpoint does NOT call get_user for each user."""
+        mock_app_state.user_manager.list_resources.return_value = ["u1", "u2"]
+
+        response = client.get("/management/users/names")
+
+        assert response.status_code == 200
+        mock_app_state.user_manager.get_user.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_list_user_names_async(self, mock_app_state):
+        """Test list_user_names function directly."""
+        mock_request = MagicMock()
+        mock_user = KBaseUser(user="admin", admin_perm=AdminPermission.FULL)
+
+        mock_app_state.user_manager.list_resources.return_value = ["a", "b"]
+
+        with patch("src.routes.management.get_app_state", return_value=mock_app_state):
+            response = await list_user_names(mock_request, mock_user)
+
+            assert response.usernames == ["a", "b"]
+            assert response.total_count == 2
+
+
+class TestRegeneratePoliciesEndpoint:
+    """Tests for regenerate_all_policies migration endpoint."""
+
+    @pytest.fixture
+    def migration_app_state(self, mock_app_state):
+        """App state configured for migration endpoints."""
+        mock_app_state.user_manager.list_resources = AsyncMock(
+            return_value=["alice", "bob"]
+        )
+        mock_app_state.group_manager.list_resources = AsyncMock(
+            return_value=["team1", "team1ro", "team2", "team2ro"]
+        )
+        mock_app_state.policy_manager.regenerate_user_home_policy = AsyncMock()
+        mock_app_state.policy_manager.regenerate_group_home_policy = AsyncMock()
+        return mock_app_state
+
+    @pytest.fixture
+    def migration_client(self, test_app, migration_app_state):
+        with patch(
+            "src.routes.management.get_app_state", return_value=migration_app_state
+        ):
+            yield TestClient(test_app, raise_server_exceptions=False)
+
+    def test_regenerate_policies_success(self, migration_client, migration_app_state):
+        """Test successful regeneration of all policies."""
+        response = migration_client.post("/management/migrate/regenerate-policies")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_updated"] == 2
+        # 2 base groups × 2 (RW + RO) = 4
+        assert data["groups_updated"] == 4
+        assert data["errors"] == []
+        assert data["performed_by"] == "admin"
+
+    def test_regenerate_policies_calls_user_regenerate(
+        self, migration_client, migration_app_state
+    ):
+        """Test that regenerate is called for each user."""
+        migration_client.post("/management/migrate/regenerate-policies")
+
+        calls = migration_app_state.policy_manager.regenerate_user_home_policy.call_args_list
+        assert len(calls) == 2
+        assert calls[0].args == ("alice",)
+        assert calls[1].args == ("bob",)
+
+    def test_regenerate_policies_calls_group_rw_and_ro(
+        self, migration_client, migration_app_state
+    ):
+        """Test that both RW and RO policies are regenerated for each base group."""
+        migration_client.post("/management/migrate/regenerate-policies")
+
+        calls = migration_app_state.policy_manager.regenerate_group_home_policy.call_args_list
+        # team1 RW, team1ro RO, team2 RW, team2ro RO
+        assert len(calls) == 4
+
+        # team1 RW
+        assert calls[0].kwargs == {"group_name": "team1", "read_only": False}
+        # team1 RO
+        assert calls[1].kwargs == {
+            "group_name": "team1ro",
+            "read_only": True,
+            "path_target": "team1",
+        }
+        # team2 RW
+        assert calls[2].kwargs == {"group_name": "team2", "read_only": False}
+        # team2 RO
+        assert calls[3].kwargs == {
+            "group_name": "team2ro",
+            "read_only": True,
+            "path_target": "team2",
+        }
+
+    def test_regenerate_policies_user_error_continues(
+        self, migration_client, migration_app_state
+    ):
+        """Test that a user error does not block other users."""
+        migration_app_state.policy_manager.regenerate_user_home_policy.side_effect = [
+            Exception("alice policy failed"),
+            AsyncMock(),  # bob succeeds
+        ]
+
+        response = migration_client.post("/management/migrate/regenerate-policies")
+
+        data = response.json()
+        assert data["users_updated"] == 1
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["resource_name"] == "alice"
+        assert "alice policy failed" in data["errors"][0]["error"]
+
+    def test_regenerate_policies_group_error_continues(
+        self, migration_client, migration_app_state
+    ):
+        """Test that a group error does not block other groups."""
+        migration_app_state.policy_manager.regenerate_group_home_policy.side_effect = [
+            Exception("team1 RW failed"),  # team1 RW fails
+            AsyncMock(),  # team1 RO succeeds
+            AsyncMock(),  # team2 RW succeeds
+            AsyncMock(),  # team2 RO succeeds
+        ]
+
+        response = migration_client.post("/management/migrate/regenerate-policies")
+
+        data = response.json()
+        assert data["groups_updated"] == 3
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["resource_name"] == "team1"
+
+    def test_regenerate_policies_ro_group_error_continues(
+        self, migration_client, migration_app_state
+    ):
+        """Test that an RO group error does not block the next base group."""
+        migration_app_state.policy_manager.regenerate_group_home_policy.side_effect = [
+            AsyncMock(),  # team1 RW succeeds
+            Exception("team1 RO failed"),  # team1 RO fails
+            AsyncMock(),  # team2 RW succeeds
+            AsyncMock(),  # team2 RO succeeds
+        ]
+
+        response = migration_client.post("/management/migrate/regenerate-policies")
+
+        data = response.json()
+        assert data["groups_updated"] == 3
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["resource_name"] == "team1ro"
+        assert data["errors"][0]["resource_type"] == "group"
+
+    def test_regenerate_policies_no_users_no_groups(
+        self, migration_client, migration_app_state
+    ):
+        """Test with empty user and group lists."""
+        migration_app_state.user_manager.list_resources.return_value = []
+        migration_app_state.group_manager.list_resources.return_value = []
+
+        response = migration_client.post("/management/migrate/regenerate-policies")
+
+        data = response.json()
+        assert data["users_updated"] == 0
+        assert data["groups_updated"] == 0
+        assert data["errors"] == []

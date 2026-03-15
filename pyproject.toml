@@ -1,7 +1,7 @@
 [project]
-name = "cdm-minio-service"
+name = "minio-manager-service"
 version = "0.1.0"
-description = "MinIO service for CDM"
+description = "MinIO Manager Service for BERDL"
 readme = "README.md"
 requires-python = ">=3.13"
 
