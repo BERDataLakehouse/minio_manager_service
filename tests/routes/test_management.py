@@ -974,6 +974,25 @@ class TestRegeneratePoliciesEndpoint:
         assert len(data["errors"]) == 1
         assert data["errors"][0]["resource_name"] == "team1"
 
+    def test_regenerate_policies_ro_group_error_continues(
+        self, migration_client, migration_app_state
+    ):
+        """Test that an RO group error does not block the next base group."""
+        migration_app_state.policy_manager.regenerate_group_home_policy.side_effect = [
+            AsyncMock(),  # team1 RW succeeds
+            Exception("team1 RO failed"),  # team1 RO fails
+            AsyncMock(),  # team2 RW succeeds
+            AsyncMock(),  # team2 RO succeeds
+        ]
+
+        response = migration_client.post("/management/migrate/regenerate-policies")
+
+        data = response.json()
+        assert data["groups_updated"] == 3
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["resource_name"] == "team1ro"
+        assert data["errors"][0]["resource_type"] == "group"
+
     def test_regenerate_policies_no_users_no_groups(
         self, migration_client, migration_app_state
     ):
