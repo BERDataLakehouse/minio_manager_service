@@ -17,7 +17,7 @@ The MinIO Manager Service enables:
 
 ### User Management
 - Auto-create MinIO users with unique access/secret key pairs
-- Rotate credentials on each request for enhanced security
+- Credentials cached in PostgreSQL and returned on subsequent requests until explicitly rotated via `POST /credentials/rotate`
 - Assign per-user home directories:
   - `s3a://cdm-lake/users-general-warehouse/{username}/` - General data storage
   - `s3a://cdm-lake/users-sql-warehouse/{username}/` - Spark SQL warehouse
@@ -34,9 +34,9 @@ The MinIO Manager Service enables:
 
 ### Security
 - KBase authentication with role-based access control
-- User credentials generated transiently (not stored)
-- Service holds only MinIO root credentials
+- User credentials encrypted at rest in PostgreSQL (pgcrypto)
 - Distributed locking via Redis for concurrent operations
+- Credential rotation with blocking locks to prevent race conditions
 
 ## Quick Start
 
@@ -67,6 +67,12 @@ docker compose logs -f minio-manager
 | `KBASE_ADMIN_ROLES` | No | `KBASE_ADMIN` | Comma-separated admin roles |
 | `KBASE_REQUIRED_ROLES` | No | `BERDL_USER` | Required roles for access |
 | `REDIS_URL` | Yes | - | Redis URL (e.g., `redis://redis:6379`) |
+| `MMS_DB_HOST` | Yes | - | PostgreSQL host for credential storage |
+| `MMS_DB_PORT` | No | `5432` | PostgreSQL port |
+| `MMS_DB_NAME` | Yes | - | PostgreSQL database name |
+| `MMS_DB_USER` | Yes | - | PostgreSQL username |
+| `MMS_DB_PASSWORD` | Yes | - | PostgreSQL password |
+| `MMS_DB_ENCRYPTION_KEY` | Yes | - | Symmetric key for pgcrypto credential encryption. Use a strong random string; rotating this key requires re-encrypting existing rows. |
 
 
 ## JupyterHub Integration
@@ -74,7 +80,7 @@ docker compose logs -f minio-manager
 The service integrates seamlessly with JupyterHub:
 
 1. **On user login**: JupyterHub calls `/credentials/` endpoint
-2. **Credentials issued**: Service creates user (if needed) and returns fresh credentials
+2. **Credentials issued**: Service creates user (if needed), caches credentials in PostgreSQL, and returns them
 3. **Spark configured**: Credentials injected into Spark session configuration
 4. **Transparent access**: Spark jobs access MinIO with proper permissions
 

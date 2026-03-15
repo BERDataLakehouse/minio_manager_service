@@ -20,6 +20,8 @@ from src.minio.managers.sharing_manager import SharingManager
 from src.minio.managers.user_manager import UserManager
 from src.minio.models.minio_config import MinIOConfig
 from src.service.arg_checkers import not_falsy
+from src.credentials.service import CredentialService
+from src.credentials.store import CredentialStore  # used in build_app only
 from src.service.kb_auth import KBaseAuth, KBaseUser
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,7 @@ class AppState(NamedTuple):
     policy_manager: PolicyManager
     sharing_manager: SharingManager
     lock_manager: DistributedLockManager
+    credential_service: CredentialService
 
 
 class RequestState(NamedTuple):
@@ -85,6 +88,20 @@ async def build_app(app: FastAPI) -> None:
         )
     logger.info("Distributed lock manager initialized and Redis connection verified")
 
+    # Initialize credential store
+    logger.info("Initializing credential store...")
+    credential_store = await CredentialStore.create(
+        host=not_falsy(os.getenv("MMS_DB_HOST"), "MMS_DB_HOST"),
+        port=int(os.getenv("MMS_DB_PORT", "5432")),
+        dbname=not_falsy(os.getenv("MMS_DB_NAME"), "MMS_DB_NAME"),
+        user=not_falsy(os.getenv("MMS_DB_USER"), "MMS_DB_USER"),
+        password=not_falsy(os.getenv("MMS_DB_PASSWORD"), "MMS_DB_PASSWORD"),
+        encryption_key=not_falsy(
+            os.getenv("MMS_DB_ENCRYPTION_KEY"), "MMS_DB_ENCRYPTION_KEY"
+        ),
+    )
+    logger.info("Credential store initialized")
+
     # Initialize all managers with the shared client
     user_manager = UserManager(minio_client, config)
     group_manager = GroupManager(minio_client, config)
@@ -98,6 +115,14 @@ async def build_app(app: FastAPI) -> None:
     )
     logger.info("MinIO managers initialized")
 
+    # Initialize credential service (coordinates lock + MinIO + DB)
+    credential_service = CredentialService(
+        user_manager=user_manager,
+        credential_store=credential_store,
+        lock_manager=lock_manager,
+    )
+    logger.info("Credential service initialized")
+
     # Store components in app state
     app.state._auth = auth
     app.state._minio_manager_state = AppState(
@@ -108,6 +133,7 @@ async def build_app(app: FastAPI) -> None:
         policy_manager=policy_manager,
         sharing_manager=sharing_manager,
         lock_manager=lock_manager,
+        credential_service=credential_service,
     )
     logger.info("Application state initialized")
 
@@ -134,6 +160,13 @@ async def destroy_app_state(app: FastAPI) -> None:
             logger.info("MinIO client session closed")
         except Exception as e:
             logger.warning(f"Error closing MinIO client session: {e}")
+
+        try:
+            # Close credential store connection pool (via credential service)
+            await app.state._minio_manager_state.credential_service.close()
+            logger.info("Credential store connection pool closed")
+        except Exception as e:
+            logger.warning(f"Error closing credential store: {e}")
 
     # https://docs.aiohttp.org/en/stable/client_advanced.html#graceful-shutdown
     await asyncio.sleep(0.250)

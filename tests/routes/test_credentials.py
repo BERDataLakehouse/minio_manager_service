@@ -1,13 +1,8 @@
 """
-Comprehensive tests for the routes.credentials module.
+Tests for the routes.credentials module.
 
-Tests cover:
-- get_credentials endpoint
-- User auto-creation for new users
-- Credential rotation for existing users
-- Authentication dependency integration
-- Response model validation
-- Error handling scenarios
+Routes are thin wrappers around CredentialService, so these tests
+verify routing, response models, and correct delegation.
 """
 
 import os
@@ -17,7 +12,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.routes.credentials import CredentialsResponse, get_credentials, router
+from src.routes.credentials import (
+    CredentialsResponse,
+    get_credentials,
+    rotate_credentials,
+    router,
+)
 from src.service.app_state import AppState
 from src.service.dependencies import auth
 from src.service.kb_auth import AdminPermission, KBaseUser
@@ -35,21 +35,17 @@ def mock_mc_path():
 
 @pytest.fixture
 def mock_app_state():
-    """Create a mock application state."""
+    """Create a mock application state with credential_service."""
     app_state = MagicMock(spec=AppState)
 
-    # Mock user manager
-    app_state.user_manager = AsyncMock()
-    app_state.user_manager.resource_exists = AsyncMock(return_value=True)
-    app_state.user_manager.get_or_rotate_user_credentials = AsyncMock(
+    # Mock credential service
+    app_state.credential_service = AsyncMock()
+    app_state.credential_service.get_or_create = AsyncMock(
         return_value=("testuser", "test-secret-key-123")
     )
-
-    # Mock create_user return value
-    mock_user_model = MagicMock()
-    mock_user_model.access_key = "testuser"
-    mock_user_model.secret_key = "new-secret-key-123"
-    app_state.user_manager.create_user = AsyncMock(return_value=mock_user_model)
+    app_state.credential_service.rotate = AsyncMock(
+        return_value=("testuser", "rotated-secret-key-456")
+    )
 
     return app_state
 
@@ -65,18 +61,7 @@ def test_app(mock_app_state, mock_auth_user):
     """Create a test FastAPI application with mocked dependencies."""
     app = FastAPI()
     app.include_router(router)
-
-    # Store app state
-    app.state.minio_client = MagicMock()
-    app.state.minio_config = MagicMock()
-    app.state.policy_manager = MagicMock()
-    app.state.user_manager = mock_app_state.user_manager
-    app.state.group_manager = MagicMock()
-    app.state.sharing_manager = MagicMock()
-
-    # Override auth dependency
     app.dependency_overrides[auth] = lambda: mock_auth_user
-
     return app
 
 
@@ -121,7 +106,7 @@ class TestCredentialsResponse:
             access_key="testuser",
             secret_key="test-secret-key-123456",
         )
-        with pytest.raises(Exception):  # frozen models raise on assignment
+        with pytest.raises(Exception):
             response.username = "changed"
 
     def test_credentials_response_username_min_length(self):
@@ -139,7 +124,7 @@ class TestCredentialsResponse:
             CredentialsResponse(
                 username="testuser",
                 access_key="testuser",
-                secret_key="short",  # less than 8 characters
+                secret_key="short",
             )
 
 
@@ -147,12 +132,10 @@ class TestCredentialsResponse:
 
 
 class TestGetCredentialsEndpoint:
-    """Tests for get_credentials endpoint."""
+    """Tests for GET /credentials/ endpoint."""
 
-    def test_get_credentials_existing_user(self, client, mock_app_state):
-        """Test getting credentials for an existing user."""
-        mock_app_state.user_manager.resource_exists.return_value = True
-
+    def test_get_credentials_delegates_to_service(self, client, mock_app_state):
+        """Test that get_credentials delegates to credential_service."""
         response = client.get("/credentials/")
 
         assert response.status_code == 200
@@ -161,155 +144,91 @@ class TestGetCredentialsEndpoint:
         assert data["access_key"] == "testuser"
         assert data["secret_key"] == "test-secret-key-123"
 
-    def test_get_credentials_new_user_auto_create(self, client, mock_app_state):
-        """Test auto-creating a new user when they don't exist."""
-        mock_app_state.user_manager.resource_exists.return_value = False
-
-        response = client.get("/credentials/")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["username"] == "testuser"
-        assert data["access_key"] == "testuser"
-        assert data["secret_key"] == "new-secret-key-123"
-
-        # Verify create_user was called
-        mock_app_state.user_manager.create_user.assert_called_once_with(
-            username="testuser"
-        )
-
-    def test_get_credentials_rotates_existing_user_credentials(
-        self, client, mock_app_state
-    ):
-        """Test that credentials are rotated for existing users."""
-        mock_app_state.user_manager.resource_exists.return_value = True
-
-        client.get("/credentials/")
-
-        mock_app_state.user_manager.get_or_rotate_user_credentials.assert_called_once_with(
+        mock_app_state.credential_service.get_or_create.assert_called_once_with(
             "testuser"
         )
 
+    def test_get_credentials_idempotent(self, client, mock_app_state):
+        """Test that multiple calls delegate to service consistently."""
+        response1 = client.get("/credentials/")
+        response2 = client.get("/credentials/")
 
-# === ASYNC FUNCTION TESTS ===
+        assert response1.json() == response2.json()
+        assert mock_app_state.credential_service.get_or_create.call_count == 2
 
+    def test_get_credentials_response_format(self, client, mock_app_state):
+        """Test response has exactly the expected fields."""
+        response = client.get("/credentials/")
+        data = response.json()
 
-class TestGetCredentialsAsync:
-    """Async tests for get_credentials function."""
+        assert set(data.keys()) == {"username", "access_key", "secret_key"}
 
     @pytest.mark.asyncio
-    async def test_get_credentials_existing_user_async(self, mock_app_state):
-        """Test get_credentials for existing user."""
-
+    async def test_get_credentials_async(self, mock_app_state):
+        """Test get_credentials async function directly."""
         mock_request = MagicMock()
-        mock_request.app.state = mock_app_state
 
         with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
-            mock_app_state.user_manager.resource_exists.return_value = True
-
             user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
             response = await get_credentials(user, mock_request)
 
             assert response.username == "alice"
-            mock_app_state.user_manager.get_or_rotate_user_credentials.assert_called_once_with(
+            mock_app_state.credential_service.get_or_create.assert_called_once_with(
                 "alice"
             )
 
     @pytest.mark.asyncio
-    async def test_get_credentials_new_user_async(self, mock_app_state):
-        """Test get_credentials auto-creates new user."""
-
+    async def test_get_credentials_propagates_errors(self, mock_app_state):
+        """Test that service errors propagate through the route."""
         mock_request = MagicMock()
-        mock_request.app.state = mock_app_state
+        mock_app_state.credential_service.get_or_create.side_effect = Exception(
+            "Service failure"
+        )
 
         with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
-            mock_app_state.user_manager.resource_exists.return_value = False
-
-            user = KBaseUser(user="newuser", admin_perm=AdminPermission.FULL)
-            response = await get_credentials(user, mock_request)
-
-            assert response.username == "newuser"
-            mock_app_state.user_manager.create_user.assert_called_once_with(
-                username="newuser"
-            )
-
-
-# === ERROR HANDLING TESTS ===
-
-
-class TestGetCredentialsErrors:
-    """Tests for error handling in get_credentials."""
-
-    @pytest.mark.asyncio
-    async def test_get_credentials_user_creation_error(self, mock_app_state):
-        """Test handling of user creation errors."""
-
-        mock_request = MagicMock()
-
-        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
-            mock_app_state.user_manager.resource_exists.return_value = False
-            mock_app_state.user_manager.create_user.side_effect = Exception(
-                "Creation failed"
-            )
-
-            user = KBaseUser(user="newuser", admin_perm=AdminPermission.FULL)
-
-            with pytest.raises(Exception) as exc_info:
+            user = KBaseUser(user="testuser", admin_perm=AdminPermission.FULL)
+            with pytest.raises(Exception, match="Service failure"):
                 await get_credentials(user, mock_request)
 
-            assert "Creation failed" in str(exc_info.value)
 
-    @pytest.mark.asyncio
-    async def test_get_credentials_rotation_error(self, mock_app_state):
-        """Test handling of credential rotation errors."""
-
-        mock_request = MagicMock()
-
-        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
-            mock_app_state.user_manager.resource_exists.return_value = True
-            mock_app_state.user_manager.get_or_rotate_user_credentials.side_effect = (
-                Exception("Rotation failed")
-            )
-
-            user = KBaseUser(user="existinguser", admin_perm=AdminPermission.FULL)
-
-            with pytest.raises(Exception) as exc_info:
-                await get_credentials(user, mock_request)
-
-            assert "Rotation failed" in str(exc_info.value)
+# === ROTATE CREDENTIALS ENDPOINT TESTS ===
 
 
-# === INTEGRATION TESTS ===
+class TestRotateCredentialsEndpoint:
+    """Tests for POST /credentials/rotate endpoint."""
 
+    def test_rotate_credentials_delegates_to_service(self, client, mock_app_state):
+        """Test that rotate delegates to credential_service."""
+        response = client.post("/credentials/rotate")
 
-class TestCredentialsIntegration:
-    """Integration-like tests for credentials workflow."""
-
-    def test_credentials_workflow_new_user(self, client, mock_app_state):
-        """Test complete workflow for new user."""
-        mock_app_state.user_manager.resource_exists.return_value = False
-
-        # First request - user is created
-        response1 = client.get("/credentials/")
-        assert response1.status_code == 200
-
-        # Simulate user now exists
-        mock_app_state.user_manager.resource_exists.return_value = True
-
-        # Second request - credentials are rotated
-        response2 = client.get("/credentials/")
-        assert response2.status_code == 200
-
-        # Verify both create and rotate were called
-        mock_app_state.user_manager.create_user.assert_called_once()
-        mock_app_state.user_manager.get_or_rotate_user_credentials.assert_called_once()
-
-    def test_credentials_response_format(self, client, mock_app_state):
-        """Test that response format matches expected schema."""
-        response = client.get("/credentials/")
+        assert response.status_code == 200
         data = response.json()
+        assert data["username"] == "testuser"
+        assert data["secret_key"] == "rotated-secret-key-456"
 
-        assert "username" in data
-        assert "access_key" in data
-        assert "secret_key" in data
-        assert len(data) == 3  # Only these three fields
+        mock_app_state.credential_service.rotate.assert_called_once_with("testuser")
+
+    @pytest.mark.asyncio
+    async def test_rotate_credentials_async(self, mock_app_state):
+        """Test rotate_credentials async function directly."""
+        mock_request = MagicMock()
+
+        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+            user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
+            response = await rotate_credentials(user, mock_request)
+
+            assert response.username == "alice"
+            mock_app_state.credential_service.rotate.assert_called_once_with("alice")
+
+    @pytest.mark.asyncio
+    async def test_rotate_credentials_propagates_errors(self, mock_app_state):
+        """Test that service errors propagate through the route."""
+        mock_request = MagicMock()
+        mock_app_state.credential_service.rotate.side_effect = Exception(
+            "Rotation failed"
+        )
+
+        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+            user = KBaseUser(user="testuser", admin_perm=AdminPermission.FULL)
+            with pytest.raises(Exception, match="Rotation failed"):
+                await rotate_credentials(user, mock_request)

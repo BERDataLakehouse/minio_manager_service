@@ -31,6 +31,7 @@ from src.minio.models.policy import (
 )
 from src.minio.models.user import UserModel
 from src.minio.models.group import GroupModel
+from src.credentials.store import CredentialStore
 from src.service.dependencies import auth
 from src.service.exceptions import PolicyOperationError
 from src.service.kb_auth import AdminPermission, KBaseUser
@@ -466,3 +467,20 @@ def test_client(mock_app):
     """
     app, _ = mock_app
     return TestClient(app)
+
+
+# =============================================================================
+# Credential Store Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def mock_credential_store():
+    """Create a mock CredentialStore for testing."""
+    store = MagicMock(spec=CredentialStore)
+    store.get_credentials = AsyncMock(return_value=None)
+    store.store_credentials = AsyncMock()
+    store.delete_credentials = AsyncMock()
+    store.health_check = AsyncMock(return_value=True)
+    store.close = AsyncMock()
+    return store

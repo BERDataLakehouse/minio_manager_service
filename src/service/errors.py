@@ -55,6 +55,9 @@ class ErrorType(Enum):
     DATA_GOVERNANCE_ERROR = (20042, "Data governance policy violation")
     """ A data governance policy was violated. """
 
+    CREDENTIAL_OPERATION_ERROR = (20045, "Credential operation error")
+    """ A credential operation failed (e.g., lock contention). """
+
     CONNECTION_ERROR = (20050, "MinIO connection error")
     """ MinIO server connection failed. """
 
