@@ -105,17 +105,25 @@ def mock_group_manager():
 
 
 @pytest.fixture
+def mock_polaris_service():
+    """Create a mock PolarisService."""
+    return AsyncMock()
+
+
+@pytest.fixture
 def user_manager(
     mock_minio_client,
     mock_minio_config,
     mock_executor,
     mock_policy_manager,
     mock_group_manager,
+    mock_polaris_service,
 ):
     """Create a UserManager with mocked dependencies."""
     manager = UserManager(
         client=mock_minio_client,
         config=mock_minio_config,
+        polaris_service=mock_polaris_service,
     )
     manager._executor = mock_executor
     manager._policy_manager = mock_policy_manager
@@ -200,23 +208,30 @@ def sample_group_policy():
 class TestUserManagerInit:
     """Tests for UserManager initialization."""
 
-    def test_init_with_dependencies(self, mock_minio_client, mock_minio_config):
+    def test_init_with_dependencies(
+        self, mock_minio_client, mock_minio_config, mock_polaris_service
+    ):
         """Test UserManager initialization with all dependencies."""
         manager = UserManager(
             client=mock_minio_client,
             config=mock_minio_config,
+            polaris_service=mock_polaris_service,
         )
 
         assert manager.client == mock_minio_client
         assert manager.config == mock_minio_config
+        assert manager.polaris_service == mock_polaris_service
         assert manager._policy_manager is None  # Lazy init
         assert manager._group_manager is None  # Lazy init
 
-    def test_warehouse_prefixes_set(self, mock_minio_client, mock_minio_config):
+    def test_warehouse_prefixes_set(
+        self, mock_minio_client, mock_minio_config, mock_polaris_service
+    ):
         """Test that warehouse prefixes are set correctly."""
         manager = UserManager(
             client=mock_minio_client,
             config=mock_minio_config,
+            polaris_service=mock_polaris_service,
         )
 
         assert manager.users_general_warehouse_prefix == "users-general-warehouse"
@@ -446,6 +461,61 @@ class TestCreateUser:
 
         # Should call put_object for directory markers and welcome file
         assert mock_minio_client.put_object.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_create_user_calls_polaris_ensure_tenant_catalog(
+        self,
+        user_manager,
+        mock_executor,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
+    ):
+        """Test that create_user calls ensure_tenant_catalog when creating globalusers group."""
+        mock_executor._execute_command.return_value = MagicMock(success=True, stderr="")
+        mock_policy_manager.ensure_user_policies.return_value = (
+            sample_user_home_policy,
+            sample_user_system_policy,
+        )
+        user_manager.resource_exists = AsyncMock(return_value=False)
+        mock_group_manager.resource_exists.return_value = False  # Group doesn't exist
+
+        polaris = AsyncMock()
+        user_manager.polaris_service = polaris
+
+        await user_manager.create_user("testuser")
+
+        polaris.ensure_tenant_catalog.assert_called_once_with(
+            GLOBAL_USER_GROUP,
+            f"s3a://test-bucket/tenant-sql-warehouse/{GLOBAL_USER_GROUP}/iceberg/",
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_user_polaris_error_propagates(
+        self,
+        user_manager,
+        mock_executor,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
+    ):
+        """Test Polaris errors during create_user are propagated."""
+        mock_executor._execute_command.return_value = MagicMock(success=True, stderr="")
+        mock_policy_manager.ensure_user_policies.return_value = (
+            sample_user_home_policy,
+            sample_user_system_policy,
+        )
+        user_manager.resource_exists = AsyncMock(return_value=False)
+        mock_group_manager.resource_exists.return_value = False
+
+        user_manager.polaris_service.ensure_tenant_catalog.side_effect = Exception(
+            "Polaris down"
+        )
+
+        with pytest.raises(Exception, match="Polaris down"):
+            await user_manager.create_user("testuser")
 
 
 # =============================================================================
@@ -743,6 +813,60 @@ class TestDeleteCleanup:
         assert mock_minio_client.list_objects.call_count >= 1
         assert mock_minio_client.delete_object.call_count >= 1
 
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_calls_polaris_in_correct_order(
+        self, user_manager, mock_minio_client
+    ):
+        """Test post-delete cleanup calls Polaris in reverse creation order."""
+        mock_minio_client.list_objects.return_value = []
+        call_order = []
+
+        async def track_delete_principal_role(name):
+            call_order.append(("delete_principal_role", name))
+
+        async def track_delete_principal(name):
+            call_order.append(("delete_principal", name))
+
+        async def track_delete_catalog(name):
+            call_order.append(("delete_catalog", name))
+
+        user_manager.polaris_service.delete_principal_role.side_effect = (
+            track_delete_principal_role
+        )
+        user_manager.polaris_service.delete_principal.side_effect = (
+            track_delete_principal
+        )
+        user_manager.polaris_service.delete_catalog.side_effect = track_delete_catalog
+
+        await user_manager._post_delete_cleanup("testuser")
+
+        assert call_order == [
+            ("delete_principal_role", "testuser_role"),
+            ("delete_principal", "testuser"),
+            ("delete_catalog", "user_testuser"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_polaris_error_does_not_block_other_steps(
+        self, user_manager, mock_minio_client
+    ):
+        """Test one Polaris deletion failure doesn't prevent the others."""
+        mock_minio_client.list_objects.return_value = []
+        user_manager.polaris_service.delete_principal_role.side_effect = Exception(
+            "role delete failed"
+        )
+
+        # Should not raise — each step is independent
+        await user_manager._post_delete_cleanup("testuser")
+
+        # The other two should still be called despite the first failing
+        user_manager.polaris_service.delete_principal.assert_called_once_with(
+            "testuser"
+        )
+        user_manager.polaris_service.delete_catalog.assert_called_once_with(
+            "user_testuser"
+        )
+
 
 # =============================================================================
 # Test: Lazy Manager Initialization
@@ -752,11 +876,14 @@ class TestDeleteCleanup:
 class TestLazyManagerInit:
     """Tests for lazy initialization of policy_manager and group_manager."""
 
-    def test_policy_manager_lazy_init(self, mock_minio_client, mock_minio_config):
+    def test_policy_manager_lazy_init(
+        self, mock_minio_client, mock_minio_config, mock_polaris_service
+    ):
         """Test policy_manager is lazily initialized."""
         manager = UserManager(
             client=mock_minio_client,
             config=mock_minio_config,
+            polaris_service=mock_polaris_service,
         )
         manager._executor = MagicMock()
 
@@ -767,11 +894,14 @@ class TestLazyManagerInit:
         # Second access returns same instance
         assert manager.policy_manager is pm
 
-    def test_group_manager_lazy_init(self, mock_minio_client, mock_minio_config):
+    def test_group_manager_lazy_init(
+        self, mock_minio_client, mock_minio_config, mock_polaris_service
+    ):
         """Test group_manager is lazily initialized."""
         manager = UserManager(
             client=mock_minio_client,
             config=mock_minio_config,
+            polaris_service=mock_polaris_service,
         )
         manager._executor = MagicMock()
 
