@@ -43,6 +43,7 @@ def test_map_polaris_error():
     assert mapping.http_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
+
 def test_map_base_minio_error():
     """Test map_error for the base MinIOError class."""
     err = MinIOError("generic error")

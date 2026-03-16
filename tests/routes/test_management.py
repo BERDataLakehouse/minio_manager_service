@@ -1038,6 +1038,70 @@ class TestPolarisIntegration:
 # === MIGRATION ENDPOINT TESTS ===
 
 
+class TestListUserNamesEndpoint:
+    """Tests for list_user_names endpoint (admin-only, lightweight)."""
+
+    def test_list_user_names_success(self, client, mock_app_state):
+        """Test listing usernames successfully."""
+        mock_app_state.user_manager.list_resources.return_value = [
+            "user1",
+            "user2",
+            "user3",
+        ]
+
+        response = client.get("/management/users/names")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["usernames"] == ["user1", "user2", "user3"]
+        assert data["total_count"] == 3
+
+    def test_list_user_names_empty(self, client, mock_app_state):
+        """Test listing usernames when none exist."""
+        mock_app_state.user_manager.list_resources.return_value = []
+
+        response = client.get("/management/users/names")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 0
+        assert data["usernames"] == []
+
+    def test_list_user_names_response_model_validation(self, client, mock_app_state):
+        """Test that response matches UserNamesResponse model."""
+        mock_app_state.user_manager.list_resources.return_value = ["testuser"]
+
+        response = client.get("/management/users/names")
+
+        assert response.status_code == 200
+        parsed = UserNamesResponse(**response.json())
+        assert parsed.usernames == ["testuser"]
+        assert parsed.total_count == 1
+
+    def test_list_user_names_does_not_call_get_user(self, client, mock_app_state):
+        """Test that the lightweight endpoint does NOT call get_user for each user."""
+        mock_app_state.user_manager.list_resources.return_value = ["u1", "u2"]
+
+        response = client.get("/management/users/names")
+
+        assert response.status_code == 200
+        mock_app_state.user_manager.get_user.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_list_user_names_async(self, mock_app_state):
+        """Test list_user_names function directly."""
+        mock_request = MagicMock()
+        mock_user = KBaseUser(user="admin", admin_perm=AdminPermission.FULL)
+
+        mock_app_state.user_manager.list_resources.return_value = ["a", "b"]
+
+        with patch("src.routes.management.get_app_state", return_value=mock_app_state):
+            response = await list_user_names(mock_request, mock_user)
+
+            assert response.usernames == ["a", "b"]
+            assert response.total_count == 2
+
+
 class TestRegeneratePoliciesEndpoint:
     """Tests for regenerate_all_policies migration endpoint."""
 
@@ -1145,6 +1209,25 @@ class TestRegeneratePoliciesEndpoint:
         assert data["groups_updated"] == 3
         assert len(data["errors"]) == 1
         assert data["errors"][0]["resource_name"] == "team1"
+
+    def test_regenerate_policies_ro_group_error_continues(
+        self, migration_client, migration_app_state
+    ):
+        """Test that an RO group error does not block the next base group."""
+        migration_app_state.policy_manager.regenerate_group_home_policy.side_effect = [
+            AsyncMock(),  # team1 RW succeeds
+            Exception("team1 RO failed"),  # team1 RO fails
+            AsyncMock(),  # team2 RW succeeds
+            AsyncMock(),  # team2 RO succeeds
+        ]
+
+        response = migration_client.post("/management/migrate/regenerate-policies")
+
+        data = response.json()
+        assert data["groups_updated"] == 3
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["resource_name"] == "team1ro"
+        assert data["errors"][0]["resource_type"] == "group"
 
     def test_regenerate_policies_no_users_no_groups(
         self, migration_client, migration_app_state

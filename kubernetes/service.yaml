@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cdm-minio-service
+  namespace: cdm-jupyterhub
+spec:
+  selector:
+    app: cdm-minio-service
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

@@ -867,6 +867,35 @@ class TestDeleteCleanup:
             "user_testuser"
         )
 
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_home_dir_error_continues(
+        self, user_manager, mock_minio_client
+    ):
+        """Test that home directory deletion failure does not block system directory cleanup."""
+        mock_minio_client.list_objects.side_effect = [
+            Exception("home dir error"),  # _delete_user_home_directory fails
+            ["sys_obj"],  # _delete_user_system_directory succeeds
+        ]
+
+        # Should not raise
+        await user_manager._post_delete_cleanup("testuser")
+
+        # System directory cleanup should still have been attempted
+        assert mock_minio_client.list_objects.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_system_dir_error_does_not_raise(
+        self, user_manager, mock_minio_client
+    ):
+        """Test that system directory deletion failure is caught and logged."""
+        mock_minio_client.list_objects.side_effect = [
+            ["obj1"],  # _delete_user_home_directory succeeds
+            Exception("system dir error"),  # _delete_user_system_directory fails
+        ]
+
+        # Should not raise
+        await user_manager._post_delete_cleanup("testuser")
+
 
 # =============================================================================
 # Test: Lazy Manager Initialization

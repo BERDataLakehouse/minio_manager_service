@@ -1543,6 +1543,78 @@ class TestPolicyCreation:
 
 
 # =============================================================================
+# Test: Regenerate Policy Methods
+# =============================================================================
+
+
+class TestRegenerateUserHomePolicy:
+    """Tests for regenerate_user_home_policy method."""
+
+    @pytest.mark.asyncio
+    async def test_regenerate_creates_fresh_policy_and_updates(self, policy_manager):
+        """Test regenerate builds a fresh policy and calls _update_minio_policy."""
+        policy_manager._update_minio_policy = AsyncMock()
+
+        result = await policy_manager.regenerate_user_home_policy("alice")
+
+        assert result.policy_name == "user-home-policy-alice"
+        assert len(result.policy_document.statement) > 0
+        policy_manager._update_minio_policy.assert_called_once_with(result)
+
+    @pytest.mark.asyncio
+    async def test_regenerate_propagates_update_error(self, policy_manager):
+        """Test that errors from _update_minio_policy propagate."""
+        policy_manager._update_minio_policy = AsyncMock(
+            side_effect=PolicyOperationError("update failed")
+        )
+
+        with pytest.raises(PolicyOperationError, match="update failed"):
+            await policy_manager.regenerate_user_home_policy("alice")
+
+
+class TestRegenerateGroupHomePolicy:
+    """Tests for regenerate_group_home_policy method."""
+
+    @pytest.mark.asyncio
+    async def test_regenerate_rw_group_policy(self, policy_manager):
+        """Test regenerate builds an RW group policy."""
+        policy_manager._update_minio_policy = AsyncMock()
+
+        result = await policy_manager.regenerate_group_home_policy(
+            group_name="team1", read_only=False
+        )
+
+        assert result.policy_name == "group-policy-team1"
+        assert len(result.policy_document.statement) > 0
+        policy_manager._update_minio_policy.assert_called_once_with(result)
+
+    @pytest.mark.asyncio
+    async def test_regenerate_ro_group_policy(self, policy_manager):
+        """Test regenerate builds an RO group policy with path_target."""
+        policy_manager._update_minio_policy = AsyncMock()
+
+        result = await policy_manager.regenerate_group_home_policy(
+            group_name="team1ro", read_only=True, path_target="team1"
+        )
+
+        assert result.policy_name == "group-policy-team1ro"
+        assert len(result.policy_document.statement) > 0
+        policy_manager._update_minio_policy.assert_called_once_with(result)
+
+    @pytest.mark.asyncio
+    async def test_regenerate_propagates_update_error(self, policy_manager):
+        """Test that errors from _update_minio_policy propagate."""
+        policy_manager._update_minio_policy = AsyncMock(
+            side_effect=PolicyOperationError("update failed")
+        )
+
+        with pytest.raises(PolicyOperationError, match="update failed"):
+            await policy_manager.regenerate_group_home_policy(
+                group_name="team1", read_only=False
+            )
+
+
+# =============================================================================
 # Test: Resource Existence Checks
 # =============================================================================
 

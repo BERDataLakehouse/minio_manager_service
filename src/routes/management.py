@@ -503,7 +503,7 @@ async def add_group_member(
 
     response = GroupManagementResponse(
         group_name=group_info.group_name,
-        ro_group_name=f"{base_group_name}ro",
+        ro_group_name=None,  # RO group name is only returned on group creation
         members=group_info.members,
         member_count=len(group_info.members),
         policy_name=str(group_info.policy_name),
@@ -550,7 +550,7 @@ async def remove_group_member(
 
     response = GroupManagementResponse(
         group_name=group_info.group_name,
-        ro_group_name=f"{base_group_name}ro",
+        ro_group_name=None,  # RO group name is only returned on group creation
         members=group_info.members,
         member_count=len(group_info.members),
         policy_name=str(group_info.policy_name),
