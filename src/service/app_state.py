@@ -19,6 +19,7 @@ from src.minio.managers.policy_manager import PolicyManager
 from src.minio.managers.sharing_manager import SharingManager
 from src.minio.managers.user_manager import UserManager
 from src.minio.models.minio_config import MinIOConfig
+from src.polaris.polaris_service import PolarisService
 from src.service.arg_checkers import not_falsy
 from src.credentials.service import CredentialService
 from src.credentials.store import CredentialStore  # used in build_app only
@@ -37,6 +38,7 @@ class AppState(NamedTuple):
     policy_manager: PolicyManager
     sharing_manager: SharingManager
     lock_manager: DistributedLockManager
+    polaris_service: PolarisService
     credential_service: CredentialService
 
 
@@ -88,6 +90,14 @@ async def build_app(app: FastAPI) -> None:
         )
     logger.info("Distributed lock manager initialized and Redis connection verified")
 
+    # Initialize Polaris Service
+    logger.info("Initializing Polaris Service...")
+    polaris_uri = not_falsy(os.getenv("POLARIS_CATALOG_URI"), "POLARIS_CATALOG_URI")
+    polaris_cred = not_falsy(os.getenv("POLARIS_CREDENTIAL"), "POLARIS_CREDENTIAL")
+    minio_endpoint = str(config.endpoint)
+    polaris_service = PolarisService(polaris_uri, polaris_cred, minio_endpoint)
+    logger.info("Polaris Service initialized")
+
     # Initialize credential store
     logger.info("Initializing credential store...")
     credential_store = await CredentialStore.create(
@@ -102,9 +112,9 @@ async def build_app(app: FastAPI) -> None:
     )
     logger.info("Credential store initialized")
 
-    # Initialize all managers with the shared client
-    user_manager = UserManager(minio_client, config)
-    group_manager = GroupManager(minio_client, config)
+    # Initialize all managers with the shared client and polaris hook
+    user_manager = UserManager(minio_client, config, polaris_service=polaris_service)
+    group_manager = GroupManager(minio_client, config, polaris_service=polaris_service)
     policy_manager = PolicyManager(minio_client, config, lock_manager=lock_manager)
     sharing_manager = SharingManager(
         minio_client,
@@ -133,6 +143,7 @@ async def build_app(app: FastAPI) -> None:
         policy_manager=policy_manager,
         sharing_manager=sharing_manager,
         lock_manager=lock_manager,
+        polaris_service=polaris_service,
         credential_service=credential_service,
     )
     logger.info("Application state initialized")
@@ -160,6 +171,13 @@ async def destroy_app_state(app: FastAPI) -> None:
             logger.info("MinIO client session closed")
         except Exception as e:
             logger.warning(f"Error closing MinIO client session: {e}")
+
+        try:
+            # Close Polaris HTTP session
+            await app.state._minio_manager_state.polaris_service.close()
+            logger.info("Polaris HTTP session closed")
+        except Exception as e:
+            logger.warning(f"Error closing Polaris HTTP session: {e}")
 
         try:
             # Close credential store connection pool (via credential service)
