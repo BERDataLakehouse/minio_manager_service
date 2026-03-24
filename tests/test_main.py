@@ -105,17 +105,25 @@ class TestLifecycleEvents:
         with patch(
             "src.main.app_state.build_app", new_callable=AsyncMock
         ) as mock_build:
-            # Find and call the startup handler
-            for handler in app.router.on_startup:
-                await handler()
+            # Exercise the lifespan context manager (startup phase)
+            ctx = app.router.lifespan_context(app)
+            await ctx.__aenter__()
             mock_build.assert_called_once_with(app)
+            with patch(
+                "src.main.app_state.destroy_app_state", new_callable=AsyncMock
+            ):
+                await ctx.__aexit__(None, None, None)
 
     @pytest.mark.asyncio
     async def test_shutdown_calls_destroy_app_state(self):
         app = create_application()
         with patch(
-            "src.main.app_state.destroy_app_state", new_callable=AsyncMock
-        ) as mock_destroy:
-            for handler in app.router.on_shutdown:
-                await handler()
-            mock_destroy.assert_called_once_with(app)
+            "src.main.app_state.build_app", new_callable=AsyncMock
+        ):
+            ctx = app.router.lifespan_context(app)
+            await ctx.__aenter__()
+            with patch(
+                "src.main.app_state.destroy_app_state", new_callable=AsyncMock
+            ) as mock_destroy:
+                await ctx.__aexit__(None, None, None)
+                mock_destroy.assert_called_once_with(app)
