@@ -62,17 +62,26 @@ async def build_app(app: FastAPI) -> None:
     """
     logger.info("Initializing application state...")
 
-    # Run Alembic migrations (no-op when already at head)
-    run_migrations()
+    # Validate DB env vars *before* running migrations so Alembic never
+    # silently falls back to its localhost defaults on a misconfigured env.
+    db_host = not_falsy(os.getenv("MMS_DB_HOST"), "MMS_DB_HOST")
+    db_port = int(os.getenv("MMS_DB_PORT", "5432"))
+    db_name = not_falsy(os.getenv("MMS_DB_NAME"), "MMS_DB_NAME")
+    db_user = not_falsy(os.getenv("MMS_DB_USER"), "MMS_DB_USER")
+    db_password = not_falsy(os.getenv("MMS_DB_PASSWORD"), "MMS_DB_PASSWORD")
+
+    # Run Alembic migrations (no-op when already at head).
+    # Runs in a thread to avoid blocking the async event loop at startup.
+    await asyncio.to_thread(run_migrations)
 
     # Initialize shared database pool (must come before auth for profile capture)
     logger.info("Initializing database pool...")
     db_pool = await DatabasePool.create(
-        host=not_falsy(os.getenv("MMS_DB_HOST"), "MMS_DB_HOST"),
-        port=int(os.getenv("MMS_DB_PORT", "5432")),
-        dbname=not_falsy(os.getenv("MMS_DB_NAME"), "MMS_DB_NAME"),
-        user=not_falsy(os.getenv("MMS_DB_USER"), "MMS_DB_USER"),
-        password=not_falsy(os.getenv("MMS_DB_PASSWORD"), "MMS_DB_PASSWORD"),
+        host=db_host,
+        port=db_port,
+        dbname=db_name,
+        user=db_user,
+        password=db_password,
     )
     logger.info("Database pool initialized")
 

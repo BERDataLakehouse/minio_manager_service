@@ -40,6 +40,7 @@ DELETE FROM tenant_metadata WHERE tenant_name = %(tenant_name)s;
 _INSERT_STEWARD = """
 INSERT INTO tenant_stewards (tenant_name, username, assigned_by, assigned_at)
 VALUES (%(tenant_name)s, %(username)s, %(assigned_by)s, %(assigned_at)s)
+ON CONFLICT (tenant_name, username) DO NOTHING
 RETURNING tenant_name, username, assigned_by, assigned_at;
 """
 
@@ -189,8 +190,8 @@ class TenantMetadataStore:
 
     async def add_steward(
         self, tenant_name: str, username: str, assigned_by: str
-    ) -> dict:
-        """Assign a user as steward. Raises on duplicate."""
+    ) -> dict | None:
+        """Assign a user as steward. Returns None if already assigned (idempotent)."""
         now = datetime.now(timezone.utc)
         async with self._pool.connection() as conn:
             cur = await conn.execute(
@@ -204,6 +205,8 @@ class TenantMetadataStore:
             )
             row = await cur.fetchone()
             await conn.commit()
+        if row is None:
+            return None
         return _row_to_steward(row)
 
     async def remove_steward(self, tenant_name: str, username: str) -> bool:

@@ -349,11 +349,17 @@ class TestCreateMetadata:
         assert result.tenant_name == "t1"
 
     @pytest.mark.asyncio
-    async def test_create_conflict(self, manager, mock_metadata_store):
+    async def test_create_idempotent_returns_existing(
+        self, manager, mock_metadata_store
+    ):
+        """When metadata already exists, create returns the existing record."""
         mock_metadata_store.create_metadata.return_value = None
-        with pytest.raises(HTTPException) as exc_info:
-            await manager.create_metadata("t1", "admin")
-        assert exc_info.value.status_code == 409
+        existing = _meta_dict("t1", created_by="original_creator")
+        mock_metadata_store.get_metadata.return_value = existing
+        result = await manager.create_metadata("t1", "admin")
+        assert result.tenant_name == "t1"
+        assert result.created_by == "original_creator"
+        mock_metadata_store.get_metadata.assert_called_once_with("t1")
 
     @pytest.mark.asyncio
     async def test_create_with_update_body(self, manager, mock_metadata_store):
@@ -422,14 +428,28 @@ class TestGetStewards:
                 "assigned_at": datetime.now(timezone.utc),
             }
         ]
-        result = await manager.get_stewards("t1", "token")
+        result = await manager.get_stewards("t1", ADMIN, "token")
         assert len(result) == 1
         assert result[0].username == "alice"
 
     @pytest.mark.asyncio
     async def test_returns_empty(self, manager):
-        result = await manager.get_stewards("t1", "token")
+        result = await manager.get_stewards("t1", ADMIN, "token")
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_outsider_forbidden(self, manager, mock_group_manager):
+        mock_group_manager.get_group_members.return_value = ["alice"]
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.get_stewards("t1", OUTSIDER, "token")
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_group_404(self, manager, mock_group_manager):
+        mock_group_manager.resource_exists.return_value = False
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.get_stewards("nope", ADMIN, "token")
+        assert exc_info.value.status_code == 404
 
 
 # ── add_steward ──────────────────────────────────────────────────────────
@@ -456,6 +476,15 @@ class TestAddSteward:
         mock_group_manager.is_user_in_group.side_effect = [False, True]
         result = await manager.add_steward("t1", "alice", "admin", "token")
         assert result.username == "alice"
+
+    @pytest.mark.asyncio
+    async def test_add_duplicate_returns_409(self, manager, mock_metadata_store):
+        """Assigning a user who is already a steward returns 409."""
+        mock_metadata_store.add_steward.return_value = None
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.add_steward("t1", "alice", "admin", "token")
+        assert exc_info.value.status_code == 409
+        assert "already a steward" in exc_info.value.detail
 
 
 # ── remove_steward ───────────────────────────────────────────────────────

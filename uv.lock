@@ -671,7 +671,7 @@ dev = [
 requires-dist = [
     { name = "aiobotocore", specifier = "==3.2.1" },
     { name = "aiohttp", specifier = "==3.13.3" },
-    { name = "alembic", specifier = ">=1.13.0" },
+    { name = "alembic", specifier = "==1.18.4" },
     { name = "cacheout", specifier = "==0.16.0" },
     { name = "fastapi", specifier = "==0.135.1" },
     { name = "httpx", specifier = "==0.28.1" },

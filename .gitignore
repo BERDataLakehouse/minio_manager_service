@@ -7,10 +7,3 @@ __pycache__
 deploy.cfg
 .coverage
 test/test_temp/
-
-# Personal files
-.claude/
-CLAUDE.md
-docs/postgres-setup.md
-integration_tests/
-kubernetes/

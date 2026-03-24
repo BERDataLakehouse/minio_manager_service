@@ -319,7 +319,10 @@ class TenantManager:
         created_by: str,
         update: TenantMetadataUpdate | None = None,
     ) -> TenantMetadataResponse:
-        """Create tenant metadata. Returns 409 if already exists."""
+        """Create tenant metadata (idempotent).
+
+        If metadata already exists, returns the existing record unchanged.
+        """
         result = await self.metadata_store.create_metadata(
             tenant_name,
             created_by,
@@ -328,10 +331,7 @@ class TenantManager:
             organization=update.organization if update else None,
         )
         if result is None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Metadata for tenant '{tenant_name}' already exists",
-            )
+            result = await self.metadata_store.get_metadata(tenant_name)
         return self._meta_dict_to_response(result)
 
     async def delete_metadata(self, tenant_name: str) -> None:
@@ -358,9 +358,30 @@ class TenantManager:
     # ── Steward management ───────────────────────────────────────────────
 
     async def get_stewards(
-        self, tenant_name: str, token: str
+        self, tenant_name: str, requesting_user: KBaseUser, token: str
     ) -> list[TenantStewardResponse]:
-        """Get stewards with profile info."""
+        """Get stewards with profile info. Requires member, steward, or admin."""
+        await self._require_group_exists(tenant_name)
+
+        # Authorization: admin, steward, or member
+        rw_members = await self._group_manager.get_group_members(tenant_name)
+        ro_members = []
+        try:
+            ro_members = await self._group_manager.get_group_members(f"{tenant_name}ro")
+        except Exception:
+            pass
+        all_members = set(rw_members) | set(ro_members)
+
+        is_admin = requesting_user.admin_perm == AdminPermission.FULL
+        is_steward = await self.metadata_store.is_steward(
+            tenant_name, requesting_user.user
+        )
+        if not is_admin and not is_steward and requesting_user.user not in all_members:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You must be a member, steward, or admin to view tenant stewards",
+            )
+
         steward_rows = await self.metadata_store.get_stewards(tenant_name)
         usernames = [s["username"] for s in steward_rows]
         profiles = await self._profile_client.get_user_profiles(usernames, token)
@@ -408,6 +429,11 @@ class TenantManager:
             )
 
         row = await self.metadata_store.add_steward(tenant_name, username, assigned_by)
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"User '{username}' is already a steward of tenant '{tenant_name}'",
+            )
         profiles = await self._profile_client.get_user_profiles([username], token)
         profile = profiles.get(username, UserProfile(username=username))
 

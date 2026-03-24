@@ -76,10 +76,10 @@ def create_application() -> FastAPI:
     # Include routers
     app.include_router(health.router, tags=["health"])
     app.include_router(credentials.router, tags=["credentials"])
+    app.include_router(tenants.router, tags=["tenants"])
     app.include_router(sharing.router, tags=["sharing"])
     app.include_router(workspaces.router, tags=["workspaces"])
     app.include_router(management.router, tags=["management"])
-    app.include_router(tenants.router, tags=["tenants"])
 
     # Add startup and shutdown event handlers
     async def startup_event():

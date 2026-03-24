@@ -7,6 +7,7 @@ import logging
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Path, Query, Request, status
+from fastapi.security.utils import get_authorization_scheme_param
 
 from src.minio.models.tenant import (
     TenantDetailResponse,
@@ -26,9 +27,10 @@ router = APIRouter(prefix="/tenants", tags=["tenants"])
 
 
 def _extract_token(request: Request) -> str:
-    """Extract the bearer token from the Authorization header."""
+    """Extract the bearer token from the Authorization header (case-insensitive)."""
     header = request.headers.get("Authorization", "")
-    return header.removeprefix("Bearer ").strip()
+    _, credentials = get_authorization_scheme_param(header)
+    return credentials
 
 
 # ── Tenant listing ───────────────────────────────────────────────────────
@@ -164,7 +166,7 @@ async def remove_tenant_member(
     "/{tenant_name}/stewards",
     response_model=list[TenantStewardResponse],
     summary="List stewards",
-    description="List stewards for a tenant. Any authenticated member, steward, or admin.",
+    description="List stewards for a tenant. Requires member, steward, or admin.",
 )
 async def get_tenant_stewards(
     tenant_name: Annotated[str, Path(min_length=1)],
@@ -173,7 +175,9 @@ async def get_tenant_stewards(
 ):
     app_state = get_app_state(request)
     token = _extract_token(request)
-    return await app_state.tenant_manager.get_stewards(tenant_name, token)
+    return await app_state.tenant_manager.get_stewards(
+        tenant_name, authenticated_user, token
+    )
 
 
 @router.post(
@@ -218,9 +222,9 @@ async def remove_steward(
 @router.post(
     "/{tenant_name}",
     response_model=TenantMetadataResponse,
-    status_code=status.HTTP_201_CREATED,
+    status_code=status.HTTP_200_OK,
     summary="Create tenant metadata",
-    description="Create metadata for a tenant. Admin only. Returns 409 if already exists.",
+    description="Create metadata for a tenant (idempotent). Admin only. Returns existing if already created.",
 )
 async def create_tenant(
     tenant_name: Annotated[str, Path(min_length=1)],

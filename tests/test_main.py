@@ -63,8 +63,8 @@ class TestAuthMiddleware:
         response = client.get(
             "/health", headers={"Authorization": "Basic dXNlcjpwYXNz"}
         )
-        # InvalidAuthHeaderError → handled by universal_error_handler
-        assert response.status_code in (401, 500)
+        # InvalidAuthHeaderError → 401 via error_mapping + universal_error_handler
+        assert response.status_code == 401
 
     def test_scheme_only_no_credentials_raises(self):
         app, _ = self._make_app()

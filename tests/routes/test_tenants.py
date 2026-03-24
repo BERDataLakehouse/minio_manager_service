@@ -251,7 +251,7 @@ class TestLifecycle:
             "/tenants/t1",
             headers={"Authorization": "Bearer tok"},
         )
-        assert resp.status_code == 201
+        assert resp.status_code == 200
         mock_tenant_manager.create_metadata.assert_called_once()
 
     def test_create_tenant_with_body(self, admin_client, mock_tenant_manager):
@@ -260,7 +260,7 @@ class TestLifecycle:
             json={"display_name": "T1", "description": "A tenant"},
             headers={"Authorization": "Bearer tok"},
         )
-        assert resp.status_code == 201
+        assert resp.status_code == 200
 
     def test_delete_tenant(self, admin_client, mock_tenant_manager):
         resp = admin_client.delete(
