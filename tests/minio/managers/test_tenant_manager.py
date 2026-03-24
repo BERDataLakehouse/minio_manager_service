@@ -369,6 +369,13 @@ class TestCreateMetadata:
         assert call_kwargs.kwargs["display_name"] == "Custom"
         assert call_kwargs.kwargs["description"] == "Desc"
 
+    @pytest.mark.asyncio
+    async def test_create_nonexistent_group_404(self, manager, mock_group_manager):
+        mock_group_manager.resource_exists.return_value = False
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.create_metadata("nope", "admin")
+        assert exc_info.value.status_code == 404
+
 
 # ── delete_metadata ──────────────────────────────────────────────────────
 

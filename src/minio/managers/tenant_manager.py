@@ -107,7 +107,7 @@ class TenantManager:
         try:
             ro_members = await self._group_manager.get_group_members(ro_name)
         except Exception:
-            pass  # RO group may not exist
+            logger.warning("Could not fetch RO group '%s' members", ro_name)
 
         rw_set = set(rw_members)
         all_members = rw_set | set(ro_members)
@@ -187,7 +187,7 @@ class TenantManager:
         try:
             ro_members = await self._group_manager.get_group_members(f"{tenant_name}ro")
         except Exception:
-            pass
+            logger.warning("Could not fetch RO group '%sro' members", tenant_name)
 
         rw_set = set(rw_members)
         all_members = rw_set | set(ro_members)
@@ -266,17 +266,17 @@ class TenantManager:
                     detail="Only admins can remove stewards from a tenant",
                 )
 
-        # Remove from both RW and RO groups
+        # Remove from both RW and RO groups (user may only be in one)
         try:
             await self._group_manager.remove_user_from_group(username, tenant_name)
         except Exception:
-            pass
+            logger.debug("User '%s' not in RW group '%s' (or group missing)", username, tenant_name)
         try:
             await self._group_manager.remove_user_from_group(
                 username, f"{tenant_name}ro"
             )
         except Exception:
-            pass
+            logger.debug("User '%s' not in RO group '%sro' (or group missing)", username, tenant_name)
 
         # Cascade: remove steward assignment if user was a steward
         if is_target_steward:
@@ -323,6 +323,7 @@ class TenantManager:
 
         If metadata already exists, returns the existing record unchanged.
         """
+        await self._require_group_exists(tenant_name)
         result = await self.metadata_store.create_metadata(
             tenant_name,
             created_by,
@@ -369,7 +370,7 @@ class TenantManager:
         try:
             ro_members = await self._group_manager.get_group_members(f"{tenant_name}ro")
         except Exception:
-            pass
+            logger.warning("Could not fetch RO group '%sro' members", tenant_name)
         all_members = set(rw_members) | set(ro_members)
 
         is_admin = requesting_user.admin_perm == AdminPermission.FULL
@@ -420,7 +421,7 @@ class TenantManager:
                 username, f"{tenant_name}ro"
             )
         except Exception:
-            pass
+            logger.warning("Could not check RO group '%sro' membership for '%s'", tenant_name, username)
 
         if not is_rw_member and not is_ro_member:
             raise HTTPException(
