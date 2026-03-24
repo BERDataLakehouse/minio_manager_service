@@ -461,6 +461,7 @@ class TenantManager:
 
     async def remove_steward(self, tenant_name: str, username: str) -> None:
         """Remove steward assignment. Does not remove from tenant."""
+        await self._require_group_exists(tenant_name)
         removed = await self.metadata_store.remove_steward(tenant_name, username)
         if not removed:
             raise HTTPException(
