@@ -20,6 +20,8 @@ RUN pip3 install --upgrade pip && \
 COPY pyproject.toml uv.lock .python-version ./
 RUN uv sync --locked --inexact --no-dev
 
+COPY alembic.ini alembic.ini
+COPY migrations/ migrations/
 COPY src/ src/
 
 EXPOSE 8000

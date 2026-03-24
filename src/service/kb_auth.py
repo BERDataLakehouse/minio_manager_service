@@ -4,16 +4,22 @@ A client for the KBase Auth2 server.
 
 # Mostly copied from https://github.com/kbase/cdm-task-service/blob/main/cdmtaskservice/kb_auth.py
 
+from __future__ import annotations
+
+import asyncio
 import logging
 import time
 from enum import IntEnum
-from typing import NamedTuple, Self
+from typing import TYPE_CHECKING, NamedTuple, Self
 
 import aiohttp
 from cacheout.lru import LRUCache
 
 from src.service.arg_checkers import not_falsy as _not_falsy
 from src.service.exceptions import InvalidTokenError, MissingRoleError
+
+if TYPE_CHECKING:
+    from src.minio.stores.user_profile_store import UserProfileStore
 
 
 class AdminPermission(IntEnum):
@@ -69,6 +75,7 @@ class KBaseAuth:
         full_admin_roles: list[str] | None = None,
         cache_max_size: int = 10000,
         cache_expiration: int = 300,
+        profile_store: UserProfileStore | None = None,
     ) -> Self:
         """
         Create the client.
@@ -79,6 +86,8 @@ class KBaseAuth:
         cache_max_size -  the maximum size of the token cache.
         cache_expiration -  the expiration time for the token cache in
             seconds.
+        profile_store - Optional UserProfileStore for capturing display name
+            and email from /api/V2/me on cache miss (zero extra HTTP calls).
         """
         if not _not_falsy(auth_url, "auth_url").endswith("/"):
             auth_url += "/"
@@ -90,6 +99,7 @@ class KBaseAuth:
             cache_max_size,
             cache_expiration,
             j.get("servicename"),
+            profile_store,
         )
 
     def __init__(
@@ -100,11 +110,13 @@ class KBaseAuth:
         cache_max_size: int,
         cache_expiration: int,
         service_name: str,
+        profile_store: UserProfileStore | None = None,
     ):
         self._url = auth_url
         self._me_url = self._url + "api/V2/me"
         self._req_roles = set(required_roles) if required_roles else None
         self._full_roles = set(full_admin_roles) if full_admin_roles else set()
+        self._profile_store = profile_store
         self._cache_timer = (
             time.time
         )  # TODO TEST figure out how to replace the timer to test
@@ -143,7 +155,26 @@ class KBaseAuth:
             )
         v = (j["user"], self._get_admin_role(croles))
         self._cache.set(token, v)
+
+        # Capture display name and email from the response we already have.
+        # Fire-and-forget so auth latency is not affected.
+        if self._profile_store:
+            asyncio.create_task(
+                self._safe_profile_upsert(j["user"], j.get("display"), j.get("email"))
+            )
+
         return KBaseUser(v[0], v[1])
+
+    async def _safe_profile_upsert(
+        self, username: str, display_name: str | None, email: str | None
+    ) -> None:
+        """Upsert user profile, swallowing errors so auth is never blocked."""
+        try:
+            await self._profile_store.upsert(username, display_name, email)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Failed to capture profile for %s", username, exc_info=True
+            )
 
     def _get_admin_role(self, roles: set[str]):
         if roles & self._full_roles:

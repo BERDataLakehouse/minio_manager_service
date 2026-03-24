@@ -7,20 +7,9 @@ the same MinIO credentials for a user until explicitly rotated.
 
 import logging
 
-from psycopg.conninfo import make_conninfo
 from psycopg_pool import AsyncConnectionPool
 
 logger = logging.getLogger(__name__)
-
-_CREATE_TABLE = """
-CREATE TABLE IF NOT EXISTS user_credentials (
-    username    TEXT PRIMARY KEY,
-    access_key  TEXT NOT NULL,
-    secret_key  BYTEA NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-"""
 
 _UPSERT = """
 INSERT INTO user_credentials (username, access_key, secret_key)
@@ -44,48 +33,16 @@ DELETE FROM user_credentials WHERE username = %(username)s;
 
 
 class CredentialStore:
-    """Async PostgreSQL credential store with pgcrypto encryption."""
+    """Async PostgreSQL credential store with pgcrypto encryption.
+
+    Accepts a shared ``AsyncConnectionPool`` from ``DatabasePool``.
+    Table creation and pgcrypto verification are handled by Alembic
+    migrations and ``DatabasePool.create()`` respectively.
+    """
 
     def __init__(self, pool: AsyncConnectionPool, encryption_key: str) -> None:
         self._pool = pool
         self._encryption_key = encryption_key
-
-    @classmethod
-    async def create(
-        cls,
-        *,
-        host: str,
-        port: int,
-        dbname: str,
-        user: str,
-        password: str,
-        encryption_key: str,
-    ) -> "CredentialStore":
-        conninfo = make_conninfo(
-            host=host, port=port, dbname=dbname, user=user, password=password
-        )
-        pool = AsyncConnectionPool(
-            conninfo=conninfo, min_size=1, max_size=10, open=False
-        )
-        await pool.open()
-
-        async with pool.connection() as conn:
-            # Fail fast if pgcrypto is not installed
-            cur = await conn.execute(
-                "SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto'"
-            )
-            if await cur.fetchone() is None:
-                await pool.close()
-                raise RuntimeError(
-                    "pgcrypto extension is not installed. "
-                    "Run 'CREATE EXTENSION pgcrypto;' as a superuser."
-                )
-            # Ensure the table exists
-            await conn.execute(_CREATE_TABLE)
-            await conn.commit()
-
-        logger.info("CredentialStore initialized (pgcrypto verified, table ensured)")
-        return cls(pool, encryption_key)
 
     async def get_credentials(self, username: str) -> tuple[str, str] | None:
         """Return (access_key, secret_key) or None if not cached."""
@@ -133,6 +90,4 @@ class CredentialStore:
             return False
 
     async def close(self) -> None:
-        """Close the connection pool."""
-        await self._pool.close()
-        logger.info("CredentialStore connection pool closed")
+        """No-op. Pool lifecycle is managed by DatabasePool."""

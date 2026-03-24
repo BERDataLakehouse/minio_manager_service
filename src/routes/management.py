@@ -424,6 +424,11 @@ async def create_group(
         creator=authenticated_user.user,
     )
 
+    # Ensure tenant metadata row exists for this group
+    await app_state.tenant_manager.ensure_metadata(
+        group_name, created_by=authenticated_user.user
+    )
+
     # Return response for the main group (read/write), including RO group info
     response = GroupManagementResponse(
         group_name=group_info.group_name,

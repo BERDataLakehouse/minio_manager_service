@@ -3,6 +3,7 @@
 import logging
 from unittest.mock import patch
 
+
 from src.service.config import Settings, configure_logging, get_settings
 
 
@@ -39,3 +40,40 @@ def test_configure_logging_unrecognized_level(caplog):
             configure_logging()
     assert "Unrecognized log level" in caplog.text
     assert "BOGUS_LEVEL" in caplog.text
+
+
+# ── service_root_path validator ───────────────────────────────────────────
+
+
+class TestNormalizeServiceRootPath:
+    def test_none_returns_empty(self):
+        s = Settings(service_root_path=None)
+        assert s.service_root_path == ""
+
+    def test_empty_string_returns_empty(self):
+        s = Settings(service_root_path="")
+        assert s.service_root_path == ""
+
+    def test_single_slash_returns_empty(self):
+        s = Settings(service_root_path="/")
+        assert s.service_root_path == ""
+
+    def test_leading_slash_preserved(self):
+        s = Settings(service_root_path="/api/v1")
+        assert s.service_root_path == "/api/v1"
+
+    def test_missing_leading_slash_added(self):
+        s = Settings(service_root_path="api/v1")
+        assert s.service_root_path == "/api/v1"
+
+    def test_trailing_slash_stripped(self):
+        s = Settings(service_root_path="/api/v1/")
+        assert s.service_root_path == "/api/v1"
+
+    def test_whitespace_stripped(self):
+        s = Settings(service_root_path="  /api  ")
+        assert s.service_root_path == "/api"
+
+    def test_both_slashes_fixed(self):
+        s = Settings(service_root_path="api/v1/")
+        assert s.service_root_path == "/api/v1"

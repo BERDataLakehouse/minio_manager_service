@@ -127,6 +127,16 @@ def mock_app_state():
     app_state.policy_manager.detach_policy_from_group = AsyncMock()
     app_state.policy_manager.delete_resource = AsyncMock(return_value=True)
 
+    # Mock tenant manager
+    app_state.tenant_manager = AsyncMock()
+    app_state.tenant_manager.ensure_metadata = AsyncMock(
+        return_value={
+            "tenant_name": "newgroup",
+            "display_name": "newgroup",
+            "created_by": "admin",
+        }
+    )
+
     return app_state
 
 
