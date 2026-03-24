@@ -11,7 +11,15 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security.utils import get_authorization_scheme_param
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from src.routes import credentials, health, management, polaris, sharing, tenants, workspaces
+from src.routes import (
+    credentials,
+    health,
+    management,
+    polaris,
+    sharing,
+    tenants,
+    workspaces,
+)
 from src.service import app_state
 from src.service.config import configure_logging, get_settings
 from src.service.exception_handlers import universal_error_handler
