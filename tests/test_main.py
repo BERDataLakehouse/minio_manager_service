@@ -109,17 +109,13 @@ class TestLifecycleEvents:
             ctx = app.router.lifespan_context(app)
             await ctx.__aenter__()
             mock_build.assert_called_once_with(app)
-            with patch(
-                "src.main.app_state.destroy_app_state", new_callable=AsyncMock
-            ):
+            with patch("src.main.app_state.destroy_app_state", new_callable=AsyncMock):
                 await ctx.__aexit__(None, None, None)
 
     @pytest.mark.asyncio
     async def test_shutdown_calls_destroy_app_state(self):
         app = create_application()
-        with patch(
-            "src.main.app_state.build_app", new_callable=AsyncMock
-        ):
+        with patch("src.main.app_state.build_app", new_callable=AsyncMock):
             ctx = app.router.lifespan_context(app)
             await ctx.__aenter__()
             with patch(
