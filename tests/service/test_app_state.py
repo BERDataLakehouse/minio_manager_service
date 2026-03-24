@@ -39,9 +39,13 @@ class TestAppStateNamedTuple:
             sharing_manager=MagicMock(),
             lock_manager=MagicMock(),
             credential_service=MagicMock(),
+            db_pool=MagicMock(),
+            tenant_manager=MagicMock(),
         )
         assert state.auth is not None
         assert state.credential_service is not None
+        assert state.db_pool is not None
+        assert state.tenant_manager is not None
 
 
 # === REQUEST STATE TESTS ===
@@ -128,8 +132,8 @@ class TestBuildApp:
     """Tests for build_app initialization."""
 
     @pytest.mark.asyncio
-    async def test_build_app_initializes_credential_store(self):
-        """Test build_app initializes credential store correctly."""
+    async def test_build_app_initializes_database_pool(self):
+        """Test build_app initializes shared database pool correctly."""
         app = FastAPI()
 
         env = {
@@ -148,8 +152,13 @@ class TestBuildApp:
             "MMS_DB_ENCRYPTION_KEY": "test-key",
         }
 
+        mock_pool = MagicMock()
+        mock_db_pool = MagicMock()
+        mock_db_pool.pool = mock_pool
+
         with (
             patch.dict(os.environ, env, clear=False),
+            patch("src.service.app_state.run_migrations") as mock_migrate,
             patch(
                 "src.service.app_state.KBaseAuth.create", new_callable=AsyncMock
             ) as mock_auth,
@@ -158,21 +167,24 @@ class TestBuildApp:
             ) as mock_mc,
             patch("src.service.app_state.DistributedLockManager") as mock_lock_cls,
             patch(
-                "src.service.app_state.CredentialStore.create", new_callable=AsyncMock
-            ) as mock_cred_store,
+                "src.service.app_state.DatabasePool.create", new_callable=AsyncMock
+            ) as mock_db_create,
         ):
             mock_auth.return_value = MagicMock()
             mock_mc.return_value = MagicMock()
             mock_lock = MagicMock()
             mock_lock.health_check = AsyncMock(return_value=True)
             mock_lock_cls.return_value = mock_lock
-            mock_cred_store.return_value = MagicMock()
+            mock_db_create.return_value = mock_db_pool
 
             await build_app(app)
 
+            mock_migrate.assert_called_once()
             state = app.state._minio_manager_state
             assert state.credential_service is not None
-            mock_cred_store.assert_called_once()
+            assert state.db_pool is mock_db_pool
+            assert state.tenant_manager is not None
+            mock_db_create.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_build_app_redis_failure_raises(self):
@@ -192,8 +204,15 @@ class TestBuildApp:
             "MMS_DB_ENCRYPTION_KEY": "test-key",
         }
 
+        mock_db_pool = MagicMock()
+        mock_db_pool.pool = MagicMock()
+
         with (
             patch.dict(os.environ, env, clear=False),
+            patch("src.service.app_state.run_migrations"),
+            patch(
+                "src.service.app_state.DatabasePool.create", new_callable=AsyncMock
+            ) as mock_db_create,
             patch(
                 "src.service.app_state.KBaseAuth.create", new_callable=AsyncMock
             ) as mock_auth,
@@ -202,6 +221,7 @@ class TestBuildApp:
             ) as mock_mc,
             patch("src.service.app_state.DistributedLockManager") as mock_lock_cls,
         ):
+            mock_db_create.return_value = mock_db_pool
             mock_auth.return_value = MagicMock()
             mock_mc.return_value = MagicMock()
             mock_lock = MagicMock()
@@ -226,8 +246,8 @@ class TestDestroyAppState:
         mock_lock.close = AsyncMock()
         mock_client = MagicMock()
         mock_client.close_session = AsyncMock()
-        mock_cred_service = MagicMock()
-        mock_cred_service.close = AsyncMock()
+        mock_db_pool = MagicMock()
+        mock_db_pool.close = AsyncMock()
 
         app.state._minio_manager_state = AppState(
             auth=MagicMock(),
@@ -237,14 +257,16 @@ class TestDestroyAppState:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             lock_manager=mock_lock,
-            credential_service=mock_cred_service,
+            credential_service=MagicMock(),
+            db_pool=mock_db_pool,
+            tenant_manager=MagicMock(),
         )
 
         await destroy_app_state(app)
 
         mock_lock.close.assert_called_once()
         mock_client.close_session.assert_called_once()
-        mock_cred_service.close.assert_called_once()
+        mock_db_pool.close.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_destroy_app_state_handles_missing_state(self):
@@ -261,8 +283,8 @@ class TestDestroyAppState:
         mock_lock.close = AsyncMock(side_effect=Exception("Redis error"))
         mock_client = MagicMock()
         mock_client.close_session = AsyncMock(side_effect=Exception("MinIO error"))
-        mock_cred_service = MagicMock()
-        mock_cred_service.close = AsyncMock(side_effect=Exception("DB error"))
+        mock_db_pool = MagicMock()
+        mock_db_pool.close = AsyncMock(side_effect=Exception("DB error"))
 
         app.state._minio_manager_state = AppState(
             auth=MagicMock(),
@@ -272,7 +294,9 @@ class TestDestroyAppState:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             lock_manager=mock_lock,
-            credential_service=mock_cred_service,
+            credential_service=MagicMock(),
+            db_pool=mock_db_pool,
+            tenant_manager=MagicMock(),
         )
 
         # Should not raise
