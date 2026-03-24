@@ -1,5 +1,7 @@
 """Tests for the kb_auth module."""
 
+import asyncio
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -257,6 +259,133 @@ class TestKBaseAuth:
 
             user = await auth.get_user("some-token")
             assert user.user == "anyuser"
+
+    @pytest.mark.asyncio
+    async def test_get_user_fires_profile_upsert(self):
+        """Test get_user creates a task for profile upsert when profile_store is set."""
+        mock_store = AsyncMock()
+        mock_store.upsert = AsyncMock()
+
+        with patch(
+            "src.service.kb_auth._get",
+            new_callable=AsyncMock,
+        ) as mock_get:
+            mock_get.return_value = {"servicename": "Authentication Service"}
+            auth = await KBaseAuth.create(
+                "http://auth:5000/",
+                profile_store=mock_store,
+            )
+
+            mock_get.return_value = {
+                "user": "alice",
+                "customroles": [],
+                "display": "Alice Smith",
+                "email": "alice@org.com",
+            }
+
+            await auth.get_user("token-1")
+            # Let the fire-and-forget task run
+            await asyncio.sleep(0)
+
+        mock_store.upsert.assert_called_once_with(
+            "alice", "Alice Smith", "alice@org.com"
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_user_no_profile_upsert_without_store(self):
+        """Test get_user does not fire profile upsert when profile_store is None."""
+        with patch(
+            "src.service.kb_auth._get",
+            new_callable=AsyncMock,
+        ) as mock_get:
+            mock_get.return_value = {"servicename": "Authentication Service"}
+            auth = await KBaseAuth.create("http://auth:5000/")
+
+            mock_get.return_value = {
+                "user": "alice",
+                "customroles": [],
+                "display": "Alice Smith",
+                "email": "alice@org.com",
+            }
+
+            # Should not raise — no profile_store means no task created
+            await auth.get_user("token-2")
+            assert auth._profile_store is None
+
+    @pytest.mark.asyncio
+    async def test_get_user_profile_upsert_cached_skips(self):
+        """Test profile upsert is NOT fired on cache hit (second call same token)."""
+        mock_store = AsyncMock()
+        mock_store.upsert = AsyncMock()
+
+        with patch(
+            "src.service.kb_auth._get",
+            new_callable=AsyncMock,
+        ) as mock_get:
+            mock_get.return_value = {"servicename": "Authentication Service"}
+            auth = await KBaseAuth.create(
+                "http://auth:5000/",
+                profile_store=mock_store,
+            )
+
+            mock_get.return_value = {
+                "user": "alice",
+                "customroles": [],
+                "display": "Alice Smith",
+                "email": "alice@org.com",
+            }
+
+            await auth.get_user("token-cached")
+            await asyncio.sleep(0)
+            assert mock_store.upsert.call_count == 1
+
+            # Second call with same token — cache hit, no upsert
+            await auth.get_user("token-cached")
+            await asyncio.sleep(0)
+            assert mock_store.upsert.call_count == 1
+
+
+class TestSafeProfileUpsert:
+    """Tests for _safe_profile_upsert error handling."""
+
+    @pytest.mark.asyncio
+    async def test_swallows_exception(self):
+        """Test _safe_profile_upsert swallows store errors."""
+        mock_store = AsyncMock()
+        mock_store.upsert = AsyncMock(side_effect=Exception("DB down"))
+
+        with patch(
+            "src.service.kb_auth._get",
+            new_callable=AsyncMock,
+            return_value={"servicename": "Authentication Service"},
+        ):
+            auth = await KBaseAuth.create(
+                "http://auth:5000/",
+                profile_store=mock_store,
+            )
+
+        # Should not raise
+        await auth._safe_profile_upsert("alice", "Alice", "alice@org.com")
+        mock_store.upsert.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_succeeds_normally(self):
+        """Test _safe_profile_upsert calls store.upsert with correct args."""
+        mock_store = AsyncMock()
+        mock_store.upsert = AsyncMock()
+
+        with patch(
+            "src.service.kb_auth._get",
+            new_callable=AsyncMock,
+            return_value={"servicename": "Authentication Service"},
+        ):
+            auth = await KBaseAuth.create(
+                "http://auth:5000/",
+                profile_store=mock_store,
+            )
+
+        await auth._safe_profile_upsert("bob", "Bob J", None)
+        mock_store.upsert.assert_called_once_with("bob", "Bob J", None)
 
 
 # === GET ADMIN ROLE TESTS ===

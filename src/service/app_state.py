@@ -12,17 +12,22 @@ from typing import NamedTuple
 
 from fastapi import FastAPI, Request
 
+from src.credentials.service import CredentialService
+from src.credentials.store import CredentialStore
+from src.minio.clients.kbase_profile_client import KBaseUserProfileClient
 from src.minio.core.distributed_lock import DistributedLockManager
 from src.minio.core.minio_client import MinIOClient
 from src.minio.managers.group_manager import GroupManager
 from src.minio.managers.policy_manager import PolicyManager
 from src.minio.managers.sharing_manager import SharingManager
+from src.minio.managers.tenant_manager import TenantManager
 from src.minio.managers.user_manager import UserManager
 from src.minio.models.minio_config import MinIOConfig
+from src.minio.stores.tenant_metadata_store import TenantMetadataStore
+from src.minio.stores.user_profile_store import UserProfileStore
 from src.polaris.polaris_service import PolarisService
 from src.service.arg_checkers import not_falsy
-from src.credentials.service import CredentialService
-from src.credentials.store import CredentialStore  # used in build_app only
+from src.service.database import DatabasePool, run_migrations
 from src.service.kb_auth import KBaseAuth, KBaseUser
 
 logger = logging.getLogger(__name__)
@@ -40,6 +45,8 @@ class AppState(NamedTuple):
     lock_manager: DistributedLockManager
     polaris_service: PolarisService
     credential_service: CredentialService
+    db_pool: DatabasePool
+    tenant_manager: TenantManager
 
 
 class RequestState(NamedTuple):
@@ -57,6 +64,40 @@ async def build_app(app: FastAPI) -> None:
     """
     logger.info("Initializing application state...")
 
+    # Validate DB env vars *before* running migrations so Alembic never
+    # silently falls back to its localhost defaults on a misconfigured env.
+    db_host = not_falsy(os.getenv("MMS_DB_HOST"), "MMS_DB_HOST")
+    db_port = int(os.getenv("MMS_DB_PORT", "5432"))
+    db_name = not_falsy(os.getenv("MMS_DB_NAME"), "MMS_DB_NAME")
+    db_user = not_falsy(os.getenv("MMS_DB_USER"), "MMS_DB_USER")
+    db_password = not_falsy(os.getenv("MMS_DB_PASSWORD"), "MMS_DB_PASSWORD")
+
+    # Run Alembic migrations (no-op when already at head).
+    # Runs in a thread to avoid blocking the async event loop at startup.
+    await asyncio.to_thread(run_migrations)
+
+    # Initialize shared database pool (must come before auth for profile capture)
+    logger.info("Initializing database pool...")
+    db_pool = await DatabasePool.create(
+        host=db_host,
+        port=db_port,
+        dbname=db_name,
+        user=db_user,
+        password=db_password,
+    )
+    logger.info("Database pool initialized")
+
+    # Initialize stores backed by the shared pool
+    credential_store = CredentialStore(
+        pool=db_pool.pool,
+        encryption_key=not_falsy(
+            os.getenv("MMS_DB_ENCRYPTION_KEY"), "MMS_DB_ENCRYPTION_KEY"
+        ),
+    )
+    user_profile_store = UserProfileStore(pool=db_pool.pool)
+    tenant_metadata_store = TenantMetadataStore(pool=db_pool.pool)
+    logger.info("Database stores initialized")
+
     # Initialize auth with KBase auth URL and admin roles from environment variables
     auth_url = os.environ.get("KBASE_AUTH_URL", "https://ci.kbase.us/services/auth/")
     admin_roles = os.environ.get("KBASE_ADMIN_ROLES", "KBASE_ADMIN").split(",")
@@ -64,7 +105,10 @@ async def build_app(app: FastAPI) -> None:
 
     logger.info("Connecting to KBase auth service...")
     auth = await KBaseAuth.create(
-        auth_url, required_roles=required_roles, full_admin_roles=admin_roles
+        auth_url,
+        required_roles=required_roles,
+        full_admin_roles=admin_roles,
+        profile_store=user_profile_store,
     )
     logger.info("KBase auth service connected")
 
@@ -98,20 +142,6 @@ async def build_app(app: FastAPI) -> None:
     polaris_service = PolarisService(polaris_uri, polaris_cred, minio_endpoint)
     logger.info("Polaris Service initialized")
 
-    # Initialize credential store
-    logger.info("Initializing credential store...")
-    credential_store = await CredentialStore.create(
-        host=not_falsy(os.getenv("MMS_DB_HOST"), "MMS_DB_HOST"),
-        port=int(os.getenv("MMS_DB_PORT", "5432")),
-        dbname=not_falsy(os.getenv("MMS_DB_NAME"), "MMS_DB_NAME"),
-        user=not_falsy(os.getenv("MMS_DB_USER"), "MMS_DB_USER"),
-        password=not_falsy(os.getenv("MMS_DB_PASSWORD"), "MMS_DB_PASSWORD"),
-        encryption_key=not_falsy(
-            os.getenv("MMS_DB_ENCRYPTION_KEY"), "MMS_DB_ENCRYPTION_KEY"
-        ),
-    )
-    logger.info("Credential store initialized")
-
     # Initialize all managers with the shared client and polaris hook
     user_manager = UserManager(minio_client, config, polaris_service=polaris_service)
     group_manager = GroupManager(minio_client, config, polaris_service=polaris_service)
@@ -133,6 +163,16 @@ async def build_app(app: FastAPI) -> None:
     )
     logger.info("Credential service initialized")
 
+    # Initialize profile client and tenant manager
+    profile_client = KBaseUserProfileClient(auth_url, pool=db_pool.pool)
+    tenant_manager = TenantManager(
+        metadata_store=tenant_metadata_store,
+        group_manager=group_manager,
+        profile_client=profile_client,
+        minio_config=config,
+    )
+    logger.info("Tenant manager initialized")
+
     # Store components in app state
     app.state._auth = auth
     app.state._minio_manager_state = AppState(
@@ -145,6 +185,8 @@ async def build_app(app: FastAPI) -> None:
         lock_manager=lock_manager,
         polaris_service=polaris_service,
         credential_service=credential_service,
+        db_pool=db_pool,
+        tenant_manager=tenant_manager,
     )
     logger.info("Application state initialized")
 
@@ -180,11 +222,11 @@ async def destroy_app_state(app: FastAPI) -> None:
             logger.warning(f"Error closing Polaris HTTP session: {e}")
 
         try:
-            # Close credential store connection pool (via credential service)
-            await app.state._minio_manager_state.credential_service.close()
-            logger.info("Credential store connection pool closed")
+            # Close shared database pool (covers credential store, profile store, etc.)
+            await app.state._minio_manager_state.db_pool.close()
+            logger.info("Database pool closed")
         except Exception as e:
-            logger.warning(f"Error closing credential store: {e}")
+            logger.warning(f"Error closing database pool: {e}")
 
     # https://docs.aiohttp.org/en/stable/client_advanced.html#graceful-shutdown
     await asyncio.sleep(0.250)

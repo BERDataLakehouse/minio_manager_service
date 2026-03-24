@@ -137,6 +137,16 @@ def mock_app_state():
     app_state.polaris_service.revoke_principal_role_from_principal = AsyncMock()
     app_state.polaris_service.ensure_tenant_catalog = AsyncMock()
 
+    # Mock tenant manager
+    app_state.tenant_manager = AsyncMock()
+    app_state.tenant_manager.ensure_metadata = AsyncMock(
+        return_value={
+            "tenant_name": "newgroup",
+            "display_name": "newgroup",
+            "created_by": "admin",
+        }
+    )
+
     return app_state
 
 

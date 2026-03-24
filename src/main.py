@@ -3,13 +3,15 @@ Main application module for the MinIO Manager API.
 """
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security.utils import get_authorization_scheme_param
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from src.routes import credentials, health, management, sharing, workspaces, polaris
+from src.routes import credentials, health, management, polaris, sharing, tenants, workspaces
 from src.service import app_state
 from src.service.config import configure_logging, get_settings
 from src.service.exception_handlers import universal_error_handler
@@ -55,11 +57,22 @@ def create_application() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        logger.info("Starting application")
+        await app_state.build_app(app)
+        logger.info("Application started")
+        yield
+        logger.info("Shutting down application")
+        await app_state.destroy_app_state(app)
+        logger.info("Application shut down")
+
     app = FastAPI(
         title=settings.app_name,
         description=settings.app_description,
         version=settings.api_version,
         root_path=settings.service_root_path,
+        lifespan=lifespan,
         responses={
             "4XX": {"model": ErrorResponse},
             "5XX": {"model": ErrorResponse},
@@ -77,23 +90,9 @@ def create_application() -> FastAPI:
     app.include_router(health.router, tags=["health"])
     app.include_router(credentials.router, tags=["credentials"])
     app.include_router(polaris.router, tags=["polaris"])
+    app.include_router(tenants.router, tags=["tenants"])
     app.include_router(sharing.router, tags=["sharing"])
     app.include_router(workspaces.router, tags=["workspaces"])
     app.include_router(management.router, tags=["management"])
-
-    # Add startup and shutdown event handlers
-    async def startup_event():
-        logger.info("Starting application")
-        await app_state.build_app(app)
-        logger.info("Application started")
-
-    app.add_event_handler("startup", startup_event)
-
-    async def shutdown_event():
-        logger.info("Shutting down application")
-        await app_state.destroy_app_state(app)
-        logger.info("Application shut down")
-
-    app.add_event_handler("shutdown", shutdown_event)
 
     return app
