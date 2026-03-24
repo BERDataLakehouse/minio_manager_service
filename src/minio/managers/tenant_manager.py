@@ -270,13 +270,21 @@ class TenantManager:
         try:
             await self._group_manager.remove_user_from_group(username, tenant_name)
         except Exception:
-            logger.debug("User '%s' not in RW group '%s' (or group missing)", username, tenant_name)
+            logger.debug(
+                "User '%s' not in RW group '%s' (or group missing)",
+                username,
+                tenant_name,
+            )
         try:
             await self._group_manager.remove_user_from_group(
                 username, f"{tenant_name}ro"
             )
         except Exception:
-            logger.debug("User '%s' not in RO group '%sro' (or group missing)", username, tenant_name)
+            logger.debug(
+                "User '%s' not in RO group '%sro' (or group missing)",
+                username,
+                tenant_name,
+            )
 
         # Cascade: remove steward assignment if user was a steward
         if is_target_steward:
@@ -421,7 +429,11 @@ class TenantManager:
                 username, f"{tenant_name}ro"
             )
         except Exception:
-            logger.warning("Could not check RO group '%sro' membership for '%s'", tenant_name, username)
+            logger.warning(
+                "Could not check RO group '%sro' membership for '%s'",
+                tenant_name,
+                username,
+            )
 
         if not is_rw_member and not is_ro_member:
             raise HTTPException(
