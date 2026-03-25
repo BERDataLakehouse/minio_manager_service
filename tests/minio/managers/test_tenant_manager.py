@@ -12,6 +12,7 @@ from src.minio.managers.tenant_manager import (
     _is_tenant_group,
 )
 from src.minio.models.tenant import TenantMetadataUpdate, UserProfile
+from src.service.exceptions import GroupOperationError
 from src.service.kb_auth import AdminPermission, KBaseUser
 
 
@@ -219,7 +220,7 @@ class TestGetTenantDetail:
             nonlocal call_count
             call_count += 1
             if name.endswith("ro"):
-                raise Exception("Group not found")
+                raise GroupOperationError("Group not found")
             return ["alice", "bob"]
 
         mock_group_manager.get_group_members.side_effect = get_members
@@ -307,7 +308,7 @@ class TestRemoveMember:
 
     @pytest.mark.asyncio
     async def test_remove_swallows_group_errors(self, manager, mock_group_manager):
-        mock_group_manager.remove_user_from_group.side_effect = Exception(
+        mock_group_manager.remove_user_from_group.side_effect = GroupOperationError(
             "Not in group"
         )
         await manager.remove_member("t1", "bob", ADMIN)  # Should not raise

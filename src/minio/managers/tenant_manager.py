@@ -11,6 +11,7 @@ from fastapi import HTTPException, status
 from src.minio.clients.kbase_profile_client import KBaseUserProfileClient
 from src.minio.managers.group_manager import GroupManager
 from src.minio.models.minio_config import MinIOConfig
+from src.service.exceptions import GroupOperationError
 from src.minio.models.tenant import (
     TenantDetailResponse,
     TenantMemberResponse,
@@ -106,7 +107,7 @@ class TenantManager:
         ro_members = []
         try:
             ro_members = await self._group_manager.get_group_members(ro_name)
-        except Exception:
+        except GroupOperationError:
             logger.warning("Could not fetch RO group '%s' members", ro_name)
 
         rw_set = set(rw_members)
@@ -187,7 +188,7 @@ class TenantManager:
         ro_members = []
         try:
             ro_members = await self._group_manager.get_group_members(f"{tenant_name}ro")
-        except Exception:
+        except GroupOperationError:
             logger.warning("Could not fetch RO group '%sro' members", tenant_name)
 
         rw_set = set(rw_members)
@@ -270,7 +271,7 @@ class TenantManager:
         # Remove from both RW and RO groups (user may only be in one)
         try:
             await self._group_manager.remove_user_from_group(username, tenant_name)
-        except Exception:
+        except GroupOperationError:
             logger.debug(
                 "User '%s' not in RW group '%s' (or group missing)",
                 username,
@@ -280,7 +281,7 @@ class TenantManager:
             await self._group_manager.remove_user_from_group(
                 username, f"{tenant_name}ro"
             )
-        except Exception:
+        except GroupOperationError:
             logger.debug(
                 "User '%s' not in RO group '%sro' (or group missing)",
                 username,
@@ -378,7 +379,7 @@ class TenantManager:
         ro_members = []
         try:
             ro_members = await self._group_manager.get_group_members(f"{tenant_name}ro")
-        except Exception:
+        except GroupOperationError:
             logger.warning("Could not fetch RO group '%sro' members", tenant_name)
         all_members = set(rw_members) | set(ro_members)
 
@@ -429,7 +430,7 @@ class TenantManager:
             is_ro_member = await self._group_manager.is_user_in_group(
                 username, f"{tenant_name}ro"
             )
-        except Exception:
+        except GroupOperationError:
             logger.warning(
                 "Could not check RO group '%sro' membership for '%s'",
                 tenant_name,

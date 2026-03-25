@@ -3,7 +3,6 @@
 All endpoints are under the ``/tenants`` prefix.
 """
 
-import logging
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Path, Query, Request, status
@@ -20,8 +19,6 @@ from src.minio.models.tenant import (
 from src.service.app_state import get_app_state
 from src.service.dependencies import auth, require_admin, require_steward_or_admin
 from src.service.kb_auth import KBaseUser
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 
