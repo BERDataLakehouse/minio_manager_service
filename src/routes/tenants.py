@@ -58,7 +58,7 @@ async def list_tenants(
     "/{tenant_name}",
     response_model=TenantDetailResponse,
     summary="Get tenant detail",
-    description="Get full tenant detail. Requires member, steward, or admin.",
+    description="Get full tenant detail. Requires authentication.",
 )
 async def get_tenant_detail(
     tenant_name: Annotated[str, Path(min_length=1)],
@@ -67,9 +67,7 @@ async def get_tenant_detail(
 ):
     app_state = get_app_state(request)
     token = _extract_token(request)
-    return await app_state.tenant_manager.get_tenant_detail(
-        tenant_name, authenticated_user, token
-    )
+    return await app_state.tenant_manager.get_tenant_detail(tenant_name, token)
 
 
 # ── Update tenant metadata ──────────────────────────────────────────────

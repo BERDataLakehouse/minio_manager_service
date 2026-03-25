@@ -27,7 +27,7 @@ from src.service.kb_auth import AdminPermission, KBaseUser
 logger = logging.getLogger(__name__)
 
 # Groups to exclude from tenant listings
-SYSTEM_GROUPS: set[str] = {"globalusers"}
+SYSTEM_GROUPS: set[str] = set()
 
 
 def _is_tenant_group(name: str) -> bool:
@@ -95,7 +95,7 @@ class TenantManager:
     # ── Tenant detail ────────────────────────────────────────────────────
 
     async def get_tenant_detail(
-        self, tenant_name: str, requesting_user: KBaseUser, token: str
+        self, tenant_name: str, token: str
     ) -> TenantDetailResponse:
         """Get full tenant detail with metadata, stewards, members, and profiles."""
         await self._require_group_exists(tenant_name)
@@ -111,17 +111,6 @@ class TenantManager:
 
         rw_set = set(rw_members)
         all_members = rw_set | set(ro_members)
-
-        # Authorization: admin, steward, or member
-        is_admin = requesting_user.admin_perm == AdminPermission.FULL
-        is_steward = await self.metadata_store.is_steward(
-            tenant_name, requesting_user.user
-        )
-        if not is_admin and not is_steward and requesting_user.user not in all_members:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You must be a member, steward, or admin to view tenant details",
-            )
 
         # Metadata (lazy-create if missing)
         meta = await self.ensure_metadata(tenant_name, created_by="system")
@@ -442,13 +431,26 @@ class TenantManager:
             )
 
         row = await self.metadata_store.add_steward(tenant_name, username, assigned_by)
-        if row is None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"User '{username}' is already a steward of tenant '{tenant_name}'",
-            )
         profiles = await self._profile_client.get_user_profiles([username], token)
         profile = profiles.get(username, UserProfile(username=username))
+
+        if row is None:
+            # Already a steward — return existing assignment (idempotent)
+            stewards = await self.metadata_store.get_stewards(tenant_name)
+            existing = next((s for s in stewards if s["username"] == username), None)
+            if existing is None:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Steward '{username}' not found after idempotent check",
+                )
+            logger.info("User %s is already a steward of tenant %s (idempotent)", username, tenant_name)
+            return TenantStewardResponse(
+                username=username,
+                display_name=profile.display_name,
+                email=profile.email,
+                assigned_by=existing["assigned_by"],
+                assigned_at=existing["assigned_at"],
+            )
 
         logger.info("Assigned %s as steward of tenant %s", username, tenant_name)
         return TenantStewardResponse(
