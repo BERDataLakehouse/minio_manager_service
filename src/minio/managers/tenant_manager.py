@@ -443,7 +443,11 @@ class TenantManager:
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Steward '{username}' not found after idempotent check",
                 )
-            logger.info("User %s is already a steward of tenant %s (idempotent)", username, tenant_name)
+            logger.info(
+                "User %s is already a steward of tenant %s (idempotent)",
+                username,
+                tenant_name,
+            )
             return TenantStewardResponse(
                 username=username,
                 display_name=profile.display_name,
