@@ -112,8 +112,8 @@ class TenantManager:
         rw_set = set(rw_members)
         all_members = rw_set | set(ro_members)
 
-        # Metadata (lazy-create if missing)
-        meta = await self.ensure_metadata(tenant_name, created_by="system")
+        # Metadata (read-only — no lazy-create on GET)
+        meta = await self.metadata_store.get_metadata(tenant_name)
 
         # Stewards
         steward_rows = await self.metadata_store.get_stewards(tenant_name)
@@ -144,8 +144,20 @@ class TenantManager:
             for s in steward_rows
         ]
 
-        # Build metadata response
-        metadata_resp = self._meta_dict_to_response(meta)
+        # Build metadata response (defaults if no metadata row exists)
+        if meta is not None:
+            metadata_resp = self._meta_dict_to_response(meta)
+        else:
+            metadata_resp = TenantMetadataResponse(
+                tenant_name=tenant_name,
+                display_name=None,
+                description=None,
+                organization=None,
+                created_by=None,
+                created_at=None,
+                updated_at=None,
+                updated_by=None,
+            )
 
         # Storage paths
         bucket = self._config.default_bucket
@@ -433,28 +445,6 @@ class TenantManager:
         row = await self.metadata_store.add_steward(tenant_name, username, assigned_by)
         profiles = await self._profile_client.get_user_profiles([username], token)
         profile = profiles.get(username, UserProfile(username=username))
-
-        if row is None:
-            # Already a steward — return existing assignment (idempotent)
-            stewards = await self.metadata_store.get_stewards(tenant_name)
-            existing = next((s for s in stewards if s["username"] == username), None)
-            if existing is None:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Steward '{username}' not found after idempotent check",
-                )
-            logger.info(
-                "User %s is already a steward of tenant %s (idempotent)",
-                username,
-                tenant_name,
-            )
-            return TenantStewardResponse(
-                username=username,
-                display_name=profile.display_name,
-                email=profile.email,
-                assigned_by=existing["assigned_by"],
-                assigned_at=existing["assigned_at"],
-            )
 
         logger.info("Assigned %s as steward of tenant %s", username, tenant_name)
         return TenantStewardResponse(

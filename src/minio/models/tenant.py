@@ -49,9 +49,9 @@ class TenantMetadataResponse(BaseModel):
     display_name: str | None = None
     description: str | None = None
     organization: str | None = None
-    created_by: str
-    created_at: datetime
-    updated_at: datetime
+    created_by: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     updated_by: str | None = None
 
 

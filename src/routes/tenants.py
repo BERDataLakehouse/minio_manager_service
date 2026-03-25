@@ -58,7 +58,11 @@ async def list_tenants(
     "/{tenant_name}",
     response_model=TenantDetailResponse,
     summary="Get tenant detail",
-    description="Get full tenant detail. Requires authentication.",
+    description=(
+        "Get full tenant detail including metadata, member list with profiles "
+        "(display name, email, access level), steward list, and storage paths. "
+        "Visible to any authenticated user."
+    ),
 )
 async def get_tenant_detail(
     tenant_name: Annotated[str, Path(min_length=1)],

@@ -194,6 +194,16 @@ class TestGetTenantDetail:
         assert result.storage_paths is not None
 
     @pytest.mark.asyncio
+    async def test_read_only_no_metadata_write(self, manager, mock_metadata_store):
+        """GET detail must not write to DB — returns defaults when metadata missing."""
+        mock_metadata_store.get_metadata.return_value = None
+        result = await manager.get_tenant_detail("t1", "token")
+        assert result.metadata.tenant_name == "t1"
+        assert result.metadata.created_by is None
+        assert result.metadata.created_at is None
+        mock_metadata_store.create_metadata.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_nonexistent_group_404(self, manager, mock_group_manager):
         mock_group_manager.resource_exists.return_value = False
         with pytest.raises(HTTPException) as exc_info:
@@ -471,16 +481,16 @@ class TestAddSteward:
     @pytest.mark.asyncio
     async def test_add_duplicate_is_idempotent(self, manager, mock_metadata_store):
         """Assigning a user who is already a steward returns existing assignment."""
-        mock_metadata_store.add_steward.return_value = None
-        existing_row = {
+        original_time = datetime.now(timezone.utc)
+        mock_metadata_store.add_steward.return_value = {
+            "tenant_name": "t1",
             "username": "alice",
-            "assigned_by": "admin",
-            "assigned_at": datetime.now(timezone.utc),
+            "assigned_by": "original_admin",
+            "assigned_at": original_time,
         }
-        mock_metadata_store.get_stewards.return_value = [existing_row]
         result = await manager.add_steward("t1", "alice", "admin", "token")
         assert result.username == "alice"
-        assert result.assigned_by == "admin"
+        assert result.assigned_by == "original_admin"
 
 
 # ── remove_steward ───────────────────────────────────────────────────────
