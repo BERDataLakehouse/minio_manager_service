@@ -44,11 +44,22 @@ def store(mock_pool):
 
 class TestHelpers:
     def test_row_to_metadata(self):
-        row = ("t1", "T1", "desc", "org", "admin", "2024-01-01", "2024-01-02", None)
+        row = (
+            "t1",
+            "T1",
+            "desc",
+            "https://example.com",
+            "org",
+            "admin",
+            "2024-01-01",
+            "2024-01-02",
+            None,
+        )
         result = _row_to_metadata(row)
         assert result["tenant_name"] == "t1"
         assert result["display_name"] == "T1"
         assert result["description"] == "desc"
+        assert result["website"] == "https://example.com"
         assert result["organization"] == "org"
         assert result["created_by"] == "admin"
         assert result["updated_by"] is None
@@ -67,7 +78,7 @@ class TestHelpers:
 class TestCreateMetadata:
     @pytest.mark.asyncio
     async def test_create_returns_dict(self, store, mock_pool):
-        row = ("t1", "t1", None, None, "admin", "2024-01-01", "2024-01-01", None)
+        row = ("t1", "t1", None, None, None, "admin", "2024-01-01", "2024-01-01", None)
         mock_cursor = AsyncMock()
         mock_cursor.fetchone = AsyncMock(return_value=row)
         mock_pool._mock_conn.execute.return_value = mock_cursor
@@ -92,6 +103,7 @@ class TestCreateMetadata:
             "t1",
             "Display",
             "Desc",
+            "https://example.com",
             "Org",
             "admin",
             "2024-01-01",
@@ -107,17 +119,29 @@ class TestCreateMetadata:
             "admin",
             display_name="Display",
             description="Desc",
+            website="https://example.com",
             organization="Org",
         )
         assert result["display_name"] == "Display"
         assert result["description"] == "Desc"
+        assert result["website"] == "https://example.com"
         assert result["organization"] == "Org"
 
 
 class TestGetMetadata:
     @pytest.mark.asyncio
     async def test_get_returns_dict(self, store, mock_pool):
-        row = ("t1", "T1", "desc", None, "admin", "2024-01-01", "2024-01-01", None)
+        row = (
+            "t1",
+            "T1",
+            "desc",
+            None,
+            None,
+            "admin",
+            "2024-01-01",
+            "2024-01-01",
+            None,
+        )
         mock_cursor = AsyncMock()
         mock_cursor.fetchone = AsyncMock(return_value=row)
         mock_pool._mock_conn.execute.return_value = mock_cursor
@@ -142,6 +166,7 @@ class TestUpdateMetadata:
             "t1",
             "New Name",
             "desc",
+            None,
             None,
             "admin",
             "2024-01-01",
@@ -168,17 +193,33 @@ class TestUpdateMetadata:
 
     @pytest.mark.asyncio
     async def test_update_includes_all_provided_fields(self, store, mock_pool):
-        row = ("t1", "N", "D", "O", "admin", "2024-01-01", "2024-01-02", "user")
+        row = (
+            "t1",
+            "N",
+            "D",
+            "https://example.com",
+            "O",
+            "admin",
+            "2024-01-01",
+            "2024-01-02",
+            "user",
+        )
         mock_cursor = AsyncMock()
         mock_cursor.fetchone = AsyncMock(return_value=row)
         mock_pool._mock_conn.execute.return_value = mock_cursor
 
         await store.update_metadata(
-            "t1", "user", display_name="N", description="D", organization="O"
+            "t1",
+            "user",
+            display_name="N",
+            description="D",
+            website="https://example.com",
+            organization="O",
         )
         sql_arg = mock_pool._mock_conn.execute.call_args[0][0]
         assert "display_name" in sql_arg
         assert "description" in sql_arg
+        assert "website" in sql_arg
         assert "organization" in sql_arg
 
 
@@ -207,8 +248,8 @@ class TestListMetadata:
     @pytest.mark.asyncio
     async def test_list_returns_all(self, store, mock_pool):
         rows = [
-            ("t1", "T1", None, None, "admin", "2024-01-01", "2024-01-01", None),
-            ("t2", "T2", "desc", None, "admin", "2024-01-01", "2024-01-01", None),
+            ("t1", "T1", None, None, None, "admin", "2024-01-01", "2024-01-01", None),
+            ("t2", "T2", "desc", None, None, "admin", "2024-01-01", "2024-01-01", None),
         ]
         mock_cursor = AsyncMock()
         mock_cursor.fetchall = AsyncMock(return_value=rows)

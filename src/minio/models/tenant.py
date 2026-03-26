@@ -1,9 +1,19 @@
 """Pydantic models for tenant metadata, stewards, and member profiles."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+
+# Validates http(s) scheme and structure, stored as str for DB/JSON compatibility.
+HttpUrlStr = Annotated[str, Field(max_length=2048)]
+
+
+def _validate_http_url(v: str | None) -> str | None:
+    """Reject non-http(s) schemes (e.g. javascript:) to prevent XSS downstream."""
+    if v is not None:
+        HttpUrl(v)  # raises ValidationError on bad scheme/structure
+    return v
 
 
 # --- Request Models ---
@@ -16,7 +26,13 @@ class TenantMetadataUpdate(BaseModel):
 
     display_name: str | None = None
     description: str | None = None
+    website: HttpUrlStr | None = None  # URL for the tenant's website or project page
     organization: str | None = None  # User-supplied; not available from KBase Auth
+
+    @field_validator("website")
+    @classmethod
+    def website_must_be_http(cls, v: str | None) -> str | None:
+        return _validate_http_url(v)
 
 
 class StewardAssignment(BaseModel):
@@ -48,6 +64,7 @@ class TenantMetadataResponse(BaseModel):
     tenant_name: str
     display_name: str | None = None
     description: str | None = None
+    website: str | None = None
     organization: str | None = None
     created_by: str | None = None
     created_at: datetime | None = None
@@ -109,6 +126,7 @@ class TenantSummaryResponse(BaseModel):
     tenant_name: str
     display_name: str | None = None
     description: str | None = None
+    website: str | None = None
     member_count: int
     is_member: bool
     is_steward: bool
