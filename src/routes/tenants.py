@@ -3,7 +3,6 @@
 All endpoints are under the ``/tenants`` prefix.
 """
 
-import logging
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Path, Query, Request, status
@@ -20,8 +19,6 @@ from src.minio.models.tenant import (
 from src.service.app_state import get_app_state
 from src.service.dependencies import auth, require_admin, require_steward_or_admin
 from src.service.kb_auth import KBaseUser
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 
@@ -58,7 +55,11 @@ async def list_tenants(
     "/{tenant_name}",
     response_model=TenantDetailResponse,
     summary="Get tenant detail",
-    description="Get full tenant detail. Requires member, steward, or admin.",
+    description=(
+        "Get full tenant detail including metadata, member list with profiles "
+        "(display name, email, access level), steward list, and storage paths. "
+        "Visible to any authenticated user."
+    ),
 )
 async def get_tenant_detail(
     tenant_name: Annotated[str, Path(min_length=1)],
@@ -67,9 +68,7 @@ async def get_tenant_detail(
 ):
     app_state = get_app_state(request)
     token = _extract_token(request)
-    return await app_state.tenant_manager.get_tenant_detail(
-        tenant_name, authenticated_user, token
-    )
+    return await app_state.tenant_manager.get_tenant_detail(tenant_name, token)
 
 
 # ── Update tenant metadata ──────────────────────────────────────────────

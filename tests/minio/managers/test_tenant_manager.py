@@ -12,6 +12,7 @@ from src.minio.managers.tenant_manager import (
     _is_tenant_group,
 )
 from src.minio.models.tenant import TenantMetadataUpdate, UserProfile
+from src.service.exceptions import GroupOperationError
 from src.service.kb_auth import AdminPermission, KBaseUser
 
 
@@ -115,11 +116,11 @@ class TestIsTenantGroup:
     def test_ro_group_excluded(self):
         assert _is_tenant_group("kbasero") is False
 
-    def test_globalusers_excluded(self):
-        assert _is_tenant_group("globalusers") is False
+    def test_globalusers_included(self):
+        assert _is_tenant_group("globalusers") is True
 
-    def test_system_groups_constant(self):
-        assert "globalusers" in SYSTEM_GROUPS
+    def test_system_groups_empty(self):
+        assert len(SYSTEM_GROUPS) == 0
 
 
 # ── list_tenants ─────────────────────────────────────────────────────────
@@ -131,14 +132,17 @@ class TestListTenants:
         mock_metadata_store.list_metadata.return_value = [
             _meta_dict("t1"),
             _meta_dict("t2"),
+            _meta_dict("globalusers"),
         ]
         result = await manager.list_tenants("alice", "token")
-        assert len(result) == 2
-        assert result[0].tenant_name == "t1"
-        assert result[1].tenant_name == "t2"
+        assert len(result) == 3
+        names = [s.tenant_name for s in result]
+        assert "t1" in names
+        assert "t2" in names
+        assert "globalusers" in names
 
     @pytest.mark.asyncio
-    async def test_filters_system_and_ro_groups(self, manager, mock_group_manager):
+    async def test_filters_ro_groups(self, manager, mock_group_manager):
         mock_group_manager.list_resources.return_value = [
             "t1",
             "t1ro",
@@ -147,8 +151,8 @@ class TestListTenants:
         result = await manager.list_tenants("alice", "token")
         names = [s.tenant_name for s in result]
         assert "t1" in names
+        assert "globalusers" in names
         assert "t1ro" not in names
-        assert "globalusers" not in names
 
     @pytest.mark.asyncio
     async def test_is_member_flag(self, manager, mock_group_manager):
@@ -185,35 +189,26 @@ class TestListTenants:
 
 class TestGetTenantDetail:
     @pytest.mark.asyncio
-    async def test_admin_can_view(self, manager):
-        result = await manager.get_tenant_detail("t1", ADMIN, "token")
+    async def test_any_user_can_view(self, manager):
+        result = await manager.get_tenant_detail("t1", "token")
         assert result.metadata.tenant_name == "t1"
         assert result.storage_paths is not None
 
     @pytest.mark.asyncio
-    async def test_member_can_view(self, manager, mock_metadata_store):
-        mock_metadata_store.is_steward.return_value = False
-        result = await manager.get_tenant_detail("t1", MEMBER, "token")
+    async def test_read_only_no_metadata_write(self, manager, mock_metadata_store):
+        """GET detail must not write to DB — returns defaults when metadata missing."""
+        mock_metadata_store.get_metadata.return_value = None
+        result = await manager.get_tenant_detail("t1", "token")
         assert result.metadata.tenant_name == "t1"
-
-    @pytest.mark.asyncio
-    async def test_steward_can_view(self, manager, mock_metadata_store):
-        mock_metadata_store.is_steward.return_value = True
-        result = await manager.get_tenant_detail("t1", STEWARD, "token")
-        assert result.metadata.tenant_name == "t1"
-
-    @pytest.mark.asyncio
-    async def test_outsider_forbidden(self, manager, mock_group_manager):
-        mock_group_manager.get_group_members.return_value = ["alice"]
-        with pytest.raises(HTTPException) as exc_info:
-            await manager.get_tenant_detail("t1", OUTSIDER, "token")
-        assert exc_info.value.status_code == 403
+        assert result.metadata.created_by is None
+        assert result.metadata.created_at is None
+        mock_metadata_store.create_metadata.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_nonexistent_group_404(self, manager, mock_group_manager):
         mock_group_manager.resource_exists.return_value = False
         with pytest.raises(HTTPException) as exc_info:
-            await manager.get_tenant_detail("nope", ADMIN, "token")
+            await manager.get_tenant_detail("nope", "token")
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -225,11 +220,11 @@ class TestGetTenantDetail:
             nonlocal call_count
             call_count += 1
             if name.endswith("ro"):
-                raise Exception("Group not found")
+                raise GroupOperationError("Group not found")
             return ["alice", "bob"]
 
         mock_group_manager.get_group_members.side_effect = get_members
-        result = await manager.get_tenant_detail("t1", ADMIN, "token")
+        result = await manager.get_tenant_detail("t1", "token")
         assert result.member_count == 2
 
 
@@ -313,7 +308,7 @@ class TestRemoveMember:
 
     @pytest.mark.asyncio
     async def test_remove_swallows_group_errors(self, manager, mock_group_manager):
-        mock_group_manager.remove_user_from_group.side_effect = Exception(
+        mock_group_manager.remove_user_from_group.side_effect = GroupOperationError(
             "Not in group"
         )
         await manager.remove_member("t1", "bob", ADMIN)  # Should not raise
@@ -485,13 +480,18 @@ class TestAddSteward:
         assert result.username == "alice"
 
     @pytest.mark.asyncio
-    async def test_add_duplicate_returns_409(self, manager, mock_metadata_store):
-        """Assigning a user who is already a steward returns 409."""
-        mock_metadata_store.add_steward.return_value = None
-        with pytest.raises(HTTPException) as exc_info:
-            await manager.add_steward("t1", "alice", "admin", "token")
-        assert exc_info.value.status_code == 409
-        assert "already a steward" in exc_info.value.detail
+    async def test_add_duplicate_is_idempotent(self, manager, mock_metadata_store):
+        """Assigning a user who is already a steward returns existing assignment."""
+        original_time = datetime.now(timezone.utc)
+        mock_metadata_store.add_steward.return_value = {
+            "tenant_name": "t1",
+            "username": "alice",
+            "assigned_by": "original_admin",
+            "assigned_at": original_time,
+        }
+        result = await manager.add_steward("t1", "alice", "admin", "token")
+        assert result.username == "alice"
+        assert result.assigned_by == "original_admin"
 
 
 # ── remove_steward ───────────────────────────────────────────────────────

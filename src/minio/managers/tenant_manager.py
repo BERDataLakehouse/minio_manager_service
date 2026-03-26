@@ -11,6 +11,7 @@ from fastapi import HTTPException, status
 from src.minio.clients.kbase_profile_client import KBaseUserProfileClient
 from src.minio.managers.group_manager import GroupManager
 from src.minio.models.minio_config import MinIOConfig
+from src.service.exceptions import GroupOperationError
 from src.minio.models.tenant import (
     TenantDetailResponse,
     TenantMemberResponse,
@@ -27,7 +28,7 @@ from src.service.kb_auth import AdminPermission, KBaseUser
 logger = logging.getLogger(__name__)
 
 # Groups to exclude from tenant listings
-SYSTEM_GROUPS: set[str] = {"globalusers"}
+SYSTEM_GROUPS: set[str] = set()
 
 
 def _is_tenant_group(name: str) -> bool:
@@ -95,7 +96,7 @@ class TenantManager:
     # ── Tenant detail ────────────────────────────────────────────────────
 
     async def get_tenant_detail(
-        self, tenant_name: str, requesting_user: KBaseUser, token: str
+        self, tenant_name: str, token: str
     ) -> TenantDetailResponse:
         """Get full tenant detail with metadata, stewards, members, and profiles."""
         await self._require_group_exists(tenant_name)
@@ -106,25 +107,14 @@ class TenantManager:
         ro_members = []
         try:
             ro_members = await self._group_manager.get_group_members(ro_name)
-        except Exception:
+        except GroupOperationError:
             logger.warning("Could not fetch RO group '%s' members", ro_name)
 
         rw_set = set(rw_members)
         all_members = rw_set | set(ro_members)
 
-        # Authorization: admin, steward, or member
-        is_admin = requesting_user.admin_perm == AdminPermission.FULL
-        is_steward = await self.metadata_store.is_steward(
-            tenant_name, requesting_user.user
-        )
-        if not is_admin and not is_steward and requesting_user.user not in all_members:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You must be a member, steward, or admin to view tenant details",
-            )
-
-        # Metadata (lazy-create if missing)
-        meta = await self.ensure_metadata(tenant_name, created_by="system")
+        # Metadata (read-only — no lazy-create on GET)
+        meta = await self.metadata_store.get_metadata(tenant_name)
 
         # Stewards
         steward_rows = await self.metadata_store.get_stewards(tenant_name)
@@ -155,8 +145,20 @@ class TenantManager:
             for s in steward_rows
         ]
 
-        # Build metadata response
-        metadata_resp = self._meta_dict_to_response(meta)
+        # Build metadata response (defaults if no metadata row exists)
+        if meta is not None:
+            metadata_resp = self._meta_dict_to_response(meta)
+        else:
+            metadata_resp = TenantMetadataResponse(
+                tenant_name=tenant_name,
+                display_name=None,
+                description=None,
+                organization=None,
+                created_by=None,
+                created_at=None,
+                updated_at=None,
+                updated_by=None,
+            )
 
         # Storage paths
         bucket = self._config.default_bucket
@@ -186,7 +188,7 @@ class TenantManager:
         ro_members = []
         try:
             ro_members = await self._group_manager.get_group_members(f"{tenant_name}ro")
-        except Exception:
+        except GroupOperationError:
             logger.warning("Could not fetch RO group '%sro' members", tenant_name)
 
         rw_set = set(rw_members)
@@ -269,7 +271,7 @@ class TenantManager:
         # Remove from both RW and RO groups (user may only be in one)
         try:
             await self._group_manager.remove_user_from_group(username, tenant_name)
-        except Exception:
+        except GroupOperationError:
             logger.debug(
                 "User '%s' not in RW group '%s' (or group missing)",
                 username,
@@ -279,7 +281,7 @@ class TenantManager:
             await self._group_manager.remove_user_from_group(
                 username, f"{tenant_name}ro"
             )
-        except Exception:
+        except GroupOperationError:
             logger.debug(
                 "User '%s' not in RO group '%sro' (or group missing)",
                 username,
@@ -377,7 +379,7 @@ class TenantManager:
         ro_members = []
         try:
             ro_members = await self._group_manager.get_group_members(f"{tenant_name}ro")
-        except Exception:
+        except GroupOperationError:
             logger.warning("Could not fetch RO group '%sro' members", tenant_name)
         all_members = set(rw_members) | set(ro_members)
 
@@ -428,7 +430,7 @@ class TenantManager:
             is_ro_member = await self._group_manager.is_user_in_group(
                 username, f"{tenant_name}ro"
             )
-        except Exception:
+        except GroupOperationError:
             logger.warning(
                 "Could not check RO group '%sro' membership for '%s'",
                 tenant_name,
@@ -442,11 +444,6 @@ class TenantManager:
             )
 
         row = await self.metadata_store.add_steward(tenant_name, username, assigned_by)
-        if row is None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"User '{username}' is already a steward of tenant '{tenant_name}'",
-            )
         profiles = await self._profile_client.get_user_profiles([username], token)
         profile = profiles.get(username, UserProfile(username=username))
 
