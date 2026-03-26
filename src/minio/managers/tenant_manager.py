@@ -86,6 +86,7 @@ class TenantManager:
                     tenant_name=name,
                     display_name=meta.get("display_name"),
                     description=meta.get("description"),
+                    website=meta.get("website"),
                     member_count=len(all_members),
                     is_member=requesting_user in all_members,
                     is_steward=name in steward_tenants,
@@ -153,6 +154,7 @@ class TenantManager:
                 tenant_name=tenant_name,
                 display_name=None,
                 description=None,
+                website=None,
                 organization=None,
                 created_by=None,
                 created_at=None,
@@ -305,7 +307,7 @@ class TenantManager:
         update: TenantMetadataUpdate,
         updated_by: str,
     ) -> TenantMetadataResponse:
-        """Update tenant metadata (display_name, description, organization)."""
+        """Update tenant metadata (display_name, description, website, organization)."""
         await self._require_group_exists(tenant_name)
         await self.ensure_metadata(tenant_name, created_by=updated_by)
 
@@ -314,6 +316,7 @@ class TenantManager:
             updated_by,
             display_name=update.display_name,
             description=update.description,
+            website=update.website,
             organization=update.organization,
         )
         if result is None:
@@ -339,6 +342,7 @@ class TenantManager:
             created_by,
             display_name=update.display_name if update else None,
             description=update.description if update else None,
+            website=update.website if update else None,
             organization=update.organization if update else None,
         )
         if result is None:
@@ -525,6 +529,7 @@ class TenantManager:
             tenant_name=meta["tenant_name"],
             display_name=meta.get("display_name"),
             description=meta.get("description"),
+            website=meta.get("website"),
             organization=meta.get("organization"),
             created_by=meta["created_by"],
             created_at=meta["created_at"],

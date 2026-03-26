@@ -33,6 +33,7 @@ def _meta_dict(name="t1", created_by="admin"):
         "tenant_name": name,
         "display_name": name,
         "description": None,
+        "website": None,
         "organization": None,
         "created_by": created_by,
         "created_at": now,

@@ -16,6 +16,7 @@ class TenantMetadataUpdate(BaseModel):
 
     display_name: str | None = None
     description: str | None = None
+    website: str | None = None  # URL for the tenant's website or project page
     organization: str | None = None  # User-supplied; not available from KBase Auth
 
 
@@ -48,6 +49,7 @@ class TenantMetadataResponse(BaseModel):
     tenant_name: str
     display_name: str | None = None
     description: str | None = None
+    website: str | None = None
     organization: str | None = None
     created_by: str | None = None
     created_at: datetime | None = None
@@ -109,6 +111,7 @@ class TenantSummaryResponse(BaseModel):
     tenant_name: str
     display_name: str | None = None
     description: str | None = None
+    website: str | None = None
     member_count: int
     is_member: bool
     is_steward: bool
