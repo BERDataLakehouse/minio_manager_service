@@ -127,6 +127,7 @@ class TenantSummaryResponse(BaseModel):
     display_name: str | None = None
     description: str | None = None
     website: str | None = None
+    organization: str | None = None
     member_count: int
     is_member: bool
     is_steward: bool

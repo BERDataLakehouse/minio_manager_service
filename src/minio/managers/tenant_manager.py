@@ -87,6 +87,7 @@ class TenantManager:
                     display_name=meta.get("display_name"),
                     description=meta.get("description"),
                     website=meta.get("website"),
+                    organization=meta.get("organization"),
                     member_count=len(all_members),
                     is_member=requesting_user in all_members,
                     is_steward=name in steward_tenants,
