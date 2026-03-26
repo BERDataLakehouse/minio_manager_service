@@ -22,9 +22,33 @@ The MinIO Manager Service enables:
   - `s3a://cdm-lake/users-general-warehouse/{username}/` - General data storage
   - `s3a://cdm-lake/users-sql-warehouse/{username}/` - Spark SQL warehouse
 
+### Tenant Management
+- Tenants are the primary organizational unit, built on top of MinIO groups
+- Each tenant has metadata (display name, description, website, organization), members, and data stewards
+- **Data stewards** can manage tenant membership and update metadata without being a full admin
+- Members are assigned read-write or read-only access
+- Tenant storage paths:
+  - `s3a://cdm-lake/tenant-general-warehouse/{tenant}/` - General data storage
+  - `s3a://cdm-lake/tenant-sql-warehouse/{tenant}/` - Spark SQL warehouse
+  - Namespace prefix: `{tenant}_*` for Hive databases
+
+### Tenant API (`/tenants`)
+- `GET /tenants` - List all tenants with member counts and role flags
+- `GET /tenants/{name}` - Full detail: metadata, stewards, members with profiles, storage paths
+- `POST /tenants/{name}` - Create tenant metadata (idempotent)
+- `PATCH /tenants/{name}` - Update metadata (steward or admin)
+- `DELETE /tenants/{name}` - Delete metadata and cascade steward records
+- `POST /tenants/{name}/members/{username}` - Add member (steward or admin)
+- `DELETE /tenants/{name}/members/{username}` - Remove member
+- `POST /tenants/{name}/stewards/{username}` - Assign steward (admin only)
+- `DELETE /tenants/{name}/stewards/{username}` - Remove steward (admin only)
+- `GET /tenants/{name}/members` - List members with profiles and access levels
+- `GET /tenants/{name}/stewards` - List stewards with profiles
+
 ### Group Management
-- Create and manage named groups (e.g., `KBase`, `BER`, `CDM_Science`)
+- Create and manage named MinIO groups (the underlying primitive for tenants)
 - Assign users to groups with inherited permissions
+- Read-only groups via `{groupname}ro` convention
 - Share group workspace: `s3a://cdm-lake/groups-general-warehouse/{groupname}/`
 
 ### Data Sharing
@@ -88,6 +112,26 @@ Users can then use MinIO credentials to:
 - Access their data via Spark (automatic)
 - Log into MinIO Console for data management
 - Share data with other users/groups via API
+
+## Database Migrations
+
+The service uses Alembic for database schema management. Migrations run automatically on application startup (upgrade to head), so no manual steps are needed for normal deployments.
+
+For manual migration management inside the container:
+
+```bash
+docker exec -it <container> bash
+
+./scripts/migrate.sh status      # show current migration version
+./scripts/migrate.sh history     # show all migrations
+./scripts/migrate.sh up          # migrate to latest (head)
+./scripts/migrate.sh up1         # migrate up one revision
+./scripts/migrate.sh down1       # rollback one revision
+./scripts/migrate.sh down-all    # revert ALL migrations (destructive, requires confirmation)
+
+# For advanced alembic usage:
+uv run alembic --help
+```
 
 ## Testing
 
