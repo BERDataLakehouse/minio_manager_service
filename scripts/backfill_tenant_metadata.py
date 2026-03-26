@@ -1,11 +1,23 @@
 #!/usr/bin/env python3
 """Backfill tenant_metadata rows for existing MinIO groups.
 
-Usage:
+Usage (local, with env vars):
     MMS_DB_HOST=localhost MMS_DB_PORT=5432 MMS_DB_NAME=mms \
     MMS_DB_USER=mms MMS_DB_PASSWORD=secret \
     MINIO_ENDPOINT=localhost:9000 MINIO_ROOT_USER=admin MINIO_ROOT_PASSWORD=secret \
     python scripts/backfill_tenant_metadata.py [--dry-run]
+
+Usage (inside minio-manager container):
+    The scripts/ directory is included in the Docker image at /app/scripts/.
+    All required env vars (MINIO_ENDPOINT, MINIO_ROOT_USER, MINIO_ROOT_PASSWORD,
+    MMS_DB_*) are already set in the container.
+
+    # Exec into the container:
+    docker exec -it <container> bash
+
+    # Then run from /app:
+    uv run python scripts/backfill_tenant_metadata.py --dry-run   # preview changes
+    uv run python scripts/backfill_tenant_metadata.py              # run for real
 
 For each MinIO group that looks like a tenant (not in SYSTEM_GROUPS, not
 ending in 'ro'), inserts a tenant_metadata row with ON CONFLICT DO NOTHING.
