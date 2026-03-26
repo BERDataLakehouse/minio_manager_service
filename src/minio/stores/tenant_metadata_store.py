@@ -10,23 +10,24 @@ logger = logging.getLogger(__name__)
 # ── tenant_metadata queries ──────────────────────────────────────────────────
 
 _INSERT_METADATA = """
-INSERT INTO tenant_metadata (tenant_name, display_name, description, organization,
-                             created_by, created_at, updated_at)
-VALUES (%(tenant_name)s, %(display_name)s, %(description)s, %(organization)s,
-        %(created_by)s, %(created_at)s, %(updated_at)s)
+INSERT INTO tenant_metadata (tenant_name, display_name, description, website,
+                             organization, created_by, created_at, updated_at)
+VALUES (%(tenant_name)s, %(display_name)s, %(description)s, %(website)s,
+        %(organization)s, %(created_by)s, %(created_at)s, %(updated_at)s)
 ON CONFLICT (tenant_name) DO NOTHING
-RETURNING *;
+RETURNING tenant_name, display_name, description, website, organization,
+         created_by, created_at, updated_at, updated_by;
 """
 
 _SELECT_METADATA = """
-SELECT tenant_name, display_name, description, organization,
+SELECT tenant_name, display_name, description, website, organization,
        created_by, created_at, updated_at, updated_by
   FROM tenant_metadata
  WHERE tenant_name = %(tenant_name)s;
 """
 
 _SELECT_ALL_METADATA = """
-SELECT tenant_name, display_name, description, organization,
+SELECT tenant_name, display_name, description, website, organization,
        created_by, created_at, updated_at, updated_by
   FROM tenant_metadata;
 """
@@ -68,6 +69,7 @@ _METADATA_COLUMNS = (
     "tenant_name",
     "display_name",
     "description",
+    "website",
     "organization",
     "created_by",
     "created_at",
@@ -101,6 +103,7 @@ class TenantMetadataStore:
         *,
         display_name: str | None = None,
         description: str | None = None,
+        website: str | None = None,
         organization: str | None = None,
     ) -> dict | None:
         """Create a tenant_metadata row. Returns None if already exists (idempotent)."""
@@ -112,6 +115,7 @@ class TenantMetadataStore:
                     "tenant_name": tenant_name,
                     "display_name": display_name or tenant_name,
                     "description": description,
+                    "website": website,
                     "organization": organization,
                     "created_by": created_by,
                     "created_at": now,
@@ -140,6 +144,7 @@ class TenantMetadataStore:
         *,
         display_name: str | None = None,
         description: str | None = None,
+        website: str | None = None,
         organization: str | None = None,
     ) -> dict | None:
         """Partial update of tenant metadata. Only non-None fields are set."""
@@ -155,6 +160,9 @@ class TenantMetadataStore:
         if description is not None:
             sets.append("description = %(description)s")
             params["description"] = description
+        if website is not None:
+            sets.append("website = %(website)s")
+            params["website"] = website
         if organization is not None:
             sets.append("organization = %(organization)s")
             params["organization"] = organization

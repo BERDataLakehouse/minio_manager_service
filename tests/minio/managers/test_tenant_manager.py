@@ -33,6 +33,7 @@ def _meta_dict(name="t1", created_by="admin"):
         "tenant_name": name,
         "display_name": name,
         "description": None,
+        "website": None,
         "organization": None,
         "created_by": created_by,
         "created_at": now,
@@ -169,6 +170,18 @@ class TestListTenants:
         mock_metadata_store.get_steward_tenants.return_value = ["t1"]
         result = await manager.list_tenants("alice", "token")
         assert result[0].is_steward is True
+
+    @pytest.mark.asyncio
+    async def test_returns_website_in_summary(
+        self, manager, mock_metadata_store, mock_group_manager
+    ):
+        mock_group_manager.list_resources.return_value = ["t1"]
+        meta = _meta_dict("t1")
+        meta["website"] = "https://example.com"
+        mock_metadata_store.list_metadata.return_value = [meta]
+        result = await manager.list_tenants("alice", "token")
+        assert result[0].tenant_name == "t1"
+        assert result[0].website == "https://example.com"
 
     @pytest.mark.asyncio
     async def test_includes_ro_members_in_count(self, manager, mock_group_manager):
@@ -326,6 +339,17 @@ class TestUpdateMetadata:
         mock_metadata_store.update_metadata.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_update_passes_website_to_store(self, manager, mock_metadata_store):
+        meta = _meta_dict()
+        meta["website"] = "https://updated.example.com"
+        mock_metadata_store.update_metadata.return_value = meta
+        update = TenantMetadataUpdate(website="https://updated.example.com")
+        result = await manager.update_metadata("t1", update, "steward")
+        call_kwargs = mock_metadata_store.update_metadata.call_args.kwargs
+        assert call_kwargs["website"] == "https://updated.example.com"
+        assert result.website == "https://updated.example.com"
+
+    @pytest.mark.asyncio
     async def test_update_not_found(self, manager, mock_metadata_store):
         mock_metadata_store.update_metadata.return_value = None
         update = TenantMetadataUpdate(display_name="X")
@@ -363,6 +387,17 @@ class TestCreateMetadata:
         call_kwargs = mock_metadata_store.create_metadata.call_args
         assert call_kwargs.kwargs["display_name"] == "Custom"
         assert call_kwargs.kwargs["description"] == "Desc"
+
+    @pytest.mark.asyncio
+    async def test_create_passes_website_to_store(self, manager, mock_metadata_store):
+        meta = _meta_dict()
+        meta["website"] = "https://new.example.com"
+        mock_metadata_store.create_metadata.return_value = meta
+        update = TenantMetadataUpdate(website="https://new.example.com")
+        result = await manager.create_metadata("t1", "admin", update)
+        call_kwargs = mock_metadata_store.create_metadata.call_args.kwargs
+        assert call_kwargs["website"] == "https://new.example.com"
+        assert result.website == "https://new.example.com"
 
     @pytest.mark.asyncio
     async def test_create_nonexistent_group_404(self, manager, mock_group_manager):
@@ -572,3 +607,14 @@ class TestMetaDictToResponse:
         result = TenantManager._meta_dict_to_response(meta)
         assert result.tenant_name == "t1"
         assert result.created_by == "admin"
+
+    def test_maps_website(self):
+        meta = _meta_dict("t1", "admin")
+        meta["website"] = "https://example.com"
+        result = TenantManager._meta_dict_to_response(meta)
+        assert result.website == "https://example.com"
+
+    def test_maps_website_none(self):
+        meta = _meta_dict("t1", "admin")
+        result = TenantManager._meta_dict_to_response(meta)
+        assert result.website is None
