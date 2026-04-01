@@ -15,7 +15,7 @@ dependencies = [
     "cacheout==0.16.0",
     "aiobotocore==3.3.0",
     "redis==7.4.0",
-    "ruff==0.15.7",
+    "ruff==0.15.8",
     "psycopg[binary]==3.3.3",
     "psycopg-pool==3.3.0",
     "alembic==1.18.4",
