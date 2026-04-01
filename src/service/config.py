@@ -8,7 +8,7 @@ import logging
 import os
 from functools import lru_cache
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 APP_VERSION = "0.1.0"
 
@@ -27,7 +27,8 @@ class Settings(BaseModel):
         description="Logging level for the application",
     )
 
-    @validator("service_root_path", pre=True)
+    @field_validator("service_root_path", mode="before")
+    @classmethod
     def normalize_service_root_path(cls, v: str) -> str:
         """
         Normalize the service root path to either:
