@@ -228,7 +228,10 @@ class TestExecuteCommand:
         """Test command execution timeout."""
         mock_process = AsyncMock()
         mock_process.communicate.side_effect = asyncio.TimeoutError()
-        mock_process.kill = AsyncMock()
+        # MagicMock not AsyncMock: asyncio.Process.kill() is synchronous. Using
+        # AsyncMock would create an unawaited coroutine since the source calls it
+        # without await.
+        mock_process.kill = MagicMock()
         mock_process.wait = AsyncMock()
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
@@ -273,7 +276,11 @@ class TestExecuteCommand:
     async def test_execute_command_custom_timeout(self, executor):
         """Test command execution with custom timeout."""
         mock_process = AsyncMock()
-        mock_process.communicate.return_value = (b"output", b"")
+        # communicate() is async in production and correctly awaited via wait_for.
+        # But since wait_for is mocked below, it never actually awaits the coroutine
+        # communicate() would return — leaving it unawaited. Using MagicMock makes
+        # communicate() return a plain tuple instead of a coroutine, avoiding the leak.
+        mock_process.communicate = MagicMock(return_value=(b"output", b""))
         mock_process.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
@@ -428,7 +435,10 @@ class TestEdgeCases:
         """Test handling when process is already terminated during kill."""
         mock_process = AsyncMock()
         mock_process.communicate.side_effect = asyncio.TimeoutError()
-        mock_process.kill.side_effect = ProcessLookupError()
+        # MagicMock not AsyncMock: kill() is synchronous (see test_execute_command_timeout).
+        # side_effect on an AsyncMock only raises when awaited, so ProcessLookupError
+        # would never fire since the source calls kill() without await.
+        mock_process.kill = MagicMock(side_effect=ProcessLookupError())
         mock_process.wait = AsyncMock()
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):

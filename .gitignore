@@ -7,3 +7,4 @@ __pycache__
 deploy.cfg
 .coverage
 test/test_temp/
+/.pytest_cache/
