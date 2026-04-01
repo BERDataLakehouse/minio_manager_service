@@ -8,10 +8,8 @@ import logging
 
 from fastapi import HTTPException, status
 
-from src.minio.clients.kbase_profile_client import KBaseUserProfileClient
 from src.minio.managers.group_manager import GroupManager
 from src.minio.models.minio_config import MinIOConfig
-from src.service.exceptions import GroupOperationError
 from src.minio.models.tenant import (
     TenantDetailResponse,
     TenantMemberResponse,
@@ -22,8 +20,10 @@ from src.minio.models.tenant import (
     TenantSummaryResponse,
     UserProfile,
 )
-from src.minio.stores.tenant_metadata_store import TenantMetadataStore
+from src.service.exceptions import GroupOperationError
 from src.service.kb_auth import AdminPermission, KBaseUser
+from src.tenant_metadata.kbase_profile_client import KBaseUserProfileClient
+from src.tenant_metadata.tenant_metadata_store import TenantMetadataStore
 
 logger = logging.getLogger(__name__)
 

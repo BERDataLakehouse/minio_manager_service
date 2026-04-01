@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.minio.clients.kbase_profile_client import KBaseUserProfileClient
+from src.tenant_metadata.kbase_profile_client import KBaseUserProfileClient
 
 
 # ── Helper ───────────────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ class TestGetUserProfiles:
         mock_resp.json = AsyncMock(return_value={"alice": "Alice Smith"})
 
         with patch(
-            "src.minio.clients.kbase_profile_client.aiohttp.ClientSession",
+            "src.tenant_metadata.kbase_profile_client.aiohttp.ClientSession",
             return_value=_mock_aiohttp_session(mock_resp),
         ):
             result = await client.get_user_profiles(["alice"], "token")
@@ -114,7 +114,7 @@ class TestGetUserProfiles:
 
         # No HTTP call should be made since alice is cached
         with patch(
-            "src.minio.clients.kbase_profile_client.aiohttp.ClientSession"
+            "src.tenant_metadata.kbase_profile_client.aiohttp.ClientSession"
         ) as mock_cls:
             result = await client.get_user_profiles(["alice"], "token")
             mock_cls.assert_not_called()
@@ -132,7 +132,7 @@ class TestGetUserProfiles:
         mock_resp.json = AsyncMock(return_value={})
 
         with patch(
-            "src.minio.clients.kbase_profile_client.aiohttp.ClientSession",
+            "src.tenant_metadata.kbase_profile_client.aiohttp.ClientSession",
             return_value=_mock_aiohttp_session(mock_resp),
         ):
             result = await client.get_user_profiles(["unknown"], "token")
@@ -152,7 +152,7 @@ class TestFetchDisplayNames:
         mock_resp.json = AsyncMock(return_value={"alice": "Alice S", "bob": "Bob J"})
 
         with patch(
-            "src.minio.clients.kbase_profile_client.aiohttp.ClientSession",
+            "src.tenant_metadata.kbase_profile_client.aiohttp.ClientSession",
             return_value=_mock_aiohttp_session(mock_resp),
         ):
             await client._fetch_display_names(["alice", "bob"], "token")
@@ -166,7 +166,7 @@ class TestFetchDisplayNames:
         mock_resp.status = 500
 
         with patch(
-            "src.minio.clients.kbase_profile_client.aiohttp.ClientSession",
+            "src.tenant_metadata.kbase_profile_client.aiohttp.ClientSession",
             return_value=_mock_aiohttp_session(mock_resp),
         ):
             await client._fetch_display_names(["alice"], "token")
@@ -176,7 +176,7 @@ class TestFetchDisplayNames:
     @pytest.mark.asyncio
     async def test_exception_is_swallowed(self, client):
         with patch(
-            "src.minio.clients.kbase_profile_client.aiohttp.ClientSession",
+            "src.tenant_metadata.kbase_profile_client.aiohttp.ClientSession",
             side_effect=Exception("Network error"),
         ):
             await client._fetch_display_names(["alice"], "token")
