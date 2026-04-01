@@ -14,7 +14,6 @@ from fastapi import FastAPI, Request
 
 from src.credentials.service import CredentialService
 from src.credentials.store import CredentialStore
-from src.minio.clients.kbase_profile_client import KBaseUserProfileClient
 from src.minio.core.distributed_lock import DistributedLockManager
 from src.minio.core.minio_client import MinIOClient
 from src.minio.managers.group_manager import GroupManager
@@ -23,11 +22,12 @@ from src.minio.managers.sharing_manager import SharingManager
 from src.minio.managers.tenant_manager import TenantManager
 from src.minio.managers.user_manager import UserManager
 from src.minio.models.minio_config import MinIOConfig
-from src.minio.stores.tenant_metadata_store import TenantMetadataStore
-from src.minio.stores.user_profile_store import UserProfileStore
 from src.service.arg_checkers import not_falsy
 from src.service.database import DatabasePool, run_migrations
 from src.service.kb_auth import KBaseAuth, KBaseUser
+from src.tenant_metadata.kbase_profile_client import KBaseUserProfileClient
+from src.tenant_metadata.tenant_metadata_store import TenantMetadataStore
+from src.tenant_metadata.user_profile_store import UserProfileStore
 
 logger = logging.getLogger(__name__)
 
