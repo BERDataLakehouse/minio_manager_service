@@ -21,16 +21,16 @@ from src.minio.core.minio_client import MinIOClient
 from src.minio.managers.group_manager import GroupManager
 from src.minio.managers.policy_manager import PolicyManager
 from src.minio.managers.user_manager import UserManager
-from src.minio.models.minio_config import MinIOConfig
-from src.minio.models.policy import (
+from src.s3.models.s3_config import S3Config
+from src.s3.models.policy import (
     PolicyDocument,
     PolicyEffect,
     PolicyModel,
     PolicyStatement,
     PolicyType,
 )
-from src.minio.models.user import UserModel
-from src.minio.models.group import GroupModel
+from src.s3.models.user import UserModel
+from src.s3.models.group import GroupModel
 from src.credentials.store import CredentialStore
 from src.service.dependencies import auth
 from src.service.exceptions import PolicyOperationError
@@ -43,14 +43,14 @@ from src.service.kb_auth import AdminPermission, KBaseUser
 
 
 @pytest.fixture
-def mock_minio_config() -> MinIOConfig:
+def mock_s3_config() -> S3Config:
     """
-    Create a mock MinIOConfig for testing.
+    Create a mock S3Config for testing.
 
     Returns:
-        MinIOConfig with test-appropriate defaults.
+        S3Config with test-appropriate defaults.
     """
-    return MinIOConfig(
+    return S3Config(
         endpoint="http://localhost:9002",
         access_key="test_access_key",
         secret_key="test_secret_key",
@@ -126,14 +126,14 @@ def mock_aiobotocore_session(mock_s3_client):
 
 
 @pytest.fixture
-def mock_minio_client(mock_minio_config, mock_aiobotocore_session):
+def mock_minio_client(mock_s3_config, mock_aiobotocore_session):
     """
     Create a real MinIOClient instance with mocked aiobotocore backend.
 
     This provides a MinIOClient that behaves correctly as an async context
     manager but uses mocked S3 operations underneath.
     """
-    return MinIOClient(mock_minio_config)
+    return MinIOClient(mock_s3_config)
 
 
 # =============================================================================
@@ -329,24 +329,24 @@ def sample_group_data():
 
 
 @pytest.fixture
-def mock_policy_manager(mock_minio_client, mock_minio_config):
+def mock_policy_manager(mock_minio_client, mock_s3_config):
     """Create a PolicyManager with mocked dependencies."""
 
-    return PolicyManager(mock_minio_client, mock_minio_config)
+    return PolicyManager(mock_minio_client, mock_s3_config)
 
 
 @pytest.fixture
-def mock_user_manager(mock_minio_client, mock_minio_config):
+def mock_user_manager(mock_minio_client, mock_s3_config):
     """Create a UserManager with mocked dependencies."""
 
-    return UserManager(mock_minio_client, mock_minio_config)
+    return UserManager(mock_minio_client, mock_s3_config)
 
 
 @pytest.fixture
-def mock_group_manager(mock_minio_client, mock_minio_config):
+def mock_group_manager(mock_minio_client, mock_s3_config):
     """Create a GroupManager with mocked dependencies."""
 
-    return GroupManager(mock_minio_client, mock_minio_config)
+    return GroupManager(mock_minio_client, mock_s3_config)
 
 
 # =============================================================================

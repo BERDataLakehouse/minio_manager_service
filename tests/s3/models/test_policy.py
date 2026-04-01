@@ -11,7 +11,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from src.minio.models.policy import (
+from src.s3.models.policy import (
     PolicyAction,
     PolicyDocument,
     PolicyEffect,

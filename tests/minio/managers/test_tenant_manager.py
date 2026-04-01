@@ -11,7 +11,7 @@ from src.minio.managers.tenant_manager import (
     TenantManager,
     _is_tenant_group,
 )
-from src.minio.models.tenant import TenantMetadataUpdate, UserProfile
+from src.s3.models.tenant import TenantMetadataUpdate, UserProfile
 from src.service.exceptions import GroupOperationError
 from src.service.kb_auth import AdminPermission, KBaseUser
 

@@ -18,8 +18,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.minio.models.policy import PolicyDocument, PolicyModel, PolicyTarget
-from src.minio.models.user import UserModel
+from src.s3.models.policy import PolicyDocument, PolicyModel, PolicyTarget
+from src.s3.models.user import UserModel
 from src.routes.management import (
     GroupManagementResponse,
     GroupNamesResponse,

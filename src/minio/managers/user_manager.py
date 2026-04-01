@@ -10,9 +10,9 @@ from ...service.exceptions import UserOperationError
 from ..core.minio_client import MinIOClient
 from ..core.policy_creator import SYSTEM_RESOURCE_CONFIG
 from ..models.command import UserAction
-from ..models.minio_config import MinIOConfig
-from ..models.user import UserModel
-from ..utils.validators import validate_username
+from src.s3.models.s3_config import S3Config
+from src.s3.models.user import UserModel
+from src.s3.utils.validators import validate_username
 from .resource_manager import ResourceManager
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ GLOBAL_USER_GROUP = "globalusers"
 class UserManager(ResourceManager[UserModel]):
     """UserManager for basic user operations with patterns and generic CRUD."""
 
-    def __init__(self, client: MinIOClient, config: MinIOConfig) -> None:
+    def __init__(self, client: MinIOClient, config: S3Config) -> None:
         super().__init__(client, config)
         self.users_general_warehouse_prefix = config.users_general_warehouse_prefix
         self.users_sql_warehouse_prefix = config.users_sql_warehouse_prefix

@@ -9,8 +9,8 @@ import logging
 from fastapi import HTTPException, status
 
 from src.minio.managers.group_manager import GroupManager
-from src.minio.models.minio_config import MinIOConfig
-from src.minio.models.tenant import (
+from src.s3.models.s3_config import S3Config
+from src.s3.models.tenant import (
     TenantDetailResponse,
     TenantMemberResponse,
     TenantMetadataResponse,
@@ -44,7 +44,7 @@ class TenantManager:
         metadata_store: TenantMetadataStore,
         group_manager: GroupManager,
         profile_client: KBaseUserProfileClient,
-        minio_config: MinIOConfig,
+        minio_config: S3Config,
     ) -> None:
         self.metadata_store = metadata_store
         self._group_manager = group_manager

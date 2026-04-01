@@ -6,7 +6,7 @@ import aiobotocore.session
 from botocore.exceptions import ClientError
 
 from ...service.exceptions import BucketOperationError, ConnectionError
-from ..models.minio_config import MinIOConfig
+from src.s3.models.s3_config import S3Config
 
 logger = logging.getLogger(__name__)
 
@@ -16,23 +16,23 @@ MAX_LIST_OBJECTS_COUNT = 10 * 1000  # 10k objects
 class MinIOClient:
     """MinIO Client Wrapper."""
 
-    def __init__(self, config: MinIOConfig):
+    def __init__(self, config: S3Config):
         """
         Initializes the MinIOClient with server configuration.
 
         Args:
-            config: A MinIOConfig object with connection details.
+            config: A S3Config object with connection details.
         """
         self.config = config
         self._session = None
 
     @classmethod
-    async def create(cls, config: MinIOConfig) -> "MinIOClient":
+    async def create(cls, config: S3Config) -> "MinIOClient":
         """
         Create and initialize a MinIOClient instance.
 
         Args:
-            config: A MinIOConfig object with connection details.
+            config: A S3Config object with connection details.
         """
         instance = cls(config)
         await instance.initialize_session()

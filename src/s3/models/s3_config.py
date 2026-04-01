@@ -28,11 +28,11 @@ CDM_DEFAULT_TENANT_SQL_WAREHOUSE_PREFIX = os.getenv(
 )
 
 
-class MinIOConfig(BaseModel):
+class S3Config(BaseModel):
     """
-    MinIO configuration model.
+    S3 configuration model.
 
-    This model contains the essential configuration needed for MinIO operations.
+    This model contains the essential configuration needed for S3 operations.
     """
 
     model_config = ConfigDict(
@@ -43,7 +43,7 @@ class MinIOConfig(BaseModel):
     endpoint: Annotated[
         AnyHttpUrl,
         Field(
-            description="MinIO server endpoint URL",
+            description="S3 server endpoint URL",
             examples=["http://localhost:9002", "https://minio.example.com"],
         ),
     ]
@@ -51,7 +51,7 @@ class MinIOConfig(BaseModel):
         str,
         Field(
             min_length=1,
-            description="MinIO access key for authentication",
+            description="S3 access key for authentication",
             examples=["minio", "admin"],
         ),
     ]
@@ -59,7 +59,7 @@ class MinIOConfig(BaseModel):
         str,
         Field(
             min_length=1,
-            description="MinIO secret key for authentication",
+            description="S3 secret key for authentication",
             examples=["minio123", "password123"],
         ),
     ]

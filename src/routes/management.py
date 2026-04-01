@@ -13,9 +13,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..minio.models.policy import PolicyModel, PolicyTarget
-from ..minio.models.user import UserModel
-from ..minio.utils.validators import validate_group_name
+from src.s3.models.policy import PolicyModel, PolicyTarget
+from src.s3.models.user import UserModel
+from src.s3.utils.validators import validate_group_name
 from ..service.app_state import get_app_state
 from ..service.dependencies import auth, require_admin
 from ..service.exceptions import (
