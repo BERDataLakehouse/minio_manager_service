@@ -20,8 +20,8 @@ import pytest
 from src.minio.managers.policy_manager import PolicyManager
 from src.minio.core.minio_client import MinIOClient
 from src.minio.models.command import CommandResult
-from src.minio.models.minio_config import MinIOConfig
-from src.minio.models.policy import (
+from src.s3.models.s3_config import S3Config
+from src.s3.models.policy import (
     PolicyDocument,
     PolicyEffect,
     PolicyModel,
@@ -47,9 +47,9 @@ def mock_mc_path():
 
 
 @pytest.fixture
-def mock_minio_config() -> MinIOConfig:
-    """Create a mock MinIOConfig for testing."""
-    return MinIOConfig(
+def mock_s3_config() -> S3Config:
+    """Create a mock S3Config for testing."""
+    return S3Config(
         endpoint="http://localhost:9002",
         access_key="test_access_key",
         secret_key="test_secret_key",
@@ -63,10 +63,10 @@ def mock_minio_config() -> MinIOConfig:
 
 
 @pytest.fixture
-def mock_minio_client(mock_minio_config):
+def mock_minio_client(mock_s3_config):
     """Create a mock MinIOClient."""
     client = MagicMock(spec=MinIOClient)
-    client.config = mock_minio_config
+    client.config = mock_s3_config
     return client
 
 
@@ -95,12 +95,12 @@ def mock_executor():
 
 @pytest.fixture
 def policy_manager(
-    mock_minio_client, mock_minio_config, mock_lock_manager, mock_executor
+    mock_minio_client, mock_s3_config, mock_lock_manager, mock_executor
 ):
     """Create a PolicyManager with mocked dependencies."""
     manager = PolicyManager(
         client=mock_minio_client,
-        config=mock_minio_config,
+        config=mock_s3_config,
         lock_manager=mock_lock_manager,
     )
     manager._executor = mock_executor
@@ -224,23 +224,23 @@ class TestPolicyManagerInit:
     """Tests for PolicyManager initialization."""
 
     def test_init_with_all_dependencies(
-        self, mock_minio_client, mock_minio_config, mock_lock_manager
+        self, mock_minio_client, mock_s3_config, mock_lock_manager
     ):
         """Test PolicyManager initialization with all dependencies."""
         manager = PolicyManager(
             client=mock_minio_client,
-            config=mock_minio_config,
+            config=mock_s3_config,
             lock_manager=mock_lock_manager,
         )
         assert manager.client == mock_minio_client
-        assert manager.config == mock_minio_config
+        assert manager.config == mock_s3_config
         assert manager._lock_manager == mock_lock_manager
 
-    def test_init_without_lock_manager(self, mock_minio_client, mock_minio_config):
+    def test_init_without_lock_manager(self, mock_minio_client, mock_s3_config):
         """Test PolicyManager initialization without lock manager."""
         manager = PolicyManager(
             client=mock_minio_client,
-            config=mock_minio_config,
+            config=mock_s3_config,
             lock_manager=None,
         )
         assert manager._lock_manager is None
@@ -896,12 +896,12 @@ class TestAddPathAccessForTarget:
 
     @pytest.mark.asyncio
     async def test_raises_error_without_lock_manager(
-        self, mock_minio_client, mock_minio_config, mock_executor
+        self, mock_minio_client, mock_s3_config, mock_executor
     ):
         """Test that operations fail without lock manager."""
         manager = PolicyManager(
             client=mock_minio_client,
-            config=mock_minio_config,
+            config=mock_s3_config,
             lock_manager=None,
         )
         manager._executor = mock_executor

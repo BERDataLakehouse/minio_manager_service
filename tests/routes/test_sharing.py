@@ -26,7 +26,7 @@ from src.minio.managers.sharing_manager import (
     SharingResult,
     UnsharingResult,
 )
-from src.minio.models.policy import PolicyPermissionLevel
+from src.s3.models.policy import PolicyPermissionLevel
 from src.routes.sharing import (
     PathAccessResponse,
     PathRequest,

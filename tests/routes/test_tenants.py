@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.minio.models.tenant import (
+from src.s3.models.tenant import (
     TenantDetailResponse,
     TenantMemberResponse,
     TenantMetadataResponse,

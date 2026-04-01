@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from fastapi.security.utils import get_authorization_scheme_param
 
-from src.minio.models.tenant import (
+from src.s3.models.tenant import (
     TenantDetailResponse,
     TenantMemberResponse,
     TenantMetadataResponse,

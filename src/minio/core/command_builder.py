@@ -3,7 +3,7 @@
 from typing import List, Optional
 
 from ..models.command import AdminCommand, GroupAction, PolicyAction, UserAction
-from ..utils.validators import validate_group_name, validate_username
+from src.s3.utils.validators import validate_group_name, validate_username
 
 
 class MinIOCommandBuilder:

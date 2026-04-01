@@ -6,14 +6,14 @@ import logging
 import re
 
 from ...service.exceptions import PolicyOperationError
-from ..models.policy import (
+from src.s3.models.policy import (
     PolicyAction,
     PolicyEffect,
     PolicyModel,
     PolicyPermissionLevel,
     PolicyStatement,
 )
-from ..utils.validators import validate_s3_path
+from src.s3.utils.validators import validate_s3_path
 
 logger = logging.getLogger(__name__)
 

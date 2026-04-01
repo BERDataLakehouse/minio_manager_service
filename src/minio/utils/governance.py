@@ -5,7 +5,7 @@ This module centralizes generation of governance prefixes used to enforce
 table/database naming rules for users and groups (tenants).
 """
 
-from .validators import validate_group_name, validate_username
+from src.s3.utils.validators import validate_group_name, validate_username
 
 # Markers and separator used in governance prefixes
 USER_PREFIX_MARKER = "u_"

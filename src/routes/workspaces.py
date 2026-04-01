@@ -12,8 +12,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..minio.models.policy import PolicyModel
-from ..minio.models.user import UserModel
+from src.s3.models.policy import PolicyModel
+from src.s3.models.user import UserModel
 from ..service.app_state import get_app_state
 from ..minio.utils.governance import (
     generate_group_governance_prefix,

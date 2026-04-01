@@ -8,7 +8,7 @@ from typing import Optional
 from ...service.arg_checkers import not_falsy
 from ...service.exceptions import MinIOManagerError
 from ..models.command import CommandResult
-from ..models.minio_config import MinIOConfig
+from src.s3.models.s3_config import S3Config
 from .command_builder import MinIOCommandBuilder
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class BaseMinIOExecutor:
     """Base executor for MinIO MC CLI commands."""
 
-    def __init__(self, config: MinIOConfig, alias: str = "minio_api") -> None:
+    def __init__(self, config: S3Config, alias: str = "minio_api") -> None:
         """Initialize the executor.
 
         Args:

@@ -6,15 +6,15 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.minio.models.policy import (
+from src.s3.models.policy import (
     PolicyDocument,
     PolicyModel,
     PolicyStatement,
     PolicyEffect,
     PolicyAction,
 )
-from src.minio.models.user import UserModel
-from src.minio.models.group import GroupModel
+from src.s3.models.user import UserModel
+from src.s3.models.group import GroupModel
 from src.routes.workspaces import router
 from src.service.app_state import AppState
 from src.service.exception_handlers import universal_error_handler

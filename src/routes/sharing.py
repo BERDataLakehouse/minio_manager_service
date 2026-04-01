@@ -13,8 +13,8 @@ from fastapi import APIRouter, Body, Depends, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..minio.managers.sharing_manager import PathAccessInfo
-from ..minio.models.policy import PolicyPermissionLevel
-from ..minio.utils.validators import validate_s3_path
+from src.s3.models.policy import PolicyPermissionLevel
+from src.s3.utils.validators import validate_s3_path
 from ..service.app_state import get_app_state
 from ..service.dependencies import auth
 from ..service.exceptions import DataGovernanceError

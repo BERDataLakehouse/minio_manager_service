@@ -5,10 +5,10 @@ from typing import List
 from ...service.exceptions import GroupOperationError
 from ..core.minio_client import MinIOClient
 from ..models.command import GroupAction
-from ..models.group import GroupModel
-from ..models.minio_config import MinIOConfig
-from ..models.policy import PolicyModel, PolicyType
-from ..utils.validators import validate_group_name
+from src.s3.models.group import GroupModel
+from src.s3.models.s3_config import S3Config
+from src.s3.models.policy import PolicyModel, PolicyType
+from src.s3.utils.validators import validate_group_name
 from .resource_manager import ResourceManager
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ RESOURCE_TYPE = "group"
 class GroupManager(ResourceManager[GroupModel]):
     """GroupManager for basic group operations with patterns and generic CRUD."""
 
-    def __init__(self, client: MinIOClient, config: MinIOConfig):
+    def __init__(self, client: MinIOClient, config: S3Config):
         super().__init__(client, config)
         self.tenant_general_warehouse_prefix = config.tenant_general_warehouse_prefix
         self.tenant_sql_warehouse_prefix = config.tenant_sql_warehouse_prefix

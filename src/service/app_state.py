@@ -21,7 +21,7 @@ from src.minio.managers.policy_manager import PolicyManager
 from src.minio.managers.sharing_manager import SharingManager
 from src.minio.managers.tenant_manager import TenantManager
 from src.minio.managers.user_manager import UserManager
-from src.minio.models.minio_config import MinIOConfig
+from src.s3.models.s3_config import S3Config
 from src.service.arg_checkers import not_falsy
 from src.service.database import DatabasePool, run_migrations
 from src.service.kb_auth import KBaseAuth, KBaseUser
@@ -112,7 +112,7 @@ async def build_app(app: FastAPI) -> None:
 
     # Initialize MinIO configuration and client
     logger.info("Initializing MinIO client and managers...")
-    config = MinIOConfig(
+    config = S3Config(
         endpoint=not_falsy(os.getenv("MINIO_ENDPOINT"), "MINIO_ENDPOINT"),
         access_key=not_falsy(os.getenv("MINIO_ROOT_USER"), "MINIO_ROOT_USER"),
         secret_key=not_falsy(os.getenv("MINIO_ROOT_PASSWORD"), "MINIO_ROOT_PASSWORD"),

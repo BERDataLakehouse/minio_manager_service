@@ -11,8 +11,8 @@ from ..core.minio_client import MinIOClient
 from ..core.policy_builder import PolicyBuilder
 from ..core.policy_creator import PolicyCreator
 from ..models.command import PolicyAction as CommandPolicyAction
-from ..models.minio_config import MinIOConfig
-from ..models.policy import (
+from src.s3.models.s3_config import S3Config
+from src.s3.models.policy import (
     PolicyDocument,
     PolicyEffect,
     PolicyModel,
@@ -21,7 +21,7 @@ from ..models.policy import (
     PolicyTarget,
     PolicyType,
 )
-from ..utils.validators import (
+from src.s3.utils.validators import (
     DATA_GOVERNANCE_POLICY_PREFIXES,
     GROUP_POLICY_PREFIX,
     USER_HOME_POLICY_PREFIX,
@@ -49,7 +49,7 @@ class PolicyManager(ResourceManager[PolicyModel]):
     def __init__(
         self,
         client: MinIOClient,
-        config: MinIOConfig,
+        config: S3Config,
         lock_manager: Optional[DistributedLockManager] = None,
     ) -> None:
         """

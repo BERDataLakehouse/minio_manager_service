@@ -38,8 +38,8 @@ from collections import defaultdict
 from typing import Dict, List
 
 from ...service.exceptions import PolicyOperationError
-from ..models.minio_config import MinIOConfig
-from ..models.policy import (
+from src.s3.models.s3_config import S3Config
+from src.s3.models.policy import (
     PolicyAction,
     PolicyDocument,
     PolicyModel,
@@ -48,7 +48,7 @@ from ..models.policy import (
     PolicyStatement,
     PolicyType,
 )
-from ..utils.validators import (
+from src.s3.utils.validators import (
     GROUP_POLICY_PREFIX,
     USER_HOME_POLICY_PREFIX,
     USER_SYSTEM_POLICY_PREFIX,
@@ -108,7 +108,7 @@ class PolicyCreator:
         self,
         policy_type: PolicyType,
         target_name: str,
-        config: MinIOConfig,
+        config: S3Config,
         path_target_name: str | None = None,
     ):
         """
