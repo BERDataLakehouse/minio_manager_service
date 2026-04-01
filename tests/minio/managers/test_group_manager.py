@@ -187,9 +187,7 @@ def sample_empty_group_info_json():
 class TestGroupManagerInit:
     """Tests for GroupManager initialization."""
 
-    def test_initialization_with_valid_config(
-        self, mock_minio_client, mock_s3_config
-    ):
+    def test_initialization_with_valid_config(self, mock_minio_client, mock_s3_config):
         """Test successful initialization with valid configuration."""
         manager = GroupManager(mock_minio_client, mock_s3_config)
 

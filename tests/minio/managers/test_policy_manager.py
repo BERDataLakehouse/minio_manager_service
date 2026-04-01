@@ -94,9 +94,7 @@ def mock_executor():
 
 
 @pytest.fixture
-def policy_manager(
-    mock_minio_client, mock_s3_config, mock_lock_manager, mock_executor
-):
+def policy_manager(mock_minio_client, mock_s3_config, mock_lock_manager, mock_executor):
     """Create a PolicyManager with mocked dependencies."""
     manager = PolicyManager(
         client=mock_minio_client,

@@ -58,9 +58,7 @@ class TestMinIOClientInitialization:
         assert client.config == mock_s3_config
 
     @pytest.mark.asyncio
-    async def test_initialize_session(
-        self, mock_s3_config, mock_aiobotocore_session
-    ):
+    async def test_initialize_session(self, mock_s3_config, mock_aiobotocore_session):
         """Test manual session initialization."""
         client = MinIOClient(mock_s3_config)
         assert client._session is None

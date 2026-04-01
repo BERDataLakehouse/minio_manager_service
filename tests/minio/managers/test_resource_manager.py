@@ -135,9 +135,7 @@ class TestResourceManagerInit:
         assert manager._command_builder is not None
         assert manager.alias == "minio_api"
 
-    def test_init_uses_custom_alias_from_env(
-        self, mock_minio_client, mock_s3_config
-    ):
+    def test_init_uses_custom_alias_from_env(self, mock_minio_client, mock_s3_config):
         """Test that custom alias from environment is used."""
         with patch.dict(os.environ, {"MINIO_API_ALIAS": "custom_alias"}):
             manager = ConcreteResourceManager(mock_minio_client, mock_s3_config)
