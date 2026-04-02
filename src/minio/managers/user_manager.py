@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ...service.exceptions import UserOperationError
 from src.s3.core.s3_client import S3Client
-from ..core.policy_creator import SYSTEM_RESOURCE_CONFIG
+from src.s3.core.policy_creator import SYSTEM_RESOURCE_CONFIG
 from ..models.command import UserAction
 from src.s3.models.s3_config import S3Config
 from src.s3.models.user import UserModel

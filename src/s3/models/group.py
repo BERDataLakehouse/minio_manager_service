@@ -7,7 +7,7 @@ from ..utils.validators import validate_group_name
 
 class GroupModel(BaseModel):
     """
-    Group model representing a MinIO group.
+    Group model representing a S3 group.
     """
 
     model_config = ConfigDict(
