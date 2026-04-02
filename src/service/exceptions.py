@@ -3,13 +3,13 @@ Custom exceptions for the MinIO Manager Service.
 """
 
 
-class MinIOError(Exception):
+class S3Error(Exception):
     """
     The super class of all MinIO Manager Service related errors.
     """
 
 
-class AuthenticationError(MinIOError):
+class AuthenticationError(S3Error):
     """
     Super class for authentication related errors.
     """
@@ -42,67 +42,67 @@ class MissingRoleError(AuthenticationError):
 # ----- MinIO specific exceptions -----
 
 
-class MinIOManagerError(MinIOError):
+class S3ManagerError(S3Error):
     """Base exception for all MinIO Manager operations."""
 
     pass
 
 
-class PolicyValidationError(MinIOManagerError):
+class PolicyValidationError(S3ManagerError):
     """Raised when MinIO policy content validation fails."""
 
     pass
 
 
-class PolicyOperationError(MinIOManagerError):
+class PolicyOperationError(S3ManagerError):
     """Raised when MinIO policy operations fail."""
 
     pass
 
 
-class BucketValidationError(MinIOManagerError):
+class BucketValidationError(S3ManagerError):
     """Raised when bucket name or configuration validation fails."""
 
     pass
 
 
-class BucketOperationError(MinIOManagerError):
+class BucketOperationError(S3ManagerError):
     """Raised when MinIO bucket operations fail."""
 
     pass
 
 
-class UserOperationError(MinIOManagerError):
+class UserOperationError(S3ManagerError):
     """Raised when MinIO user operations fail."""
 
     pass
 
 
-class GroupOperationError(MinIOManagerError):
+class GroupOperationError(S3ManagerError):
     """Raised when MinIO group operations fail."""
 
     pass
 
 
-class DataGovernanceError(MinIOManagerError):
+class DataGovernanceError(S3ManagerError):
     """Raised when data governance validation fails."""
 
     pass
 
 
-class ValidationError(MinIOManagerError):
+class ValidationError(S3ManagerError):
     """Raised when general validation fails."""
 
     pass
 
 
-class CredentialOperationError(MinIOManagerError):
+class CredentialOperationError(S3ManagerError):
     """Raised when credential operations fail (e.g., lock contention)."""
 
     pass
 
 
-class ConnectionError(MinIOManagerError):
+class ConnectionError(S3ManagerError):
     """Raised when MinIO server connection fails."""
 
     pass

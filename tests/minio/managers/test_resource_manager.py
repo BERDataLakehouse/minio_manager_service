@@ -12,7 +12,7 @@ from src.s3.core.s3_client import S3Client
 from src.minio.managers.resource_manager import ResourceManager
 from src.minio.models.command import CommandResult
 from src.s3.models.s3_config import S3Config
-from src.service.exceptions import MinIOManagerError
+from src.service.exceptions import S3ManagerError
 
 # =============================================================================
 # Test Implementation of ResourceManager
@@ -176,7 +176,7 @@ class TestOperationContext:
         self, resource_manager, mock_executor
     ):
         """Test that operation context wraps exceptions."""
-        with pytest.raises(MinIOManagerError):
+        with pytest.raises(S3ManagerError):
             async with resource_manager.operation_context("test_operation"):
                 raise RuntimeError("Test error")
 
@@ -184,10 +184,10 @@ class TestOperationContext:
     async def test_operation_context_preserves_minio_error(
         self, resource_manager, mock_executor
     ):
-        """Test that MinIOManagerError is preserved."""
-        with pytest.raises(MinIOManagerError) as exc_info:
+        """Test that S3ManagerError is preserved."""
+        with pytest.raises(S3ManagerError) as exc_info:
             async with resource_manager.operation_context("test_operation"):
-                raise MinIOManagerError("Original error")
+                raise S3ManagerError("Original error")
 
         assert "Original error" in str(exc_info.value)
 

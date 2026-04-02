@@ -5,7 +5,7 @@ from fastapi import status
 from src.service.error_mapping import map_error
 from src.service.errors import ErrorType
 from src.service.exceptions import (
-    MinIOError,
+    S3Error,
     MissingTokenError,
     ValidationError,
 )
@@ -35,17 +35,17 @@ def test_map_validation_error():
 
 
 def test_map_base_minio_error():
-    """Test map_error for the base MinIOError class."""
-    err = MinIOError("generic error")
+    """Test map_error for the base S3Error class."""
+    err = S3Error("generic error")
     mapping = map_error(err)
-    assert mapping.err_type == ErrorType.MINIO_ERROR
+    assert mapping.err_type == ErrorType.S3_ERROR
     assert mapping.http_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
 def test_map_unknown_error_returns_500_fallback():
     """Test map_error with an unmapped subclass returns 500 fallback (covers line 83)."""
 
-    class UnknownMinIOSubclass(MinIOError):
+    class UnknownMinIOSubclass(S3Error):
         """An error subclass not registered in _ERR_MAP."""
 
         pass
