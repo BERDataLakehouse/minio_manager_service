@@ -7,7 +7,7 @@ from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...service.exceptions import UserOperationError
-from ..core.minio_client import MinIOClient
+from src.s3.core.s3_client import S3Client
 from ..core.policy_creator import SYSTEM_RESOURCE_CONFIG
 from ..models.command import UserAction
 from src.s3.models.s3_config import S3Config
@@ -27,7 +27,7 @@ GLOBAL_USER_GROUP = "globalusers"
 class UserManager(ResourceManager[UserModel]):
     """UserManager for basic user operations with patterns and generic CRUD."""
 
-    def __init__(self, client: MinIOClient, config: S3Config) -> None:
+    def __init__(self, client: S3Client, config: S3Config) -> None:
         super().__init__(client, config)
         self.users_general_warehouse_prefix = config.users_general_warehouse_prefix
         self.users_sql_warehouse_prefix = config.users_sql_warehouse_prefix

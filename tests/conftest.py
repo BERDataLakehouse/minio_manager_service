@@ -2,7 +2,7 @@
 Shared test fixtures for the minio_manager_service test suite.
 
 Provides reusable mocks for external dependencies:
-- MinIO/S3: Mock aiobotocore MinIOClient and S3 operations
+- MinIO/S3: Mock aiobotocore S3Client and S3 operations
 - Redis: Mock distributed locking
 - Subprocess: Mock MinIO CLI command execution
 - KBase Auth: Mock aiohttp.ClientSession for auth API calls
@@ -17,7 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.main import create_application
-from src.minio.core.minio_client import MinIOClient
+from src.s3.core.s3_client import S3Client
 from src.minio.managers.group_manager import GroupManager
 from src.minio.managers.policy_manager import PolicyManager
 from src.minio.managers.user_manager import UserManager
@@ -69,7 +69,7 @@ def mock_s3_config() -> S3Config:
 
 
 @pytest.fixture
-def mock_s3_client():
+def mock_aiobotocore_client():
     """
     Create a mock aiobotocore S3 client.
 
@@ -106,18 +106,18 @@ def mock_s3_client():
 
 
 @pytest.fixture
-def mock_aiobotocore_session(mock_s3_client):
+def mock_aiobotocore_session(mock_aiobotocore_client):
     """
     Mock aiobotocore.session.get_session() to return a mock session.
 
-    This patches the global session factory so MinIOClient initialization
+    This patches the global session factory so S3Client initialization
     uses our mock S3 client.
     """
     mock_session = MagicMock()
 
     @asynccontextmanager
     async def mock_create_client(*args, **kwargs):
-        yield mock_s3_client
+        yield mock_aiobotocore_client
 
     mock_session.create_client = mock_create_client
 
@@ -126,14 +126,14 @@ def mock_aiobotocore_session(mock_s3_client):
 
 
 @pytest.fixture
-def mock_minio_client(mock_s3_config, mock_aiobotocore_session):
+def mock_s3_client(mock_s3_config, mock_aiobotocore_session):
     """
-    Create a real MinIOClient instance with mocked aiobotocore backend.
+    Create a real S3Client instance with mocked aiobotocore backend.
 
-    This provides a MinIOClient that behaves correctly as an async context
+    This provides a S3Client that behaves correctly as an async context
     manager but uses mocked S3 operations underneath.
     """
-    return MinIOClient(mock_s3_config)
+    return S3Client(mock_s3_config)
 
 
 # =============================================================================
@@ -329,24 +329,24 @@ def sample_group_data():
 
 
 @pytest.fixture
-def mock_policy_manager(mock_minio_client, mock_s3_config):
+def mock_policy_manager(mock_s3_client, mock_s3_config):
     """Create a PolicyManager with mocked dependencies."""
 
-    return PolicyManager(mock_minio_client, mock_s3_config)
+    return PolicyManager(mock_s3_client, mock_s3_config)
 
 
 @pytest.fixture
-def mock_user_manager(mock_minio_client, mock_s3_config):
+def mock_user_manager(mock_s3_client, mock_s3_config):
     """Create a UserManager with mocked dependencies."""
 
-    return UserManager(mock_minio_client, mock_s3_config)
+    return UserManager(mock_s3_client, mock_s3_config)
 
 
 @pytest.fixture
-def mock_group_manager(mock_minio_client, mock_s3_config):
+def mock_group_manager(mock_s3_client, mock_s3_config):
     """Create a GroupManager with mocked dependencies."""
 
-    return GroupManager(mock_minio_client, mock_s3_config)
+    return GroupManager(mock_s3_client, mock_s3_config)
 
 
 # =============================================================================

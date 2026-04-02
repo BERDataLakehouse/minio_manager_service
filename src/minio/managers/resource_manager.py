@@ -14,7 +14,7 @@ from typing import AsyncIterator, Generic, List, Optional, TypeVar
 from ...service.exceptions import MinIOManagerError
 from ..core.base_executor import BaseMinIOExecutor
 from ..core.command_builder import MinIOCommandBuilder
-from ..core.minio_client import MinIOClient
+from src.s3.core.s3_client import S3Client
 from src.s3.models.s3_config import S3Config
 
 # Generic type for resource models
@@ -37,15 +37,15 @@ class ResourceManager(ABC, Generic[T]):
 
     def __init__(
         self,
-        client: MinIOClient,
+        client: S3Client,
         config: S3Config,
         logger_instance: Optional[logging.Logger] = None,
     ) -> None:
         """Initialize the resource manager.
 
         Args:
-            client: Async MinIO client instance
-            config: MinIO configuration
+            client: Async S3 client instance
+            config: S3 configuration
             logger_instance: Optional logger instance
         """
         self.client = client

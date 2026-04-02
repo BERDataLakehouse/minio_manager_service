@@ -55,7 +55,7 @@ from src.s3.utils.validators import (
     validate_policy_name,
 )
 from .policy_builder import PolicyBuilder
-from ..utils.governance import (
+from src.s3.utils.governance import (
     generate_group_governance_prefix,
     generate_user_governance_prefix,
 )

@@ -14,7 +14,7 @@ from typing import List, Optional, Union
 from pydantic import BaseModel
 
 from ...service.exceptions import DataGovernanceError
-from ..core.minio_client import MinIOClient
+from src.s3.core.s3_client import S3Client
 from src.s3.models.s3_config import S3Config
 from src.s3.models.policy import PolicyPermissionLevel, PolicyTarget
 from src.s3.utils.validators import (
@@ -125,7 +125,7 @@ class SharingManager:
 
     def __init__(
         self,
-        client: MinIOClient,
+        client: S3Client,
         config: S3Config,
         policy_manager: PolicyManager,
         user_manager: UserManager,
@@ -135,8 +135,8 @@ class SharingManager:
         Initialize SharingManager with dependency injection.
 
         Args:
-            client: MinIO client instance
-            config: MinIO configuration
+            client: S3 client instance
+            config: S3 configuration
         """
         self.client = client
         self.config = config

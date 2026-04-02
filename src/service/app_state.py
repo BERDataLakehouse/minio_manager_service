@@ -14,8 +14,8 @@ from fastapi import FastAPI, Request
 
 from src.credentials.service import CredentialService
 from src.credentials.store import CredentialStore
-from src.minio.core.distributed_lock import DistributedLockManager
-from src.minio.core.minio_client import MinIOClient
+from src.s3.core.distributed_lock import DistributedLockManager
+from src.s3.core.s3_client import S3Client
 from src.minio.managers.group_manager import GroupManager
 from src.minio.managers.policy_manager import PolicyManager
 from src.minio.managers.sharing_manager import SharingManager
@@ -36,7 +36,7 @@ class AppState(NamedTuple):
     """Holds application state."""
 
     auth: KBaseAuth
-    minio_client: MinIOClient
+    minio_client: S3Client
     user_manager: UserManager
     group_manager: GroupManager
     policy_manager: PolicyManager
@@ -110,16 +110,16 @@ async def build_app(app: FastAPI) -> None:
     )
     logger.info("KBase auth service connected")
 
-    # Initialize MinIO configuration and client
-    logger.info("Initializing MinIO client and managers...")
+    # Initialize S3 configuration and client
+    logger.info("Initializing S3 client and managers...")
     config = S3Config(
         endpoint=not_falsy(os.getenv("MINIO_ENDPOINT"), "MINIO_ENDPOINT"),
         access_key=not_falsy(os.getenv("MINIO_ROOT_USER"), "MINIO_ROOT_USER"),
         secret_key=not_falsy(os.getenv("MINIO_ROOT_PASSWORD"), "MINIO_ROOT_PASSWORD"),
     )
 
-    minio_client = await MinIOClient.create(config)
-    logger.info("MinIO client session initialized")
+    minio_client = await S3Client.create(config)
+    logger.info("S3 client session initialized")
 
     # Initialize distributed lock manager
     logger.info("Initializing distributed lock manager...")
@@ -143,9 +143,9 @@ async def build_app(app: FastAPI) -> None:
         user_manager=user_manager,
         group_manager=group_manager,
     )
-    logger.info("MinIO managers initialized")
+    logger.info("S3 managers initialized")
 
-    # Initialize credential service (coordinates lock + MinIO + DB)
+    # Initialize credential service (coordinates lock + S3 + DB)
     credential_service = CredentialService(
         user_manager=user_manager,
         credential_store=credential_store,
@@ -197,11 +197,11 @@ async def destroy_app_state(app: FastAPI) -> None:
             logger.warning(f"Error closing Redis connection: {e}")
 
         try:
-            # Close MinIO client session
+            # Close S3 client session
             await app.state._minio_manager_state.minio_client.close_session()
-            logger.info("MinIO client session closed")
+            logger.info("S3 client session closed")
         except Exception as e:
-            logger.warning(f"Error closing MinIO client session: {e}")
+            logger.warning(f"Error closing S3 client session: {e}")
 
         try:
             # Close shared database pool (covers credential store, profile store, etc.)
