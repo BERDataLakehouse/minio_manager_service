@@ -15,7 +15,7 @@ class PolicyEffect(str, Enum):
 
 
 class PolicyAction(str, Enum):
-    """Common MinIO policy actions."""
+    """Common S3 policy actions."""
 
     # Object actions
     GET_OBJECT = "s3:GetObject"
@@ -198,5 +198,5 @@ class PolicyModel(BaseModel):
         return v
 
     def to_minio_policy_json(self) -> str:
-        """Convert to MinIO policy JSON string."""
+        """Convert to S3 policy JSON string."""
         return json.dumps(self.policy_document.to_dict(), indent=2)

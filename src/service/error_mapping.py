@@ -19,8 +19,8 @@ from src.service.exceptions import (  # MinIO specific exceptions
     GroupOperationError,
     InvalidAuthHeaderError,
     InvalidTokenError,
-    MinIOError,
-    MinIOManagerError,
+    S3Error,
+    S3ManagerError,
     MissingRoleError,
     MissingTokenError,
     PolarisOperationError,
@@ -57,7 +57,7 @@ _ERR_MAP = {
     MissingRoleError: ErrorMapping(ErrorType.MISSING_ROLE, _H403),
     AuthenticationError: ErrorMapping(ErrorType.AUTHENTICATION_FAILED, _H401),
     # MinIO specific errors
-    MinIOManagerError: ErrorMapping(ErrorType.MINIO_MANAGER_ERROR, _H500),
+    S3ManagerError: ErrorMapping(ErrorType.S3_MANAGER_ERROR, _H500),
     PolicyValidationError: ErrorMapping(ErrorType.POLICY_VALIDATION_ERROR, _H400),
     PolicyOperationError: ErrorMapping(ErrorType.POLICY_OPERATION_ERROR, _H500),
     BucketOperationError: ErrorMapping(ErrorType.BUCKET_OPERATION_ERROR, _H500),
@@ -70,11 +70,11 @@ _ERR_MAP = {
     ValidationError: ErrorMapping(ErrorType.VALIDATION_ERROR, _H400),
     ConnectionError: ErrorMapping(ErrorType.CONNECTION_ERROR, _H503),
     # Base error fallback
-    MinIOError: ErrorMapping(ErrorType.MINIO_ERROR, _H500),
+    S3Error: ErrorMapping(ErrorType.S3_ERROR, _H500),
 }
 
 
-def map_error(err: MinIOError) -> ErrorMapping:
+def map_error(err: S3Error) -> ErrorMapping:
     """
     Map an error to an optional error type and a HTTP code.
     """

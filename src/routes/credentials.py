@@ -3,7 +3,7 @@ Credential Management Routes for the MinIO Manager API.
 
 This module provides the primary JupyterHub integration endpoints for credential
 management. These are the core endpoints that JupyterHub calls to obtain temporary
-MinIO credentials for users.
+S3 credentials for users.
 
 GET /credentials returns cached credentials from the database, creating the user
 and storing credentials on first access. POST /credentials/rotate explicitly

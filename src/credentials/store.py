@@ -2,7 +2,7 @@
 Encrypted credential storage backed by PostgreSQL with pgcrypto.
 
 Provides idempotent credential caching so that GET /credentials returns
-the same MinIO credentials for a user until explicitly rotated.
+the same S3 credentials for a user until explicitly rotated.
 """
 
 import logging

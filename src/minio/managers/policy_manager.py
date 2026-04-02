@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from ...service.exceptions import PolicyOperationError
-from ..core.distributed_lock import DistributedLockManager
-from ..core.minio_client import MinIOClient
-from ..core.policy_builder import PolicyBuilder
-from ..core.policy_creator import PolicyCreator
+from src.s3.core.distributed_lock import DistributedLockManager
+from src.s3.core.s3_client import S3Client
+from src.s3.core.policy_builder import PolicyBuilder
+from src.s3.core.policy_creator import PolicyCreator
 from ..models.command import PolicyAction as CommandPolicyAction
 from src.s3.models.s3_config import S3Config
 from src.s3.models.policy import (
@@ -48,7 +48,7 @@ class PolicyManager(ResourceManager[PolicyModel]):
 
     def __init__(
         self,
-        client: MinIOClient,
+        client: S3Client,
         config: S3Config,
         lock_manager: Optional[DistributedLockManager] = None,
     ) -> None:
@@ -56,8 +56,8 @@ class PolicyManager(ResourceManager[PolicyModel]):
         Initialize the PolicyManager.
 
         Args:
-            client: MinIO client instance used for executing commands and object ops.
-            config: MinIO configuration for bucket and path conventions.
+            client: S3 client instance used for executing commands and object ops.
+            config: S3 configuration for bucket and path conventions.
             lock_manager: Optional distributed lock manager. Required for any
                 operations that modify an existing policy's contents (e.g.,
                 add_path_access_for_target, remove_path_access_for_target),

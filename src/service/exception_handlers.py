@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 
 from src.service import errors
 from src.service.error_mapping import map_error
-from src.service.exceptions import MinIOError
+from src.service.exceptions import S3Error
 from src.service.models import ErrorResponse
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ async def universal_error_handler(request: Request, exc: Exception):
     Universal handler for all types of exceptions.
 
     Handles:
-    - MinIOError and its subclasses:
+    - S3Error and its subclasses:
         - Authentication errors (MissingTokenError, InvalidTokenError, etc.)
         - MinIO specific errors (BucketOperationError, UserOperationError, etc.)
     - HTTPException from FastAPI
@@ -53,8 +53,8 @@ async def universal_error_handler(request: Request, exc: Exception):
     error_type_str = None
     status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
 
-    if isinstance(exc, MinIOError):
-        # handle MinIOError and subclasses
+    if isinstance(exc, S3Error):
+        # handle S3Error and subclasses
         error_type, status_code = map_error(exc)
 
         # Extract values from error_type if available

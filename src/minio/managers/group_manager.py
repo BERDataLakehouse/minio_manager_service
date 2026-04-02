@@ -3,7 +3,7 @@ import logging
 from typing import List
 
 from ...service.exceptions import GroupOperationError
-from ..core.minio_client import MinIOClient
+from src.s3.core.s3_client import S3Client
 from ..models.command import GroupAction
 from src.s3.models.group import GroupModel
 from src.s3.models.s3_config import S3Config
@@ -22,7 +22,7 @@ class GroupManager(ResourceManager[GroupModel]):
 
     def __init__(
         self,
-        client: MinIOClient,
+        client: S3Client,
         config: S3Config,
         polaris_service: PolarisService,
     ):

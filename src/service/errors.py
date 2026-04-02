@@ -31,10 +31,10 @@ class ErrorType(Enum):
     """ The user is missing a required role. """
 
     # ----- MinIO specific error types -----
-    MINIO_ERROR = (20000, "MinIO service error")
+    S3_ERROR = (20000, "S3 service error")
     """ A general error related to MinIO service. """
 
-    MINIO_MANAGER_ERROR = (20010, "MinIO manager error")
+    S3_MANAGER_ERROR = (20010, "S3 manager error")
     """ A general error related to MinIO Manager operations. """
 
     POLICY_VALIDATION_ERROR = (20015, "MinIO policy validation error")

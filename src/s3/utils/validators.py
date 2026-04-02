@@ -50,7 +50,7 @@ def validate_username(username: str) -> str:
     Requirements for data governance:
     - Must be unique and trackable
     - Safe for file paths and policies
-    - Compatible with MinIO user management
+    - Compatible with S3 user management
 
     Args:
         username: Username to validate
@@ -64,12 +64,12 @@ def validate_username(username: str) -> str:
     username = not_falsy(username, "Username")
     username = username.strip()
 
-    # Length constraints for MinIO compatibility
+    # Length constraints for S3 compatibility
     if len(username) < 2 or len(username) > 64:
         raise UserOperationError("Username must be between 2 and 64 characters")
 
     # Character constraints - allow alphanumeric, dots, hyphens, underscores
-    # These are safe for S3 paths and MinIO policies
+    # These are safe for S3 paths and S3 policies
     if not re.match(r"^[a-zA-Z0-9._-]+$", username):
         raise UserOperationError(
             "Username can only contain letters, numbers, periods, hyphens, and underscores"
@@ -369,11 +369,11 @@ def validate_path_prefix(prefix: str) -> str:
 
 def validate_policy_name(policy_name: str) -> str:
     """
-    Validate IAM policy name for data governance with comprehensive MinIO compatibility.
+    Validate IAM policy name for data governance with comprehensive S3 compatibility.
 
     Policy names in data governance should be:
     - Descriptive and meaningful
-    - Compatible with MinIO policy system
+    - Compatible with S3 policy system
     - Consistent naming convention
     - Safe for policy operations and attachment
 
@@ -389,7 +389,7 @@ def validate_policy_name(policy_name: str) -> str:
     policy_name = not_falsy(policy_name, "Policy name")
     policy_name = policy_name.strip()
 
-    # Length constraints for MinIO compatibility (stricter than original for consistency)
+    # Length constraints for S3 compatibility (stricter than original for consistency)
     if len(policy_name) < 2 or len(policy_name) > 128:
         raise PolicyValidationError("Policy name must be between 2 and 128 characters")
 
@@ -399,7 +399,7 @@ def validate_policy_name(policy_name: str) -> str:
             "Policy name can only contain alphanumeric characters, periods (.), hyphens (-), and underscores (_)"
         )
 
-    # Cannot start with a period for MinIO compatibility
+    # Cannot start with a period for S3 compatibility
     if policy_name[0] == ".":
         raise PolicyValidationError("Policy name cannot start with a period")
 

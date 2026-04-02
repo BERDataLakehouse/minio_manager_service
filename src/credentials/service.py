@@ -1,13 +1,13 @@
 """
 Credential coordination service.
 
-Encapsulates the lock → cache → MinIO → store workflow so that credential
+Encapsulates the lock → cache → S3 → store workflow so that credential
 routes (user-facing and management) are thin one-liner callers.
 """
 
 import logging
 
-from ..minio.core.distributed_lock import DistributedLockManager
+from src.s3.core.distributed_lock import DistributedLockManager
 from ..minio.managers.user_manager import UserManager
 from .store import CredentialStore
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class CredentialService:
-    """Coordinates distributed locking, MinIO operations, and DB caching for credentials."""
+    """Coordinates distributed locking, S3 operations, and DB caching for credentials."""
 
     def __init__(
         self,
@@ -33,7 +33,7 @@ class CredentialService:
 
         Flow:
         1. Fast path: return from DB cache without locking.
-        2. Cache miss: acquire lock → double-check cache → create/rotate in MinIO → store.
+        2. Cache miss: acquire lock → double-check cache → create/rotate in S3 → store.
 
         Returns:
             (access_key, secret_key)
@@ -62,7 +62,7 @@ class CredentialService:
 
     async def rotate(self, username: str) -> tuple[str, str]:
         """
-        Force-rotate credentials: delete stale cache, rotate in MinIO, store new ones.
+        Force-rotate credentials: delete stale cache, rotate in S3, store new ones.
 
         Returns:
             (access_key, secret_key)

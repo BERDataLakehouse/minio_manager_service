@@ -9,8 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from ...polaris.constants import ICEBERG_STORAGE_SUBDIRECTORY
 from ...polaris.polaris_service import PolarisService
 from ...service.exceptions import UserOperationError
-from ..core.minio_client import MinIOClient
-from ..core.policy_creator import SYSTEM_RESOURCE_CONFIG
+from src.s3.core.s3_client import S3Client
+from src.s3.core.policy_creator import SYSTEM_RESOURCE_CONFIG
 from ..models.command import UserAction
 from src.s3.models.s3_config import S3Config
 from src.s3.models.user import UserModel
@@ -31,7 +31,7 @@ class UserManager(ResourceManager[UserModel]):
 
     def __init__(
         self,
-        client: MinIOClient,
+        client: S3Client,
         config: S3Config,
         polaris_service: PolarisService,
     ) -> None:

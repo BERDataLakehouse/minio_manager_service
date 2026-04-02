@@ -7,7 +7,7 @@ No mocks needed - tests use real PolicyModel objects.
 
 import pytest
 
-from src.minio.core.policy_builder import PolicyBuilder
+from src.s3.core.policy_builder import PolicyBuilder
 from src.s3.models.policy import (
     PolicyAction,
     PolicyDocument,

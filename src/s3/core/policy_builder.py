@@ -1,11 +1,11 @@
 """
-Policy Builder module for modifying MinIO policy documents.
+Policy Builder module for modifying S3 policy documents.
 """
 
 import logging
 import re
 
-from ...service.exceptions import PolicyOperationError
+from src.service.exceptions import PolicyOperationError
 from src.s3.models.policy import (
     PolicyAction,
     PolicyEffect,

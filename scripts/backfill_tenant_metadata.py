@@ -35,10 +35,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import AsyncConnectionPool
 
-from src.minio.core.minio_client import MinIOClient
+from src.s3.core.s3_client import S3Client
 from src.minio.managers.group_manager import GroupManager
 from src.minio.managers.tenant_manager import SYSTEM_GROUPS
-from src.minio.models.minio_config import MinIOConfig
+from src.s3.models.s3_config import S3Config
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -55,12 +55,12 @@ def _is_tenant_group(name: str) -> bool:
 
 
 async def main(dry_run: bool) -> None:
-    config = MinIOConfig(
+    config = S3Config(
         endpoint=os.environ["MINIO_ENDPOINT"],
         access_key=os.environ["MINIO_ROOT_USER"],
         secret_key=os.environ["MINIO_ROOT_PASSWORD"],
     )
-    minio_client = await MinIOClient.create(config)
+    minio_client = await S3Client.create(config)
     group_manager = GroupManager(minio_client, config)
 
     all_groups = await group_manager.list_resources()

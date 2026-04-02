@@ -1,4 +1,4 @@
-"""User-related Pydantic models for the MinIO Manager Service."""
+"""User-related Pydantic models for the S3 Manager Service."""
 
 from typing import Annotated, List, Optional
 

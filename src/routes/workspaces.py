@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.s3.models.policy import PolicyModel
 from src.s3.models.user import UserModel
 from ..service.app_state import get_app_state
-from ..minio.utils.governance import (
+from src.s3.utils.governance import (
     generate_group_governance_prefix,
     generate_user_governance_prefix,
 )
