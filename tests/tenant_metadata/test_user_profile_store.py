@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.minio.stores.user_profile_store import UserProfileStore
+from src.tenant_metadata.user_profile_store import UserProfileStore
 
 
 @pytest.fixture

@@ -11,7 +11,7 @@ import pytest
 from src.minio.core.minio_client import MinIOClient
 from src.minio.managers.resource_manager import ResourceManager
 from src.minio.models.command import CommandResult
-from src.minio.models.minio_config import MinIOConfig
+from src.s3.models.s3_config import S3Config
 from src.service.exceptions import MinIOManagerError
 
 # =============================================================================
@@ -67,9 +67,9 @@ def mock_mc_path():
 
 
 @pytest.fixture
-def mock_minio_config():
-    """Create a mock MinIOConfig."""
-    return MinIOConfig(
+def mock_s3_config():
+    """Create a mock S3Config."""
+    return S3Config(
         endpoint="http://localhost:9000",  # type: ignore
         access_key="test_access",
         secret_key="test_secret",
@@ -95,9 +95,9 @@ def mock_executor():
 
 
 @pytest.fixture
-def resource_manager(mock_minio_client, mock_minio_config, mock_executor):
+def resource_manager(mock_minio_client, mock_s3_config, mock_executor):
     """Create a ConcreteResourceManager with mocked dependencies."""
-    manager = ConcreteResourceManager(mock_minio_client, mock_minio_config)
+    manager = ConcreteResourceManager(mock_minio_client, mock_s3_config)
     manager._executor = mock_executor
     return manager
 
@@ -110,37 +110,35 @@ def resource_manager(mock_minio_client, mock_minio_config, mock_executor):
 class TestResourceManagerInit:
     """Tests for ResourceManager initialization."""
 
-    def test_init_with_client_and_config(self, mock_minio_client, mock_minio_config):
+    def test_init_with_client_and_config(self, mock_minio_client, mock_s3_config):
         """Test initialization with client and config."""
-        manager = ConcreteResourceManager(mock_minio_client, mock_minio_config)
+        manager = ConcreteResourceManager(mock_minio_client, mock_s3_config)
 
         assert manager.client == mock_minio_client
-        assert manager.config == mock_minio_config
+        assert manager.config == mock_s3_config
         assert manager.logger is not None
 
-    def test_init_with_custom_logger(self, mock_minio_client, mock_minio_config):
+    def test_init_with_custom_logger(self, mock_minio_client, mock_s3_config):
         """Test initialization with custom logger."""
         custom_logger = logging.getLogger("custom_logger")
         manager = ConcreteResourceManager(
-            mock_minio_client, mock_minio_config, custom_logger
+            mock_minio_client, mock_s3_config, custom_logger
         )
 
         assert manager.logger == custom_logger
 
-    def test_init_creates_executor(self, mock_minio_client, mock_minio_config):
+    def test_init_creates_executor(self, mock_minio_client, mock_s3_config):
         """Test that initialization creates executor."""
-        manager = ConcreteResourceManager(mock_minio_client, mock_minio_config)
+        manager = ConcreteResourceManager(mock_minio_client, mock_s3_config)
 
         assert manager._executor is not None
         assert manager._command_builder is not None
         assert manager.alias == "minio_api"
 
-    def test_init_uses_custom_alias_from_env(
-        self, mock_minio_client, mock_minio_config
-    ):
+    def test_init_uses_custom_alias_from_env(self, mock_minio_client, mock_s3_config):
         """Test that custom alias from environment is used."""
         with patch.dict(os.environ, {"MINIO_API_ALIAS": "custom_alias"}):
-            manager = ConcreteResourceManager(mock_minio_client, mock_minio_config)
+            manager = ConcreteResourceManager(mock_minio_client, mock_s3_config)
             assert manager.alias == "custom_alias"
 
 

@@ -19,7 +19,7 @@ from src.service.arg_checkers import not_falsy as _not_falsy
 from src.service.exceptions import InvalidTokenError, MissingRoleError
 
 if TYPE_CHECKING:
-    from src.minio.stores.user_profile_store import UserProfileStore
+    from src.tenant_metadata.user_profile_store import UserProfileStore
 
 
 class AdminPermission(IntEnum):

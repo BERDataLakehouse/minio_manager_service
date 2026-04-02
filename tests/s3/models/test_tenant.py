@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from src.minio.models.tenant import TenantMetadataUpdate
+from src.s3.models.tenant import TenantMetadataUpdate
 
 
 class TestWebsiteValidation:

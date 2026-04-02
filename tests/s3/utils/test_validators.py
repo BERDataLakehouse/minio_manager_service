@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.minio.utils.validators import (
+from src.s3.utils.validators import (
     validate_username,
     validate_group_name,
     validate_bucket_name,

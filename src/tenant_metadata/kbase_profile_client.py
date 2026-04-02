@@ -10,7 +10,7 @@ import aiohttp
 from cacheout.lru import LRUCache
 from psycopg_pool import AsyncConnectionPool
 
-from src.minio.models.tenant import UserProfile
+from src.s3.models.tenant import UserProfile
 
 logger = logging.getLogger(__name__)
 

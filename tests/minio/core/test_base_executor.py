@@ -31,8 +31,8 @@ def mock_env_vars():
 
 
 @pytest.fixture
-def mock_minio_config():
-    """Create a mock MinIOConfig."""
+def mock_s3_config():
+    """Create a mock S3Config."""
     config = MagicMock()
     config.endpoint = "http://minio:9000"
     config.minio_url = "http://minio:9000"
@@ -42,15 +42,15 @@ def mock_minio_config():
 
 
 @pytest.fixture
-def executor(mock_minio_config):
+def executor(mock_s3_config):
     """Create a BaseMinIOExecutor instance."""
-    return BaseMinIOExecutor(mock_minio_config)
+    return BaseMinIOExecutor(mock_s3_config)
 
 
 @pytest.fixture
-def executor_with_custom_alias(mock_minio_config):
+def executor_with_custom_alias(mock_s3_config):
     """Create a BaseMinIOExecutor with custom alias."""
-    return BaseMinIOExecutor(mock_minio_config, alias="custom_alias")
+    return BaseMinIOExecutor(mock_s3_config, alias="custom_alias")
 
 
 # =============================================================================
@@ -61,34 +61,34 @@ def executor_with_custom_alias(mock_minio_config):
 class TestBaseMinIOExecutorInit:
     """Tests for BaseMinIOExecutor initialization."""
 
-    def test_init_with_defaults(self, mock_minio_config):
+    def test_init_with_defaults(self, mock_s3_config):
         """Test initialization with default parameters."""
-        executor = BaseMinIOExecutor(mock_minio_config)
+        executor = BaseMinIOExecutor(mock_s3_config)
 
-        assert executor.config == mock_minio_config
+        assert executor.config == mock_s3_config
         assert executor.alias == "minio_api"
         assert executor._mc_path == "/usr/local/bin/mc"
         assert executor._setup_complete is False
 
-    def test_init_with_custom_alias(self, mock_minio_config):
+    def test_init_with_custom_alias(self, mock_s3_config):
         """Test initialization with custom alias."""
-        executor = BaseMinIOExecutor(mock_minio_config, alias="custom")
+        executor = BaseMinIOExecutor(mock_s3_config, alias="custom")
 
         assert executor.alias == "custom"
 
-    def test_init_without_mc_path_raises_error(self, mock_minio_config):
+    def test_init_without_mc_path_raises_error(self, mock_s3_config):
         """Test initialization fails without MC_PATH."""
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("MC_PATH", None)
 
             with pytest.raises(KeyError):
-                BaseMinIOExecutor(mock_minio_config)
+                BaseMinIOExecutor(mock_s3_config)
 
-    def test_init_with_empty_mc_path_raises_error(self, mock_minio_config):
+    def test_init_with_empty_mc_path_raises_error(self, mock_s3_config):
         """Test initialization fails with empty MC_PATH."""
         with patch.dict(os.environ, {"MC_PATH": ""}):
             with pytest.raises(ValueError):
-                BaseMinIOExecutor(mock_minio_config)
+                BaseMinIOExecutor(mock_s3_config)
 
     def test_command_builder_initialized(self, executor):
         """Test command builder is initialized with alias."""
@@ -158,27 +158,27 @@ class TestSetup:
             assert executor._setup_complete is False
 
     @pytest.mark.asyncio
-    async def test_setup_without_minio_root_user(self, mock_minio_config):
+    async def test_setup_without_minio_root_user(self, mock_s3_config):
         """Test setup fails without MINIO_ROOT_USER."""
         with patch.dict(
             os.environ, {"MC_PATH": "/usr/local/bin/mc", "MINIO_ROOT_PASSWORD": "pass"}
         ):
             os.environ.pop("MINIO_ROOT_USER", None)
 
-            executor = BaseMinIOExecutor(mock_minio_config)
+            executor = BaseMinIOExecutor(mock_s3_config)
 
             with pytest.raises((MinIOManagerError, ValueError)):
                 await executor.setup()
 
     @pytest.mark.asyncio
-    async def test_setup_without_minio_root_password(self, mock_minio_config):
+    async def test_setup_without_minio_root_password(self, mock_s3_config):
         """Test setup fails without MINIO_ROOT_PASSWORD."""
         with patch.dict(
             os.environ, {"MC_PATH": "/usr/local/bin/mc", "MINIO_ROOT_USER": "admin"}
         ):
             os.environ.pop("MINIO_ROOT_PASSWORD", None)
 
-            executor = BaseMinIOExecutor(mock_minio_config)
+            executor = BaseMinIOExecutor(mock_s3_config)
 
             with pytest.raises((MinIOManagerError, ValueError)):
                 await executor.setup()

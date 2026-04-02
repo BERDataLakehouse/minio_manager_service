@@ -15,9 +15,9 @@ from pydantic import BaseModel
 
 from ...service.exceptions import DataGovernanceError
 from ..core.minio_client import MinIOClient
-from ..models.minio_config import MinIOConfig
-from ..models.policy import PolicyPermissionLevel, PolicyTarget
-from ..utils.validators import (
+from src.s3.models.s3_config import S3Config
+from src.s3.models.policy import PolicyPermissionLevel, PolicyTarget
+from src.s3.utils.validators import (
     GROUP_POLICY_PREFIX,
     USER_HOME_POLICY_PREFIX,
     validate_s3_path,
@@ -126,7 +126,7 @@ class SharingManager:
     def __init__(
         self,
         client: MinIOClient,
-        config: MinIOConfig,
+        config: S3Config,
         policy_manager: PolicyManager,
         user_manager: UserManager,
         group_manager: GroupManager,

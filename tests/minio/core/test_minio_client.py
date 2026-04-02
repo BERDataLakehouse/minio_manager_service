@@ -42,36 +42,34 @@ class AsyncIteratorMock:
 class TestMinIOClientInitialization:
     """Tests for MinIOClient initialization and session management."""
 
-    def test_init_with_config(self, mock_minio_config):
+    def test_init_with_config(self, mock_s3_config):
         """Test basic initialization with config."""
-        client = MinIOClient(mock_minio_config)
-        assert client.config == mock_minio_config
+        client = MinIOClient(mock_s3_config)
+        assert client.config == mock_s3_config
         assert client._session is None
 
     @pytest.mark.asyncio
     async def test_create_initializes_session(
-        self, mock_minio_config, mock_aiobotocore_session
+        self, mock_s3_config, mock_aiobotocore_session
     ):
         """Test class method create() initializes session."""
-        client = await MinIOClient.create(mock_minio_config)
+        client = await MinIOClient.create(mock_s3_config)
         assert client._session is not None
-        assert client.config == mock_minio_config
+        assert client.config == mock_s3_config
 
     @pytest.mark.asyncio
-    async def test_initialize_session(
-        self, mock_minio_config, mock_aiobotocore_session
-    ):
+    async def test_initialize_session(self, mock_s3_config, mock_aiobotocore_session):
         """Test manual session initialization."""
-        client = MinIOClient(mock_minio_config)
+        client = MinIOClient(mock_s3_config)
         assert client._session is None
 
         await client.initialize_session()
         assert client._session is not None
 
     @pytest.mark.asyncio
-    async def test_initialize_session_error_handling(self, mock_minio_config):
+    async def test_initialize_session_error_handling(self, mock_s3_config):
         """Test that session initialization errors are properly wrapped."""
-        client = MinIOClient(mock_minio_config)
+        client = MinIOClient(mock_s3_config)
 
         # Mock get_session to raise an error
         with patch.object(
@@ -83,9 +81,9 @@ class TestMinIOClientInitialization:
                 await client.initialize_session()
 
     @pytest.mark.asyncio
-    async def test_close_session(self, mock_minio_config, mock_aiobotocore_session):
+    async def test_close_session(self, mock_s3_config, mock_aiobotocore_session):
         """Test session cleanup."""
-        client = MinIOClient(mock_minio_config)
+        client = MinIOClient(mock_s3_config)
         await client.initialize_session()
         assert client._session is not None
 
@@ -94,10 +92,10 @@ class TestMinIOClientInitialization:
 
     @pytest.mark.asyncio
     async def test_async_context_manager(
-        self, mock_minio_config, mock_aiobotocore_session
+        self, mock_s3_config, mock_aiobotocore_session
     ):
         """Test using MinIOClient as async context manager."""
-        client = MinIOClient(mock_minio_config)
+        client = MinIOClient(mock_s3_config)
         assert client._session is None
 
         async with client as ctx_client:

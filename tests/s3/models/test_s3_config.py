@@ -1,20 +1,20 @@
-"""Tests for the minio.models.minio_config module."""
+"""Tests for the minio.models.s3_config module."""
 
 import pytest
 
-from src.minio.models.minio_config import MinIOConfig
+from src.s3.models.s3_config import S3Config
 
 
 def test_config_imports():
-    """Test that minio_config module can be imported."""
-    from src.minio.models import minio_config
+    """Test that s3_config module can be imported."""
+    from src.s3.models import s3_config
 
-    assert minio_config is not None
+    assert s3_config is not None
 
 
 def test_valid_config():
-    """Test MinIOConfig with valid values."""
-    config = MinIOConfig(
+    """Test S3Config with valid values."""
+    config = S3Config(
         endpoint="http://localhost:9002",
         access_key="minio",
         secret_key="minio123",
@@ -30,7 +30,7 @@ class TestWarehousePrefixValidation:
     def test_invalid_warehouse_prefix_with_path_traversal(self):
         """Test that warehouse prefix with '..' raises ValueError."""
         with pytest.raises(ValueError, match="path separators"):
-            MinIOConfig(
+            S3Config(
                 endpoint="http://localhost:9002",
                 access_key="minio",
                 secret_key="minio123",
@@ -40,7 +40,7 @@ class TestWarehousePrefixValidation:
     def test_invalid_warehouse_prefix_with_backslash(self):
         """Test that warehouse prefix with backslash raises ValueError."""
         with pytest.raises(ValueError, match="path separators"):
-            MinIOConfig(
+            S3Config(
                 endpoint="http://localhost:9002",
                 access_key="minio",
                 secret_key="minio123",
@@ -50,7 +50,7 @@ class TestWarehousePrefixValidation:
     def test_invalid_tenant_warehouse_prefix(self):
         """Test tenant warehouse prefix validation."""
         with pytest.raises(ValueError, match="path separators"):
-            MinIOConfig(
+            S3Config(
                 endpoint="http://localhost:9002",
                 access_key="minio",
                 secret_key="minio123",
@@ -64,7 +64,7 @@ class TestDefaultBucketValidation:
     def test_invalid_bucket_name_with_dots(self):
         """Test that bucket name with dots raises ValueError."""
         with pytest.raises(ValueError, match="unsupported"):
-            MinIOConfig(
+            S3Config(
                 endpoint="http://localhost:9002",
                 access_key="minio",
                 secret_key="minio123",
@@ -74,7 +74,7 @@ class TestDefaultBucketValidation:
     def test_invalid_bucket_name_too_short(self):
         """Test that bucket name shorter than 3 chars raises ValueError."""
         with pytest.raises(ValueError):
-            MinIOConfig(
+            S3Config(
                 endpoint="http://localhost:9002",
                 access_key="minio",
                 secret_key="minio123",
@@ -84,7 +84,7 @@ class TestDefaultBucketValidation:
     def test_invalid_bucket_name_with_uppercase(self):
         """Test that bucket name with uppercase raises ValueError."""
         with pytest.raises(ValueError, match="lowercase"):
-            MinIOConfig(
+            S3Config(
                 endpoint="http://localhost:9002",
                 access_key="minio",
                 secret_key="minio123",

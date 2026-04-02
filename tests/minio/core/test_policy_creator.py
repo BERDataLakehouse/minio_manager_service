@@ -9,7 +9,7 @@ from src.minio.core.policy_creator import (
     SYSTEM_RESOURCE_CONFIG,
     _POLICY_ACTION_TO_POLICY_SECTION,
 )
-from src.minio.models.policy import (
+from src.s3.models.policy import (
     PolicyAction,
     PolicyDocument,
     PolicyModel,
@@ -27,8 +27,8 @@ from src.service.exceptions import PolicyOperationError
 
 
 @pytest.fixture
-def mock_minio_config():
-    """Create a mock MinIOConfig."""
+def mock_s3_config():
+    """Create a mock S3Config."""
     config = MagicMock()
     config.default_bucket = "data-lake"
     config.users_sql_warehouse_prefix = "users-sql-warehouse"
@@ -39,42 +39,42 @@ def mock_minio_config():
 
 
 @pytest.fixture
-def user_home_creator(mock_minio_config):
+def user_home_creator(mock_s3_config):
     """Create a PolicyCreator for user home policy."""
     return PolicyCreator(
         policy_type=PolicyType.USER_HOME,
         target_name="testuser",
-        config=mock_minio_config,
+        config=mock_s3_config,
     )
 
 
 @pytest.fixture
-def user_system_creator(mock_minio_config):
+def user_system_creator(mock_s3_config):
     """Create a PolicyCreator for user system policy."""
     return PolicyCreator(
         policy_type=PolicyType.USER_SYSTEM,
         target_name="testuser",
-        config=mock_minio_config,
+        config=mock_s3_config,
     )
 
 
 @pytest.fixture
-def group_policy_creator(mock_minio_config):
+def group_policy_creator(mock_s3_config):
     """Create a PolicyCreator for group policy."""
     return PolicyCreator(
         policy_type=PolicyType.GROUP_HOME,
         target_name="testgroup",
-        config=mock_minio_config,
+        config=mock_s3_config,
     )
 
 
 @pytest.fixture
-def group_read_only_policy_creator(mock_minio_config):
+def group_read_only_policy_creator(mock_s3_config):
     """Create a PolicyCreator for group read-only policy."""
     return PolicyCreator(
         policy_type=PolicyType.GROUP_HOME_RO,
         target_name="testgroupro",
-        config=mock_minio_config,
+        config=mock_s3_config,
         path_target_name="testgroup",
     )
 
@@ -87,17 +87,17 @@ def group_read_only_policy_creator(mock_minio_config):
 class TestPolicyCreatorInit:
     """Tests for PolicyCreator initialization."""
 
-    def test_init_user_home_policy(self, mock_minio_config):
+    def test_init_user_home_policy(self, mock_s3_config):
         """Test initialization for user home policy."""
         creator = PolicyCreator(
             policy_type=PolicyType.USER_HOME,
             target_name="testuser",
-            config=mock_minio_config,
+            config=mock_s3_config,
         )
 
         assert creator.policy_type == PolicyType.USER_HOME
         assert creator.target_name == "testuser"
-        assert creator.config == mock_minio_config
+        assert creator.config == mock_s3_config
         assert (
             creator.user_sql_warehouse_path
             == "s3a://data-lake/users-sql-warehouse/testuser"
@@ -107,23 +107,23 @@ class TestPolicyCreatorInit:
             == "s3a://data-lake/users-general-warehouse/testuser"
         )
 
-    def test_init_user_system_policy(self, mock_minio_config):
+    def test_init_user_system_policy(self, mock_s3_config):
         """Test initialization for user system policy."""
         creator = PolicyCreator(
             policy_type=PolicyType.USER_SYSTEM,
             target_name="testuser",
-            config=mock_minio_config,
+            config=mock_s3_config,
         )
 
         assert creator.policy_type == PolicyType.USER_SYSTEM
         assert creator.system_config == SYSTEM_RESOURCE_CONFIG
 
-    def test_init_group_policy(self, mock_minio_config):
+    def test_init_group_policy(self, mock_s3_config):
         """Test initialization for group policy."""
         creator = PolicyCreator(
             policy_type=PolicyType.GROUP_HOME,
             target_name="testgroup",
-            config=mock_minio_config,
+            config=mock_s3_config,
         )
 
         assert creator.policy_type == PolicyType.GROUP_HOME
@@ -136,12 +136,12 @@ class TestPolicyCreatorInit:
             == "s3a://data-lake/tenant-general-warehouse/testgroup"
         )
 
-    def test_init_group_read_only_policy(self, mock_minio_config):
+    def test_init_group_read_only_policy(self, mock_s3_config):
         """Test initialization for group read-only policy."""
         creator = PolicyCreator(
             policy_type=PolicyType.GROUP_HOME_RO,
             target_name="testgroup",
-            config=mock_minio_config,
+            config=mock_s3_config,
         )
 
         assert creator.policy_type == PolicyType.GROUP_HOME_RO
@@ -224,12 +224,12 @@ class TestGeneratePolicyName:
         name = group_read_only_policy_creator._generate_policy_name()
         assert name == "group-policy-testgroupro"
 
-    def test_generate_policy_name_unknown_type(self, mock_minio_config):
+    def test_generate_policy_name_unknown_type(self, mock_s3_config):
         """Test generating policy name with unknown type raises error."""
         creator = PolicyCreator(
             policy_type=PolicyType.USER_HOME,
             target_name="testuser",
-            config=mock_minio_config,
+            config=mock_s3_config,
         )
         # Manually set invalid type
         creator.policy_type = "invalid"
@@ -506,24 +506,24 @@ class TestEdgeCases:
         assert isinstance(policy, PolicyModel)
         assert policy.policy_name == "user-home-policy-testuser"
 
-    def test_username_with_special_chars(self, mock_minio_config):
+    def test_username_with_special_chars(self, mock_s3_config):
         """Test creator handles usernames with allowed special characters."""
         creator = PolicyCreator(
             policy_type=PolicyType.USER_HOME,
             target_name="test.user-name",
-            config=mock_minio_config,
+            config=mock_s3_config,
         )
 
         policy = creator.create_default_policy().build()
 
         assert "test.user-name" in policy.policy_name
 
-    def test_build_with_invalid_policy_name_raises_error(self, mock_minio_config):
+    def test_build_with_invalid_policy_name_raises_error(self, mock_s3_config):
         """Test that build raises error if policy name validation fails."""
         creator = PolicyCreator(
             policy_type=PolicyType.USER_HOME,
             target_name="invalid@user",  # Invalid character
-            config=mock_minio_config,
+            config=mock_s3_config,
         )
 
         with pytest.raises(
@@ -531,12 +531,12 @@ class TestEdgeCases:
         ):
             creator.build()
 
-    def test_path_target_name_differs_from_target_name(self, mock_minio_config):
+    def test_path_target_name_differs_from_target_name(self, mock_s3_config):
         """Test using different path_target_name from target_name."""
         creator = PolicyCreator(
             policy_type=PolicyType.GROUP_HOME_RO,
             target_name="testgroupro",
-            config=mock_minio_config,
+            config=mock_s3_config,
             path_target_name="testgroup",
         )
 
@@ -559,12 +559,12 @@ class TestEdgeCases:
 class TestIntegration:
     """Integration tests for PolicyCreator."""
 
-    def test_full_user_home_workflow(self, mock_minio_config):
+    def test_full_user_home_workflow(self, mock_s3_config):
         """Test complete user home policy creation workflow."""
         creator = PolicyCreator(
             policy_type=PolicyType.USER_HOME,
             target_name="newuser",
-            config=mock_minio_config,
+            config=mock_s3_config,
         )
 
         # Create default policy
@@ -582,12 +582,12 @@ class TestIntegration:
         json_str = policy.to_minio_policy_json()
         assert "user" in json_str or "User" in json_str
 
-    def test_full_group_workflow(self, mock_minio_config):
+    def test_full_group_workflow(self, mock_s3_config):
         """Test complete group policy creation workflow."""
         creator = PolicyCreator(
             policy_type=PolicyType.GROUP_HOME,
             target_name="researchers",
-            config=mock_minio_config,
+            config=mock_s3_config,
         )
 
         creator.create_default_policy()
@@ -596,12 +596,12 @@ class TestIntegration:
         assert policy.policy_name == "group-policy-researchers"
         assert len(policy.policy_document.statement) > 0
 
-    def test_full_group_read_only_workflow(self, mock_minio_config):
+    def test_full_group_read_only_workflow(self, mock_s3_config):
         """Test complete group read-only policy creation workflow."""
         creator = PolicyCreator(
             policy_type=PolicyType.GROUP_HOME_RO,
             target_name="researchersro",
-            config=mock_minio_config,
+            config=mock_s3_config,
         )
 
         creator.create_default_policy()

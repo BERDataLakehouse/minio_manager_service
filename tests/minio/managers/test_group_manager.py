@@ -8,8 +8,8 @@ import pytest
 
 from src.minio.managers.group_manager import GroupManager, RESOURCE_TYPE
 from src.minio.models.command import CommandResult
-from src.minio.models.group import GroupModel
-from src.minio.models.policy import (
+from src.s3.models.group import GroupModel
+from src.s3.models.policy import (
     PolicyAction,
     PolicyDocument,
     PolicyEffect,
@@ -32,8 +32,8 @@ def mock_mc_path():
 
 
 @pytest.fixture
-def mock_minio_config():
-    """Create a mock MinIOConfig."""
+def mock_s3_config():
+    """Create a mock S3Config."""
     config = MagicMock()
     config.minio_alias = "minio_api"
     config.minio_url = "http://minio:9000"
@@ -144,11 +144,11 @@ def mock_polaris_service():
 
 @pytest.fixture
 def group_manager_instance(
-    mock_minio_client, mock_minio_config, mock_executor, mock_polaris_service
+    mock_minio_client, mock_s3_config, mock_executor, mock_polaris_service
 ):
     """Create a GroupManager instance with mocked dependencies."""
     manager = GroupManager(
-        mock_minio_client, mock_minio_config, polaris_service=mock_polaris_service
+        mock_minio_client, mock_s3_config, polaris_service=mock_polaris_service
     )
     manager._executor = mock_executor
     return manager
@@ -198,15 +198,15 @@ class TestGroupManagerInit:
     """Tests for GroupManager initialization."""
 
     def test_initialization_with_valid_config(
-        self, mock_minio_client, mock_minio_config, mock_polaris_service
+        self, mock_minio_client, mock_s3_config, mock_polaris_service
     ):
         """Test successful initialization with valid configuration."""
         manager = GroupManager(
-            mock_minio_client, mock_minio_config, polaris_service=mock_polaris_service
+            mock_minio_client, mock_s3_config, polaris_service=mock_polaris_service
         )
 
         assert manager.client == mock_minio_client
-        assert manager.config == mock_minio_config
+        assert manager.config == mock_s3_config
         assert manager.polaris_service == mock_polaris_service
         assert manager.tenant_general_warehouse_prefix == "groups-general-warehouse"
         assert manager.tenant_sql_warehouse_prefix == "groups-sql-warehouse"
@@ -214,11 +214,11 @@ class TestGroupManagerInit:
         assert manager._user_manager is None
 
     def test_initialization_inherits_from_resource_manager(
-        self, mock_minio_client, mock_minio_config, mock_polaris_service
+        self, mock_minio_client, mock_s3_config, mock_polaris_service
     ):
         """Test that GroupManager properly inherits from ResourceManager."""
         manager = GroupManager(
-            mock_minio_client, mock_minio_config, polaris_service=mock_polaris_service
+            mock_minio_client, mock_s3_config, polaris_service=mock_polaris_service
         )
 
         # Check executor and command builder are initialized

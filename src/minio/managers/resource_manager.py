@@ -15,7 +15,7 @@ from ...service.exceptions import MinIOManagerError
 from ..core.base_executor import BaseMinIOExecutor
 from ..core.command_builder import MinIOCommandBuilder
 from ..core.minio_client import MinIOClient
-from ..models.minio_config import MinIOConfig
+from src.s3.models.s3_config import S3Config
 
 # Generic type for resource models
 T = TypeVar("T")
@@ -38,7 +38,7 @@ class ResourceManager(ABC, Generic[T]):
     def __init__(
         self,
         client: MinIOClient,
-        config: MinIOConfig,
+        config: S3Config,
         logger_instance: Optional[logging.Logger] = None,
     ) -> None:
         """Initialize the resource manager.

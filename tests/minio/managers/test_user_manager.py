@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.minio.managers.user_manager import UserManager, GLOBAL_USER_GROUP
 from src.minio.core.minio_client import MinIOClient
-from src.minio.models.minio_config import MinIOConfig
-from src.minio.models.policy import (
+from src.s3.models.s3_config import S3Config
+from src.s3.models.policy import (
     PolicyDocument,
     PolicyEffect,
     PolicyModel,
@@ -40,9 +40,9 @@ def mock_mc_path():
 
 
 @pytest.fixture
-def mock_minio_config() -> MinIOConfig:
-    """Create a mock MinIOConfig for testing."""
-    return MinIOConfig(
+def mock_s3_config() -> S3Config:
+    """Create a mock S3Config for testing."""
+    return S3Config(
         endpoint="http://localhost:9002",
         access_key="test_access_key",
         secret_key="test_secret_key",
@@ -56,10 +56,10 @@ def mock_minio_config() -> MinIOConfig:
 
 
 @pytest.fixture
-def mock_minio_client(mock_minio_config):
+def mock_minio_client(mock_s3_config):
     """Create a mock MinIOClient."""
     client = MagicMock(spec=MinIOClient)
-    client.config = mock_minio_config
+    client.config = mock_s3_config
     client.bucket_exists = AsyncMock(return_value=True)
     client.create_bucket = AsyncMock()
     client.put_object = AsyncMock()
@@ -113,7 +113,7 @@ def mock_polaris_service():
 @pytest.fixture
 def user_manager(
     mock_minio_client,
-    mock_minio_config,
+    mock_s3_config,
     mock_executor,
     mock_policy_manager,
     mock_group_manager,
@@ -122,7 +122,7 @@ def user_manager(
     """Create a UserManager with mocked dependencies."""
     manager = UserManager(
         client=mock_minio_client,
-        config=mock_minio_config,
+        config=mock_s3_config,
         polaris_service=mock_polaris_service,
     )
     manager._executor = mock_executor
@@ -209,28 +209,28 @@ class TestUserManagerInit:
     """Tests for UserManager initialization."""
 
     def test_init_with_dependencies(
-        self, mock_minio_client, mock_minio_config, mock_polaris_service
+        self, mock_minio_client, mock_s3_config, mock_polaris_service
     ):
         """Test UserManager initialization with all dependencies."""
         manager = UserManager(
             client=mock_minio_client,
-            config=mock_minio_config,
+            config=mock_s3_config,
             polaris_service=mock_polaris_service,
         )
 
         assert manager.client == mock_minio_client
-        assert manager.config == mock_minio_config
+        assert manager.config == mock_s3_config
         assert manager.polaris_service == mock_polaris_service
         assert manager._policy_manager is None  # Lazy init
         assert manager._group_manager is None  # Lazy init
 
     def test_warehouse_prefixes_set(
-        self, mock_minio_client, mock_minio_config, mock_polaris_service
+        self, mock_minio_client, mock_s3_config, mock_polaris_service
     ):
         """Test that warehouse prefixes are set correctly."""
         manager = UserManager(
             client=mock_minio_client,
-            config=mock_minio_config,
+            config=mock_s3_config,
             polaris_service=mock_polaris_service,
         )
 
@@ -906,12 +906,12 @@ class TestLazyManagerInit:
     """Tests for lazy initialization of policy_manager and group_manager."""
 
     def test_policy_manager_lazy_init(
-        self, mock_minio_client, mock_minio_config, mock_polaris_service
+        self, mock_minio_client, mock_s3_config, mock_polaris_service
     ):
         """Test policy_manager is lazily initialized."""
         manager = UserManager(
             client=mock_minio_client,
-            config=mock_minio_config,
+            config=mock_s3_config,
             polaris_service=mock_polaris_service,
         )
         manager._executor = MagicMock()
@@ -924,12 +924,12 @@ class TestLazyManagerInit:
         assert manager.policy_manager is pm
 
     def test_group_manager_lazy_init(
-        self, mock_minio_client, mock_minio_config, mock_polaris_service
+        self, mock_minio_client, mock_s3_config, mock_polaris_service
     ):
         """Test group_manager is lazily initialized."""
         manager = UserManager(
             client=mock_minio_client,
-            config=mock_minio_config,
+            config=mock_s3_config,
             polaris_service=mock_polaris_service,
         )
         manager._executor = MagicMock()

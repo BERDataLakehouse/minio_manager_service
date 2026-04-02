@@ -5,10 +5,10 @@ from typing import List
 from ...service.exceptions import GroupOperationError
 from ..core.minio_client import MinIOClient
 from ..models.command import GroupAction
-from ..models.group import GroupModel
-from ..models.minio_config import MinIOConfig
-from ..models.policy import PolicyModel, PolicyType
-from ..utils.validators import validate_group_name
+from src.s3.models.group import GroupModel
+from src.s3.models.s3_config import S3Config
+from src.s3.models.policy import PolicyModel, PolicyType
+from src.s3.utils.validators import validate_group_name
 from .resource_manager import ResourceManager
 from ...polaris.polaris_service import PolarisService
 
@@ -23,7 +23,7 @@ class GroupManager(ResourceManager[GroupModel]):
     def __init__(
         self,
         client: MinIOClient,
-        config: MinIOConfig,
+        config: S3Config,
         polaris_service: PolarisService,
     ):
         super().__init__(client, config)
