@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Generic, List, Optional, TypeVar
 
-from ...service.exceptions import MinIOManagerError
+from ...service.exceptions import S3ManagerError
 from ..core.base_executor import BaseMinIOExecutor
 from ..core.command_builder import MinIOCommandBuilder
 from src.s3.core.s3_client import S3Client
@@ -79,10 +79,10 @@ class ResourceManager(ABC, Generic[T]):
         except Exception as e:
             self.logger.error(f"Failed {operation}: {e}")
             # Re-raise with appropriate MinIO exception type
-            if isinstance(e, MinIOManagerError):
+            if isinstance(e, S3ManagerError):
                 raise
             else:
-                raise MinIOManagerError(f"{operation} failed: {str(e)}") from e
+                raise S3ManagerError(f"{operation} failed: {str(e)}") from e
 
     # === Abstract Methods (must be implemented by subclasses) ===
 

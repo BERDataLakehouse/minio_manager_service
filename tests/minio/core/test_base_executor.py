@@ -8,7 +8,7 @@ import pytest
 
 from src.minio.core.base_executor import BaseMinIOExecutor
 from src.minio.models.command import CommandResult
-from src.service.exceptions import MinIOManagerError
+from src.service.exceptions import S3ManagerError
 
 
 # =============================================================================
@@ -151,7 +151,7 @@ class TestSetup:
                 command="mc alias set",
             )
 
-            with pytest.raises(MinIOManagerError) as exc_info:
+            with pytest.raises(S3ManagerError) as exc_info:
                 await executor.setup()
 
             assert "Failed to configure MinIO" in str(exc_info.value)
@@ -167,7 +167,7 @@ class TestSetup:
 
             executor = BaseMinIOExecutor(mock_s3_config)
 
-            with pytest.raises((MinIOManagerError, ValueError)):
+            with pytest.raises((S3ManagerError, ValueError)):
                 await executor.setup()
 
     @pytest.mark.asyncio
@@ -180,7 +180,7 @@ class TestSetup:
 
             executor = BaseMinIOExecutor(mock_s3_config)
 
-            with pytest.raises((MinIOManagerError, ValueError)):
+            with pytest.raises((S3ManagerError, ValueError)):
                 await executor.setup()
 
 
@@ -263,11 +263,11 @@ class TestExecuteCommand:
 
     @pytest.mark.asyncio
     async def test_execute_command_exception(self, executor):
-        """Test command execution raises MinIOManagerError on exception."""
+        """Test command execution raises S3ManagerError on exception."""
         with patch(
             "asyncio.create_subprocess_exec", side_effect=Exception("Unexpected error")
         ):
-            with pytest.raises(MinIOManagerError) as exc_info:
+            with pytest.raises(S3ManagerError) as exc_info:
                 await executor._execute_command(["admin", "user", "list"])
 
             assert "Unexpected error" in str(exc_info.value)

@@ -6,7 +6,7 @@ import os
 from typing import Optional
 
 from ...service.arg_checkers import not_falsy
-from ...service.exceptions import MinIOManagerError
+from ...service.exceptions import S3ManagerError
 from ..models.command import CommandResult
 from src.s3.models.s3_config import S3Config
 from .command_builder import MinIOCommandBuilder
@@ -52,7 +52,7 @@ class BaseMinIOExecutor:
             result = await self._execute_command(cmd_args)
 
             if not result.success:
-                raise MinIOManagerError(
+                raise S3ManagerError(
                     f"Failed to configure MinIO admin access: {result.stderr}"
                 )
 
@@ -61,7 +61,7 @@ class BaseMinIOExecutor:
 
         except Exception as e:
             logger.error(f"Error setting up MC command executor: {e}")
-            raise MinIOManagerError(f"Failed to initialize MinIO admin client: {e}")
+            raise S3ManagerError(f"Failed to initialize MinIO admin client: {e}")
 
     async def _execute_command(
         self,
@@ -80,7 +80,7 @@ class BaseMinIOExecutor:
             CommandResult with execution details
 
         Raises:
-            MinIOManagerError: If command execution fails unexpectedly
+            S3ManagerError: If command execution fails unexpectedly
         """
         cmd = [self._mc_path] + cmd_args
         command_str = " ".join(cmd)
@@ -139,4 +139,4 @@ class BaseMinIOExecutor:
         except Exception as e:
             error_msg = f"Unexpected error executing MC command: {str(e)}"
             logger.error(f"{error_msg} - Command: {command_str}")
-            raise MinIOManagerError(error_msg)
+            raise S3ManagerError(error_msg)
