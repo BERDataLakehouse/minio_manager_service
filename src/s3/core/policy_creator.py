@@ -1,5 +1,5 @@
 """
-PolicyCreator module for creating new MinIO policy documents from scratch.
+PolicyCreator module for creating new S3 policy documents from scratch.
 
 This module focuses on creating policies with organized sections.
 For modifying existing policies, use PolicyBuilder.
@@ -37,7 +37,7 @@ import logging
 from collections import defaultdict
 from typing import Dict, List
 
-from ...service.exceptions import PolicyOperationError
+from src.service.exceptions import PolicyOperationError
 from src.s3.models.s3_config import S3Config
 from src.s3.models.policy import (
     PolicyAction,
@@ -54,7 +54,7 @@ from src.s3.utils.validators import (
     USER_SYSTEM_POLICY_PREFIX,
     validate_policy_name,
 )
-from .policy_builder import PolicyBuilder
+from src.s3.core.policy_builder import PolicyBuilder
 from src.s3.utils.governance import (
     generate_group_governance_prefix,
     generate_user_governance_prefix,
@@ -101,7 +101,7 @@ SYSTEM_RESOURCE_CONFIG = {
 
 class PolicyCreator:
     """
-    Creator for building new MinIO policies from scratch.
+    Creator for building new S3 policies from scratch.
     """
 
     def __init__(
@@ -117,7 +117,7 @@ class PolicyCreator:
         Args:
             policy_type: Type of policy being created (USER_HOME, USER_SYSTEM, GROUP_HOME, GROUP_HOME_RO)
             target_name: Name of the target (username or group name)
-            config: MinIO configuration for bucket and path information
+            config: S3 configuration for bucket and path information
             path_target_name: Optional target name to use for path generation.
                               If not provided, target_name is used.
                               Useful when policy name should differ from path target (e.g. RO groups).

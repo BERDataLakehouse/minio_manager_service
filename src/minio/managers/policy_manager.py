@@ -8,8 +8,8 @@ from typing import Callable, List, Optional
 from ...service.exceptions import PolicyOperationError
 from src.s3.core.distributed_lock import DistributedLockManager
 from src.s3.core.s3_client import S3Client
-from ..core.policy_builder import PolicyBuilder
-from ..core.policy_creator import PolicyCreator
+from src.s3.core.policy_builder import PolicyBuilder
+from src.s3.core.policy_creator import PolicyCreator
 from ..models.command import PolicyAction as CommandPolicyAction
 from src.s3.models.s3_config import S3Config
 from src.s3.models.policy import (

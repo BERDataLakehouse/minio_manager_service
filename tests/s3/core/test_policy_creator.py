@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.minio.core.policy_creator import (
+from src.s3.core.policy_creator import (
     PolicyCreator,
     SYSTEM_RESOURCE_CONFIG,
     _POLICY_ACTION_TO_POLICY_SECTION,
