@@ -5,7 +5,7 @@ from typing import Optional
 
 import redis.asyncio as redis
 
-from ...service.exceptions import CredentialOperationError, PolicyOperationError
+from src.service.exceptions import CredentialOperationError, PolicyOperationError
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ class DistributedLockManager:
     Redis-based distributed locking for coordinating policy updates across multiple instances.
 
     This manager provides distributed mutual exclusion to prevent race conditions when
-    multiple service instances attempt to update the same MinIO policy simultaneously.
+    multiple service instances attempt to update the same S3 policy simultaneously.
     """
 
     def __init__(self):

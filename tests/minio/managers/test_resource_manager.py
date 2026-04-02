@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.minio.core.minio_client import MinIOClient
+from src.s3.core.s3_client import S3Client
 from src.minio.managers.resource_manager import ResourceManager
 from src.minio.models.command import CommandResult
 from src.s3.models.s3_config import S3Config
@@ -80,8 +80,8 @@ def mock_s3_config():
 
 @pytest.fixture
 def mock_minio_client():
-    """Create a mock MinIOClient."""
-    client = MagicMock(spec=MinIOClient)
+    """Create a mock S3Client."""
+    client = MagicMock(spec=S3Client)
     return client
 
 

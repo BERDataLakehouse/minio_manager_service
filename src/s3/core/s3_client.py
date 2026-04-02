@@ -5,7 +5,7 @@ from typing import Any, AsyncIterator, List
 import aiobotocore.session
 from botocore.exceptions import ClientError
 
-from ...service.exceptions import BucketOperationError, ConnectionError
+from src.service.exceptions import BucketOperationError, ConnectionError
 from src.s3.models.s3_config import S3Config
 
 logger = logging.getLogger(__name__)
@@ -13,12 +13,12 @@ logger = logging.getLogger(__name__)
 MAX_LIST_OBJECTS_COUNT = 10 * 1000  # 10k objects
 
 
-class MinIOClient:
-    """MinIO Client Wrapper."""
+class S3Client:
+    """S3 Client Wrapper."""
 
     def __init__(self, config: S3Config):
         """
-        Initializes the MinIOClient with server configuration.
+        Initializes the S3Client with server configuration.
 
         Args:
             config: A S3Config object with connection details.
@@ -27,9 +27,9 @@ class MinIOClient:
         self._session = None
 
     @classmethod
-    async def create(cls, config: S3Config) -> "MinIOClient":
+    async def create(cls, config: S3Config) -> "S3Client":
         """
-        Create and initialize a MinIOClient instance.
+        Create and initialize a S3Client instance.
 
         Args:
             config: A S3Config object with connection details.
@@ -51,9 +51,9 @@ class MinIOClient:
         """Initialize the aiobotocore session."""
         try:
             self._session = aiobotocore.session.get_session()
-            logger.info("Initialized async MinIO client session")
+            logger.info("Initialized async S3 client session")
         except Exception as e:
-            logger.error(f"Failed to initialize MinIO session: {e}")
+            logger.error(f"Failed to initialize S3 session: {e}")
             raise ConnectionError(f"Failed to initialize session: {e}") from e
 
     async def close_session(self):
@@ -61,7 +61,7 @@ class MinIOClient:
         if self._session:
             # aiobotocore sessions don't need explicit closing
             self._session = None
-            logger.info("Closed MinIO client session")
+            logger.info("Closed S3 client session")
 
     @asynccontextmanager
     async def _get_client(self) -> AsyncIterator[Any]:
@@ -80,7 +80,7 @@ class MinIOClient:
 
     async def test_connection(self) -> bool:
         """
-        Verifies the connection to the MinIO server by listing buckets.
+        Verifies the connection to the S3 server by listing buckets.
 
         Returns:
             True if the connection is successful, False otherwise.
@@ -99,7 +99,7 @@ class MinIOClient:
 
     async def create_bucket(self, bucket_name: str) -> None:
         """
-        Creates a new bucket on the MinIO server.
+        Creates a new bucket on the S3 server.
 
         Args:
             bucket_name: The name of the bucket to create.
@@ -147,7 +147,7 @@ class MinIOClient:
 
     async def list_buckets(self) -> List[str]:
         """
-        Retrieves a list of all bucket names from the MinIO server.
+        Retrieves a list of all bucket names from the S3 server.
 
         Returns:
             A list of strings, where each string is a bucket name.

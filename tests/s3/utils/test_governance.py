@@ -1,6 +1,6 @@
 """Tests for the minio.utils.governance module."""
 
-from src.minio.utils import governance
+from src.s3.utils import governance
 
 
 def test_governance_imports():

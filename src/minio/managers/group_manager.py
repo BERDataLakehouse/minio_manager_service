@@ -3,7 +3,7 @@ import logging
 from typing import List
 
 from ...service.exceptions import GroupOperationError
-from ..core.minio_client import MinIOClient
+from src.s3.core.s3_client import S3Client
 from ..models.command import GroupAction
 from src.s3.models.group import GroupModel
 from src.s3.models.s3_config import S3Config
@@ -19,7 +19,7 @@ RESOURCE_TYPE = "group"
 class GroupManager(ResourceManager[GroupModel]):
     """GroupManager for basic group operations with patterns and generic CRUD."""
 
-    def __init__(self, client: MinIOClient, config: S3Config):
+    def __init__(self, client: S3Client, config: S3Config):
         super().__init__(client, config)
         self.tenant_general_warehouse_prefix = config.tenant_general_warehouse_prefix
         self.tenant_sql_warehouse_prefix = config.tenant_sql_warehouse_prefix

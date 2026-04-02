@@ -163,7 +163,7 @@ class TestBuildApp:
                 "src.service.app_state.KBaseAuth.create", new_callable=AsyncMock
             ) as mock_auth,
             patch(
-                "src.service.app_state.MinIOClient.create", new_callable=AsyncMock
+                "src.service.app_state.S3Client.create", new_callable=AsyncMock
             ) as mock_mc,
             patch("src.service.app_state.DistributedLockManager") as mock_lock_cls,
             patch(
@@ -217,7 +217,7 @@ class TestBuildApp:
                 "src.service.app_state.KBaseAuth.create", new_callable=AsyncMock
             ) as mock_auth,
             patch(
-                "src.service.app_state.MinIOClient.create", new_callable=AsyncMock
+                "src.service.app_state.S3Client.create", new_callable=AsyncMock
             ) as mock_mc,
             patch("src.service.app_state.DistributedLockManager") as mock_lock_cls,
         ):

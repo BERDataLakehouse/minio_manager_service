@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.minio.core.distributed_lock import DistributedLockManager, REDIS_LOCK_TIMEOUT
+from src.s3.core.distributed_lock import DistributedLockManager, REDIS_LOCK_TIMEOUT
 from src.service.exceptions import CredentialOperationError, PolicyOperationError
 
 
@@ -42,7 +42,7 @@ def mock_redis_client():
 @pytest.fixture
 def lock_manager_with_mock_redis(mock_redis_client):
     """Create a DistributedLockManager with mocked Redis client."""
-    with patch("src.minio.core.distributed_lock.redis") as mock_redis_module:
+    with patch("src.s3.core.distributed_lock.redis") as mock_redis_module:
         mock_redis_module.from_url.return_value = mock_redis_client
         manager = DistributedLockManager()
         manager.redis = mock_redis_client
@@ -59,7 +59,7 @@ class TestDistributedLockManagerInit:
 
     def test_init_with_redis_url(self):
         """Test successful initialization with REDIS_URL."""
-        with patch("src.minio.core.distributed_lock.redis") as mock_redis:
+        with patch("src.s3.core.distributed_lock.redis") as mock_redis:
             mock_redis.from_url.return_value = MagicMock()
 
             manager = DistributedLockManager()
@@ -81,7 +81,7 @@ class TestDistributedLockManagerInit:
 
     def test_init_redis_connection_parameters(self):
         """Test Redis connection is created with correct parameters."""
-        with patch("src.minio.core.distributed_lock.redis") as mock_redis:
+        with patch("src.s3.core.distributed_lock.redis") as mock_redis:
             mock_redis.from_url.return_value = MagicMock()
 
             DistributedLockManager()
