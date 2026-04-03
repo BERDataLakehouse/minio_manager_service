@@ -184,7 +184,7 @@ async def get_tenant_stewards(
     response_model=TenantStewardResponse,
     status_code=status.HTTP_200_OK,
     summary="Assign steward",
-    description="Assign a user as steward. Admin only. User must be a member.",
+    description="Assign a user as steward. Admin only. Automatically adds the user to the RW group if not already a member.",
 )
 async def assign_steward(
     tenant_name: Annotated[str, Path(min_length=1)],
