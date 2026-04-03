@@ -105,7 +105,7 @@ class TenantManager:
         self, tenant_name: str, token: str
     ) -> TenantDetailResponse:
         """Get full tenant detail with metadata, stewards, members, and profiles."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
 
         # Gather data
         rw_members = await self._group_manager.get_group_members(tenant_name)
@@ -189,7 +189,7 @@ class TenantManager:
         self, tenant_name: str, requesting_user: KBaseUser, token: str
     ) -> list[TenantMemberResponse]:
         """List all members of a tenant with profiles and access levels."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
 
         rw_members = await self._group_manager.get_group_members(tenant_name)
         ro_members = []
@@ -227,7 +227,7 @@ class TenantManager:
         token: str,
     ) -> TenantMemberResponse:
         """Add a user to a tenant with the given permission level."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
 
         target_group = tenant_name if permission == "read_write" else f"{tenant_name}ro"
         await self._group_manager.add_user_to_group(username, target_group)
@@ -255,7 +255,7 @@ class TenantManager:
         acting_user: KBaseUser,
     ) -> None:
         """Remove a user from a tenant. Enforces steward constraints."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
 
         is_admin = acting_user.admin_perm == AdminPermission.FULL
         is_target_steward = await self.metadata_store.is_steward(tenant_name, username)
@@ -310,7 +310,7 @@ class TenantManager:
         updated_by: str,
     ) -> TenantMetadataResponse:
         """Update tenant metadata (display_name, description, website, organization)."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
         await self.ensure_metadata(tenant_name, created_by=updated_by)
 
         result = await self.metadata_store.update_metadata(
@@ -335,7 +335,7 @@ class TenantManager:
 
         If metadata already exists, returns the existing record unchanged.
         """
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
         result = await self.metadata_store.create_metadata(
             tenant_name,
             created_by,
@@ -372,7 +372,7 @@ class TenantManager:
         self, tenant_name: str, requesting_user: KBaseUser, token: str
     ) -> list[TenantStewardResponse]:
         """Get stewards with profile info. Requires member, steward, or admin."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
 
         # Authorization: admin, steward, or member
         rw_members = await self._group_manager.get_group_members(tenant_name)
@@ -419,7 +419,7 @@ class TenantManager:
         token: str,
     ) -> TenantStewardResponse:
         """Assign a user as steward, adding them to the RW group if not already a member."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
         await self.ensure_metadata(tenant_name, created_by=assigned_by)
 
         # Ensure user is in the RW group (stewards need read-write access).
@@ -441,7 +441,7 @@ class TenantManager:
 
     async def remove_steward(self, tenant_name: str, username: str) -> None:
         """Remove steward assignment. Does not remove from tenant."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
         removed = await self.metadata_store.remove_steward(tenant_name, username)
         if not removed:
             raise TenantNotFoundError(
@@ -451,15 +451,19 @@ class TenantManager:
 
     # ── Private helpers ──────────────────────────────────────────────────
 
-    async def _require_group_exists(self, tenant_name: str) -> None:
-        """Validate format, reject RO suffixes, and check existence."""
-        validate_group_name(tenant_name)
+    async def _require_group_exists(self, tenant_name: str) -> str:
+        """Validate format, reject RO suffixes, and check existence.
+
+        Returns the normalized tenant name (whitespace-stripped).
+        """
+        tenant_name = validate_group_name(tenant_name)
         if tenant_name.endswith("ro"):
             raise TenantOperationError(
                 f"'{tenant_name}' is a read-only group, not a tenant. Use the base tenant name."
             )
         if not await self._group_manager.resource_exists(tenant_name):
             raise TenantNotFoundError(f"Tenant '{tenant_name}' not found")
+        return tenant_name
 
     def _build_member_list(
         self,
