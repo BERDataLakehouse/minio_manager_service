@@ -525,7 +525,9 @@ class TestAddSteward:
         mock_group_manager.add_user_to_group.assert_called_once_with("alice", "t1")
 
     @pytest.mark.asyncio
-    async def test_add_calls_add_user_unconditionally(self, manager, mock_group_manager):
+    async def test_add_calls_add_user_unconditionally(
+        self, manager, mock_group_manager
+    ):
         """add_user_to_group is idempotent and always called, no membership pre-check."""
         result = await manager.add_steward("t1", "outsider", "admin", "token")
         assert result.username == "outsider"

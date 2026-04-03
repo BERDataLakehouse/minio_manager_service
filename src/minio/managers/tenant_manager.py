@@ -352,9 +352,7 @@ class TenantManager:
         """Delete tenant metadata and cascaded steward assignments."""
         deleted = await self.metadata_store.delete_metadata(tenant_name)
         if not deleted:
-            raise TenantNotFoundError(
-                f"Tenant metadata for '{tenant_name}' not found"
-            )
+            raise TenantNotFoundError(f"Tenant metadata for '{tenant_name}' not found")
         logger.info("Deleted metadata for tenant %s", tenant_name)
 
     async def ensure_metadata(self, tenant_name: str, created_by: str) -> dict:
