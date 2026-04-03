@@ -114,6 +114,8 @@ class ConnectionError(S3ManagerError):
 class TenantError(S3Error):
     """Super class for tenant related errors."""
 
+    pass
+
 
 class TenantOperationError(TenantError):
     """Raised when a tenant operation fails due to invalid input."""
