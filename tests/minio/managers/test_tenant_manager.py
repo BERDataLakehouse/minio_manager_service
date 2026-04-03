@@ -142,6 +142,12 @@ class TestRequireGroupExists:
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
+    async def test_invalid_name_rejected_before_ro_check(self, manager):
+        """Malformed names (e.g. uppercase) get a validation error, not 'read-only group'."""
+        with pytest.raises(GroupOperationError):
+            await manager._require_group_exists("KBASEro")
+
+    @pytest.mark.asyncio
     async def test_allows_base_tenant(self, manager, mock_group_manager):
         mock_group_manager.resource_exists.return_value = True
         await manager._require_group_exists("kbase")  # Should not raise
@@ -525,17 +531,17 @@ class TestGetStewards:
 class TestAddSteward:
     @pytest.mark.asyncio
     async def test_add_success(self, manager, mock_group_manager):
-        mock_group_manager.is_user_in_group.return_value = True
         result = await manager.add_steward("t1", "alice", "admin", "token")
         assert result.username == "alice"
+        mock_group_manager.add_user_to_group.assert_called_once_with("alice", "t1")
 
     @pytest.mark.asyncio
-    async def test_add_non_member_auto_adds_to_rw(self, manager, mock_group_manager):
-        """Non-member is automatically added to the RW group."""
-        mock_group_manager.is_user_in_group.return_value = False
+    async def test_add_calls_add_user_unconditionally(self, manager, mock_group_manager):
+        """add_user_to_group is idempotent and always called, no membership pre-check."""
         result = await manager.add_steward("t1", "outsider", "admin", "token")
         assert result.username == "outsider"
         mock_group_manager.add_user_to_group.assert_called_once_with("outsider", "t1")
+        mock_group_manager.is_user_in_group.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_add_duplicate_is_idempotent(self, manager, mock_metadata_store):

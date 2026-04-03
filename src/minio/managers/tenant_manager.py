@@ -20,6 +20,7 @@ from src.s3.models.tenant import (
     TenantSummaryResponse,
     UserProfile,
 )
+from src.s3.utils.validators import validate_group_name
 from src.service.exceptions import GroupOperationError
 from src.service.kb_auth import AdminPermission, KBaseUser
 from src.tenant_metadata.kbase_profile_client import KBaseUserProfileClient
@@ -428,15 +429,9 @@ class TenantManager:
         await self._require_group_exists(tenant_name)
         await self.ensure_metadata(tenant_name, created_by=assigned_by)
 
-        # Ensure user is in the RW group (stewards need read-write access)
-        is_rw_member = await self._group_manager.is_user_in_group(username, tenant_name)
-        if not is_rw_member:
-            await self._group_manager.add_user_to_group(username, tenant_name)
-            logger.info(
-                "Auto-added %s to RW group '%s' for steward assignment",
-                username,
-                tenant_name,
-            )
+        # Ensure user is in the RW group (stewards need read-write access).
+        # add_user_to_group is idempotent — safe to call unconditionally.
+        await self._group_manager.add_user_to_group(username, tenant_name)
 
         row = await self.metadata_store.add_steward(tenant_name, username, assigned_by)
         profiles = await self._profile_client.get_user_profiles([username], token)
@@ -465,7 +460,8 @@ class TenantManager:
     # ── Private helpers ──────────────────────────────────────────────────
 
     async def _require_group_exists(self, tenant_name: str) -> None:
-        """Raise 400 if tenant_name is an RO group, or 404 if it doesn't exist."""
+        """Validate format, reject RO suffixes, and check existence."""
+        validate_group_name(tenant_name)
         if tenant_name.endswith("ro"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
