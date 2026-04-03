@@ -183,14 +183,17 @@ class PolicyModel(BaseModel):
     """Complete policy model with metadata."""
 
     policy_name: Annotated[
-        str, Field(min_length=1, max_length=128, description="Policy name")
-    ]
+        Optional[str],
+        Field(default=None, min_length=1, max_length=128, description="Policy name"),
+    ] = None
     policy_document: Annotated[PolicyDocument, Field(description="Policy document")]
 
     @field_validator("policy_name")
     @classmethod
     def validate_policy_name(cls, v):
         """Validate policy name format."""
+        if v is None:
+            return v
         if not v.replace("-", "").replace("_", "").replace(".", "").isalnum():
             raise ValueError(
                 "Policy name can only contain letters, numbers, hyphens, underscores, and periods"

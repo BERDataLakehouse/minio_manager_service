@@ -86,16 +86,13 @@ def mock_app_state():
     mock_group_info = MagicMock()
     mock_group_info.group_name = "group1"
     mock_group_info.members = ["user1"]
-    mock_group_info.policy_name = "group-policy-group1"
     app_state.group_manager.get_group_info = AsyncMock(return_value=mock_group_info)
     mock_created_group = MagicMock()
     mock_created_group.group_name = "newgroup"
     mock_created_group.members = []
-    mock_created_group.policy_name = "group-policy-newgroup"
     mock_created_ro_group = MagicMock()
     mock_created_ro_group.group_name = "newgroupro"
     mock_created_ro_group.members = []
-    mock_created_ro_group.policy_name = "group-policy-newgroupro"
     app_state.group_manager.create_group = AsyncMock(
         return_value=(mock_created_group, mock_created_ro_group)
     )
@@ -228,7 +225,6 @@ class TestGroupManagementResponse:
             group_name="testgroup",
             members=["user1", "user2"],
             member_count=2,
-            policy_name="group-policy-testgroup",
             operation="create",
             performed_by="admin",
             timestamp=datetime.now(),

@@ -87,7 +87,6 @@ class GroupManagementResponse(BaseModel):
     ]
     members: Annotated[list[str], Field(description="Group members")]
     member_count: Annotated[int, Field(description="Number of members", ge=0)]
-    policy_name: Annotated[str, Field(description="Associated policy name")]
     operation: Annotated[
         str, Field(description="Operation performed (create/update/delete)")
     ]
@@ -354,7 +353,6 @@ async def list_groups(
                     "group_name": group_info.group_name,
                     "members": group_info.members,
                     "member_count": len(group_info.members),
-                    "policy_name": group_info.policy_name,
                 }
             )
         except Exception as e:
@@ -435,7 +433,6 @@ async def create_group(
         ro_group_name=ro_group_info.group_name,
         members=group_info.members,
         member_count=len(group_info.members),
-        policy_name=str(group_info.policy_name),
         operation="create",
         performed_by=authenticated_user.user,
         timestamp=datetime.now(),
@@ -472,7 +469,6 @@ async def add_group_member(
         ro_group_name=None,  # RO group name is only returned on group creation
         members=group_info.members,
         member_count=len(group_info.members),
-        policy_name=str(group_info.policy_name),
         operation="add_member",
         performed_by=authenticated_user.user,
         timestamp=datetime.now(),
@@ -509,7 +505,6 @@ async def remove_group_member(
         ro_group_name=None,  # RO group name is only returned on group creation
         members=group_info.members,
         member_count=len(group_info.members),
-        policy_name=str(group_info.policy_name),
         operation="remove_member",
         performed_by=authenticated_user.user,
         timestamp=datetime.now(),
