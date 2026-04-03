@@ -34,6 +34,18 @@ SAMPLE_POLICY = {
     ],
 }
 
+# Second user/group used to verify that inline policy names are scoped per entity
+SCOPING_USER = "inttest-bob"
+SCOPING_GROUP = "inttest-admins"
+POLICY_A = {
+    "Version": "2012-10-17",
+    "Statement": [{"Effect": "Allow", "Action": ["s3:GetObject"], "Resource": ["arn:aws:s3:::bucket-a/*"]}],
+}
+POLICY_B = {
+    "Version": "2012-10-17",
+    "Statement": [{"Effect": "Allow", "Action": ["s3:GetObject"], "Resource": ["arn:aws:s3:::bucket-b/*"]}],
+}
+
 passed = []
 failed = []
 
@@ -140,7 +152,7 @@ async def run(client: S3IAMClient):
         fail("rotate_access_key (first key)", e)
 
     try:
-        key_id2, secret2 = await client.rotate_access_key(USERNAME)
+        key_id2, _ = await client.rotate_access_key(USERNAME)
         assert key_id2 != key_id, "expected a different key ID"
         ok("rotate_access_key (rotation produces new key)")
     except Exception as e:
@@ -244,6 +256,48 @@ async def run(client: S3IAMClient):
     except Exception as e:
         fail("get_group_policy roundtrip", e)
 
+    # ── Policy name scoping ───────────────────────────────────────────────────
+    # Verify that an inline policy name (e.g. "home") is scoped to its owner —
+    # setting it on user/group A must not affect the same-named policy on B.
+    try:
+        await client.create_user(SCOPING_USER)
+        await client.create_group(SCOPING_GROUP)
+
+        # Two policies on the first user/group, same two names on the second
+        await client.set_user_policy(USERNAME, "home", POLICY_A)
+        await client.set_user_policy(USERNAME, "system", POLICY_A)
+        await client.set_user_policy(SCOPING_USER, "home", POLICY_B)
+        await client.set_user_policy(SCOPING_USER, "system", POLICY_B)
+
+        assert await client.get_user_policy(USERNAME, "home") == POLICY_A
+        assert await client.get_user_policy(USERNAME, "system") == POLICY_A
+        assert await client.get_user_policy(SCOPING_USER, "home") == POLICY_B
+        assert await client.get_user_policy(SCOPING_USER, "system") == POLICY_B
+        ok("policy scoping: same policy names on different users are independent")
+    except Exception as e:
+        fail("policy scoping: same policy names on different users are independent", e)
+
+    try:
+        await client.set_group_policy(GROUP, "group", POLICY_A)
+        await client.set_group_policy(GROUP, "extra", POLICY_A)
+        await client.set_group_policy(SCOPING_GROUP, "group", POLICY_B)
+        await client.set_group_policy(SCOPING_GROUP, "extra", POLICY_B)
+
+        assert await client.get_group_policy(GROUP, "group") == POLICY_A
+        assert await client.get_group_policy(GROUP, "extra") == POLICY_A
+        assert await client.get_group_policy(SCOPING_GROUP, "group") == POLICY_B
+        assert await client.get_group_policy(SCOPING_GROUP, "extra") == POLICY_B
+        ok("policy scoping: same policy names on different groups are independent")
+    except Exception as e:
+        fail("policy scoping: same policy names on different groups are independent", e)
+
+    try:
+        await client.delete_user(SCOPING_USER)
+        await client.delete_group(SCOPING_GROUP)
+        ok("policy scoping: cleanup")
+    except Exception as e:
+        fail("policy scoping: cleanup", e)
+
     # ── Cleanup / deletion ────────────────────────────────────────────────────
     try:
         await client.remove_user_from_group(USERNAME, GROUP)
@@ -311,8 +365,12 @@ async def main():
                 await client.delete_user(USERNAME)
             if await client.user_exists(ROTATION_USERNAME):
                 await client.delete_user(ROTATION_USERNAME)
+            if await client.user_exists(SCOPING_USER):
+                await client.delete_user(SCOPING_USER)
             if await client.group_exists(GROUP):
                 await client.delete_group(GROUP)
+            if await client.group_exists(SCOPING_GROUP):
+                await client.delete_group(SCOPING_GROUP)
     except Exception:
         pass
 
