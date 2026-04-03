@@ -70,6 +70,16 @@ class ErrorType(Enum):
     VALIDATION_ERROR = (30030, "Validation error")
     """ General validation error. """
 
+    # ----- Tenant error types -----
+    TENANT_OPERATION_ERROR = (40010, "Tenant operation error")
+    """ A tenant operation failed due to invalid input. """
+
+    TENANT_AUTHORIZATION_ERROR = (40020, "Tenant authorization error")
+    """ The user lacks permission for a tenant operation. """
+
+    TENANT_NOT_FOUND_ERROR = (40030, "Tenant not found")
+    """ A tenant or tenant resource was not found. """
+
     def __init__(self, error_code, error_type):
         self.error_code = error_code
         self.error_type = error_type

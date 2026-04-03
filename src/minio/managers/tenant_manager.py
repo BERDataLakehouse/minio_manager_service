@@ -6,8 +6,6 @@ and KBaseUserProfileClient (KBase Auth + local profiles).
 
 import logging
 
-from fastapi import HTTPException, status
-
 from src.minio.managers.group_manager import GroupManager
 from src.s3.models.s3_config import S3Config
 from src.s3.models.tenant import (
@@ -21,7 +19,12 @@ from src.s3.models.tenant import (
     UserProfile,
 )
 from src.s3.utils.validators import validate_group_name
-from src.service.exceptions import GroupOperationError
+from src.service.exceptions import (
+    GroupOperationError,
+    TenantAuthorizationError,
+    TenantNotFoundError,
+    TenantOperationError,
+)
 from src.service.kb_auth import AdminPermission, KBaseUser
 from src.tenant_metadata.kbase_profile_client import KBaseUserProfileClient
 from src.tenant_metadata.tenant_metadata_store import TenantMetadataStore
@@ -204,9 +207,8 @@ class TenantManager:
             tenant_name, requesting_user.user
         )
         if not is_admin and not is_steward and requesting_user.user not in all_members:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You must be a member, steward, or admin to view tenant members",
+            raise TenantAuthorizationError(
+                "You must be a member, steward, or admin to view tenant members"
             )
 
         steward_rows = await self.metadata_store.get_stewards(tenant_name)
@@ -261,15 +263,13 @@ class TenantManager:
         if not is_admin:
             # Steward cannot remove self
             if acting_user.user == username:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Stewards cannot remove themselves. Ask an admin to reassign stewardship.",
+                raise TenantOperationError(
+                    "Stewards cannot remove themselves. Ask an admin to reassign stewardship."
                 )
             # Steward cannot remove other stewards
             if is_target_steward:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Only admins can remove stewards from a tenant",
+                raise TenantAuthorizationError(
+                    "Only admins can remove stewards from a tenant"
                 )
 
         # Remove from both RW and RO groups (user may only be in one)
@@ -322,10 +322,7 @@ class TenantManager:
             organization=update.organization,
         )
         if result is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Tenant '{tenant_name}' not found",
-            )
+            raise TenantNotFoundError(f"Tenant '{tenant_name}' not found")
         return self._meta_dict_to_response(result)
 
     async def create_metadata(
@@ -355,9 +352,8 @@ class TenantManager:
         """Delete tenant metadata and cascaded steward assignments."""
         deleted = await self.metadata_store.delete_metadata(tenant_name)
         if not deleted:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Tenant metadata for '{tenant_name}' not found",
+            raise TenantNotFoundError(
+                f"Tenant metadata for '{tenant_name}' not found"
             )
         logger.info("Deleted metadata for tenant %s", tenant_name)
 
@@ -394,9 +390,8 @@ class TenantManager:
             tenant_name, requesting_user.user
         )
         if not is_admin and not is_steward and requesting_user.user not in all_members:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You must be a member, steward, or admin to view tenant stewards",
+            raise TenantAuthorizationError(
+                "You must be a member, steward, or admin to view tenant stewards"
             )
 
         steward_rows = await self.metadata_store.get_stewards(tenant_name)
@@ -451,9 +446,8 @@ class TenantManager:
         await self._require_group_exists(tenant_name)
         removed = await self.metadata_store.remove_steward(tenant_name, username)
         if not removed:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User '{username}' is not a steward of tenant '{tenant_name}'",
+            raise TenantNotFoundError(
+                f"User '{username}' is not a steward of tenant '{tenant_name}'"
             )
         logger.info("Removed %s as steward of tenant %s", username, tenant_name)
 
@@ -463,15 +457,11 @@ class TenantManager:
         """Validate format, reject RO suffixes, and check existence."""
         validate_group_name(tenant_name)
         if tenant_name.endswith("ro"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"'{tenant_name}' is a read-only group, not a tenant. Use the base tenant name.",
+            raise TenantOperationError(
+                f"'{tenant_name}' is a read-only group, not a tenant. Use the base tenant name."
             )
         if not await self._group_manager.resource_exists(tenant_name):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Tenant '{tenant_name}' not found",
-            )
+            raise TenantNotFoundError(f"Tenant '{tenant_name}' not found")
 
     def _build_member_list(
         self,

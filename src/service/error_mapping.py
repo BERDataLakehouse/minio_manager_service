@@ -7,7 +7,6 @@ Map errors from exception type to custom error type and HTTP status.
 from typing import NamedTuple
 
 from fastapi import status
-
 from src.service.errors import ErrorType
 from src.service.exceptions import (  # MinIO specific exceptions
     AuthenticationError,
@@ -19,12 +18,16 @@ from src.service.exceptions import (  # MinIO specific exceptions
     GroupOperationError,
     InvalidAuthHeaderError,
     InvalidTokenError,
-    S3Error,
-    S3ManagerError,
     MissingRoleError,
     MissingTokenError,
     PolicyOperationError,
     PolicyValidationError,
+    S3Error,
+    S3ManagerError,
+    TenantAuthorizationError,
+    TenantError,
+    TenantNotFoundError,
+    TenantOperationError,
     UserOperationError,
     ValidationError,
 )
@@ -67,6 +70,11 @@ _ERR_MAP = {
     DataGovernanceError: ErrorMapping(ErrorType.DATA_GOVERNANCE_ERROR, _H403),
     ValidationError: ErrorMapping(ErrorType.VALIDATION_ERROR, _H400),
     ConnectionError: ErrorMapping(ErrorType.CONNECTION_ERROR, _H503),
+    # Tenant errors
+    TenantOperationError: ErrorMapping(ErrorType.TENANT_OPERATION_ERROR, _H400),
+    TenantAuthorizationError: ErrorMapping(ErrorType.TENANT_AUTHORIZATION_ERROR, _H403),
+    TenantNotFoundError: ErrorMapping(ErrorType.TENANT_NOT_FOUND_ERROR, _H404),
+    TenantError: ErrorMapping(ErrorType.TENANT_OPERATION_ERROR, _H400),
     # Base error fallback
     S3Error: ErrorMapping(ErrorType.S3_ERROR, _H500),
 }

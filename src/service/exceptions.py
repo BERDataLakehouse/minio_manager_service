@@ -106,3 +106,28 @@ class ConnectionError(S3ManagerError):
     """Raised when MinIO server connection fails."""
 
     pass
+
+
+# ----- Tenant exceptions -----
+
+
+class TenantError(S3Error):
+    """Super class for tenant related errors."""
+
+
+class TenantOperationError(TenantError):
+    """Raised when a tenant operation fails due to invalid input."""
+
+    pass
+
+
+class TenantAuthorizationError(TenantError):
+    """Raised when a user lacks permission for a tenant operation."""
+
+    pass
+
+
+class TenantNotFoundError(TenantError):
+    """Raised when a tenant or tenant resource is not found."""
+
+    pass
