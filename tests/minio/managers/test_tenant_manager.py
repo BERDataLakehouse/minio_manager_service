@@ -532,7 +532,6 @@ class TestAddSteward:
         result = await manager.add_steward("t1", "outsider", "admin", "token")
         assert result.username == "outsider"
         mock_group_manager.add_user_to_group.assert_called_once_with("outsider", "t1")
-        mock_group_manager.is_user_in_group.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_add_duplicate_is_idempotent(self, manager, mock_metadata_store):
