@@ -124,6 +124,36 @@ class TestIsTenantGroup:
         assert len(SYSTEM_GROUPS) == 0
 
 
+# ── _require_group_exists ────────────────────────────────────────────────
+
+
+class TestRequireGroupExists:
+    @pytest.mark.asyncio
+    async def test_rejects_ro_group_name(self, manager):
+        with pytest.raises(HTTPException) as exc_info:
+            await manager._require_group_exists("kbasero")
+        assert exc_info.value.status_code == 400
+        assert "read-only group" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_rejects_any_ro_suffix(self, manager):
+        with pytest.raises(HTTPException) as exc_info:
+            await manager._require_group_exists("mytenantro")
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_allows_base_tenant(self, manager, mock_group_manager):
+        mock_group_manager.resource_exists.return_value = True
+        await manager._require_group_exists("kbase")  # Should not raise
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_group_404(self, manager, mock_group_manager):
+        mock_group_manager.resource_exists.return_value = False
+        with pytest.raises(HTTPException) as exc_info:
+            await manager._require_group_exists("nonexistent")
+        assert exc_info.value.status_code == 404
+
+
 # ── list_tenants ─────────────────────────────────────────────────────────
 
 
@@ -500,19 +530,12 @@ class TestAddSteward:
         assert result.username == "alice"
 
     @pytest.mark.asyncio
-    async def test_add_non_member_raises(self, manager, mock_group_manager):
+    async def test_add_non_member_auto_adds_to_rw(self, manager, mock_group_manager):
+        """Non-member is automatically added to the RW group."""
         mock_group_manager.is_user_in_group.return_value = False
-        with pytest.raises(HTTPException) as exc_info:
-            await manager.add_steward("t1", "outsider", "admin", "token")
-        assert exc_info.value.status_code == 400
-        assert "must be a member" in exc_info.value.detail
-
-    @pytest.mark.asyncio
-    async def test_add_ro_only_member_succeeds(self, manager, mock_group_manager):
-        """User in RO group only should be assignable as steward."""
-        mock_group_manager.is_user_in_group.side_effect = [False, True]
-        result = await manager.add_steward("t1", "alice", "admin", "token")
-        assert result.username == "alice"
+        result = await manager.add_steward("t1", "outsider", "admin", "token")
+        assert result.username == "outsider"
+        mock_group_manager.add_user_to_group.assert_called_once_with("outsider", "t1")
 
     @pytest.mark.asyncio
     async def test_add_duplicate_is_idempotent(self, manager, mock_metadata_store):

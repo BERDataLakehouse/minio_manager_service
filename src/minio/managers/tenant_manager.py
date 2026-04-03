@@ -424,28 +424,18 @@ class TenantManager:
         assigned_by: str,
         token: str,
     ) -> TenantStewardResponse:
-        """Assign a user as steward. User must be a member of the tenant."""
+        """Assign a user as steward, adding them to the RW group if not already a member."""
         await self._require_group_exists(tenant_name)
         await self.ensure_metadata(tenant_name, created_by=assigned_by)
 
-        # Verify user is a member
+        # Ensure user is in the RW group (stewards need read-write access)
         is_rw_member = await self._group_manager.is_user_in_group(username, tenant_name)
-        is_ro_member = False
-        try:
-            is_ro_member = await self._group_manager.is_user_in_group(
-                username, f"{tenant_name}ro"
-            )
-        except GroupOperationError:
-            logger.warning(
-                "Could not check RO group '%sro' membership for '%s'",
-                tenant_name,
+        if not is_rw_member:
+            await self._group_manager.add_user_to_group(username, tenant_name)
+            logger.info(
+                "Auto-added %s to RW group '%s' for steward assignment",
                 username,
-            )
-
-        if not is_rw_member and not is_ro_member:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"User '{username}' must be a member of tenant '{tenant_name}' before being assigned as steward",
+                tenant_name,
             )
 
         row = await self.metadata_store.add_steward(tenant_name, username, assigned_by)
@@ -475,7 +465,12 @@ class TenantManager:
     # ── Private helpers ──────────────────────────────────────────────────
 
     async def _require_group_exists(self, tenant_name: str) -> None:
-        """Raise 404 if the MinIO group does not exist."""
+        """Raise 400 if tenant_name is an RO group, or 404 if it doesn't exist."""
+        if tenant_name.endswith("ro"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"'{tenant_name}' is a read-only group, not a tenant. Use the base tenant name.",
+            )
         if not await self._group_manager.resource_exists(tenant_name):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
