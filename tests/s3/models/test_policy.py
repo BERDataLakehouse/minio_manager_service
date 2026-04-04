@@ -433,67 +433,79 @@ class TestPolicyModelGetAccessiblePaths:
         )
 
     def test_extracts_path_from_single_arn(self):
-        policy = self._make_policy([
-            self._allow(
-                PolicyAction.GET_OBJECT,
-                "arn:aws:s3:::my-bucket/some/path/*",
-            )
-        ])
+        policy = self._make_policy(
+            [
+                self._allow(
+                    PolicyAction.GET_OBJECT,
+                    "arn:aws:s3:::my-bucket/some/path/*",
+                )
+            ]
+        )
         assert policy.get_accessible_paths() == ["s3a://my-bucket/some/path/"]
 
     def test_extracts_paths_from_list_resource(self):
-        policy = self._make_policy([
-            self._allow(
-                PolicyAction.GET_OBJECT,
-                [
-                    "arn:aws:s3:::bucket/path/a/*",
-                    "arn:aws:s3:::bucket/path/b/*",
-                ],
-            )
-        ])
+        policy = self._make_policy(
+            [
+                self._allow(
+                    PolicyAction.GET_OBJECT,
+                    [
+                        "arn:aws:s3:::bucket/path/a/*",
+                        "arn:aws:s3:::bucket/path/b/*",
+                    ],
+                )
+            ]
+        )
         assert policy.get_accessible_paths() == [
             "s3a://bucket/path/a/",
             "s3a://bucket/path/b/",
         ]
 
     def test_deduplicates_paths(self):
-        policy = self._make_policy([
-            self._allow(
-                PolicyAction.GET_OBJECT,
-                "arn:aws:s3:::bucket/path/*",
-            ),
-            self._allow(
-                PolicyAction.PUT_OBJECT,
-                "arn:aws:s3:::bucket/path/*",
-            ),
-        ])
+        policy = self._make_policy(
+            [
+                self._allow(
+                    PolicyAction.GET_OBJECT,
+                    "arn:aws:s3:::bucket/path/*",
+                ),
+                self._allow(
+                    PolicyAction.PUT_OBJECT,
+                    "arn:aws:s3:::bucket/path/*",
+                ),
+            ]
+        )
         assert policy.get_accessible_paths() == ["s3a://bucket/path/"]
 
     def test_returns_sorted_paths(self):
-        policy = self._make_policy([
-            self._allow(PolicyAction.GET_OBJECT, "arn:aws:s3:::bucket/z/*"),
-            self._allow(PolicyAction.GET_OBJECT, "arn:aws:s3:::bucket/a/*"),
-        ])
+        policy = self._make_policy(
+            [
+                self._allow(PolicyAction.GET_OBJECT, "arn:aws:s3:::bucket/z/*"),
+                self._allow(PolicyAction.GET_OBJECT, "arn:aws:s3:::bucket/a/*"),
+            ]
+        )
         paths = policy.get_accessible_paths()
         assert paths == sorted(paths)
 
     def test_skips_non_wildcard_arns(self):
-        policy = self._make_policy([
-            self._allow(
-                PolicyAction.GET_BUCKET_LOCATION,
-                "arn:aws:s3:::my-bucket",
-            )
-        ])
+        policy = self._make_policy(
+            [
+                self._allow(
+                    PolicyAction.GET_BUCKET_LOCATION,
+                    "arn:aws:s3:::my-bucket",
+                )
+            ]
+        )
         assert policy.get_accessible_paths() == []
 
     def test_skips_bucket_only_wildcard_arns(self):
         """ARNs like arn:aws:s3:::bucket/* with no path prefix are skipped."""
-        policy = self._make_policy([
-            self._allow(
-                PolicyAction.GET_OBJECT,
-                "arn:aws:s3:::my-bucket/*",
-            )
-        ])
+        policy = self._make_policy(
+            [
+                self._allow(
+                    PolicyAction.GET_OBJECT,
+                    "arn:aws:s3:::my-bucket/*",
+                )
+            ]
+        )
         assert policy.get_accessible_paths() == []
 
     def test_returns_empty_for_empty_policy(self):
