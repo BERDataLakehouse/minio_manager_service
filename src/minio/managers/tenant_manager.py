@@ -6,8 +6,6 @@ and KBaseUserProfileClient (KBase Auth + local profiles).
 
 import logging
 
-from fastapi import HTTPException, status
-
 from src.minio.managers.group_manager import GroupManager
 from src.s3.models.s3_config import S3Config
 from src.s3.models.tenant import (
@@ -20,7 +18,13 @@ from src.s3.models.tenant import (
     TenantSummaryResponse,
     UserProfile,
 )
-from src.service.exceptions import GroupOperationError
+from src.s3.utils.validators import validate_group_name
+from src.service.exceptions import (
+    GroupOperationError,
+    TenantAuthorizationError,
+    TenantNotFoundError,
+    TenantOperationError,
+)
 from src.service.kb_auth import AdminPermission, KBaseUser
 from src.tenant_metadata.kbase_profile_client import KBaseUserProfileClient
 from src.tenant_metadata.tenant_metadata_store import TenantMetadataStore
@@ -101,7 +105,7 @@ class TenantManager:
         self, tenant_name: str, token: str
     ) -> TenantDetailResponse:
         """Get full tenant detail with metadata, stewards, members, and profiles."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
 
         # Gather data
         rw_members = await self._group_manager.get_group_members(tenant_name)
@@ -185,7 +189,7 @@ class TenantManager:
         self, tenant_name: str, requesting_user: KBaseUser, token: str
     ) -> list[TenantMemberResponse]:
         """List all members of a tenant with profiles and access levels."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
 
         rw_members = await self._group_manager.get_group_members(tenant_name)
         ro_members = []
@@ -203,9 +207,8 @@ class TenantManager:
             tenant_name, requesting_user.user
         )
         if not is_admin and not is_steward and requesting_user.user not in all_members:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You must be a member, steward, or admin to view tenant members",
+            raise TenantAuthorizationError(
+                "You must be a member, steward, or admin to view tenant members"
             )
 
         steward_rows = await self.metadata_store.get_stewards(tenant_name)
@@ -224,7 +227,7 @@ class TenantManager:
         token: str,
     ) -> TenantMemberResponse:
         """Add a user to a tenant with the given permission level."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
 
         target_group = tenant_name if permission == "read_write" else f"{tenant_name}ro"
         await self._group_manager.add_user_to_group(username, target_group)
@@ -252,7 +255,7 @@ class TenantManager:
         acting_user: KBaseUser,
     ) -> None:
         """Remove a user from a tenant. Enforces steward constraints."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
 
         is_admin = acting_user.admin_perm == AdminPermission.FULL
         is_target_steward = await self.metadata_store.is_steward(tenant_name, username)
@@ -260,15 +263,13 @@ class TenantManager:
         if not is_admin:
             # Steward cannot remove self
             if acting_user.user == username:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Stewards cannot remove themselves. Ask an admin to reassign stewardship.",
+                raise TenantOperationError(
+                    "Stewards cannot remove themselves. Ask an admin to reassign stewardship."
                 )
             # Steward cannot remove other stewards
             if is_target_steward:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Only admins can remove stewards from a tenant",
+                raise TenantAuthorizationError(
+                    "Only admins can remove stewards from a tenant"
                 )
 
         # Remove from both RW and RO groups (user may only be in one)
@@ -309,7 +310,7 @@ class TenantManager:
         updated_by: str,
     ) -> TenantMetadataResponse:
         """Update tenant metadata (display_name, description, website, organization)."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
         await self.ensure_metadata(tenant_name, created_by=updated_by)
 
         result = await self.metadata_store.update_metadata(
@@ -321,10 +322,7 @@ class TenantManager:
             organization=update.organization,
         )
         if result is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Tenant '{tenant_name}' not found",
-            )
+            raise TenantNotFoundError(f"Tenant '{tenant_name}' not found")
         return self._meta_dict_to_response(result)
 
     async def create_metadata(
@@ -337,7 +335,7 @@ class TenantManager:
 
         If metadata already exists, returns the existing record unchanged.
         """
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
         result = await self.metadata_store.create_metadata(
             tenant_name,
             created_by,
@@ -354,10 +352,7 @@ class TenantManager:
         """Delete tenant metadata and cascaded steward assignments."""
         deleted = await self.metadata_store.delete_metadata(tenant_name)
         if not deleted:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Tenant metadata for '{tenant_name}' not found",
-            )
+            raise TenantNotFoundError(f"Tenant metadata for '{tenant_name}' not found")
         logger.info("Deleted metadata for tenant %s", tenant_name)
 
     async def ensure_metadata(self, tenant_name: str, created_by: str) -> dict:
@@ -377,7 +372,7 @@ class TenantManager:
         self, tenant_name: str, requesting_user: KBaseUser, token: str
     ) -> list[TenantStewardResponse]:
         """Get stewards with profile info. Requires member, steward, or admin."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
 
         # Authorization: admin, steward, or member
         rw_members = await self._group_manager.get_group_members(tenant_name)
@@ -393,9 +388,8 @@ class TenantManager:
             tenant_name, requesting_user.user
         )
         if not is_admin and not is_steward and requesting_user.user not in all_members:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You must be a member, steward, or admin to view tenant stewards",
+            raise TenantAuthorizationError(
+                "You must be a member, steward, or admin to view tenant stewards"
             )
 
         steward_rows = await self.metadata_store.get_stewards(tenant_name)
@@ -424,29 +418,13 @@ class TenantManager:
         assigned_by: str,
         token: str,
     ) -> TenantStewardResponse:
-        """Assign a user as steward. User must be a member of the tenant."""
-        await self._require_group_exists(tenant_name)
+        """Assign a user as steward, adding them to the RW group if not already a member."""
+        tenant_name = await self._require_group_exists(tenant_name)
         await self.ensure_metadata(tenant_name, created_by=assigned_by)
 
-        # Verify user is a member
-        is_rw_member = await self._group_manager.is_user_in_group(username, tenant_name)
-        is_ro_member = False
-        try:
-            is_ro_member = await self._group_manager.is_user_in_group(
-                username, f"{tenant_name}ro"
-            )
-        except GroupOperationError:
-            logger.warning(
-                "Could not check RO group '%sro' membership for '%s'",
-                tenant_name,
-                username,
-            )
-
-        if not is_rw_member and not is_ro_member:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"User '{username}' must be a member of tenant '{tenant_name}' before being assigned as steward",
-            )
+        # Ensure user is in the RW group (stewards need read-write access).
+        # add_user_to_group is idempotent — safe to call unconditionally.
+        await self._group_manager.add_user_to_group(username, tenant_name)
 
         row = await self.metadata_store.add_steward(tenant_name, username, assigned_by)
         profiles = await self._profile_client.get_user_profiles([username], token)
@@ -463,24 +441,29 @@ class TenantManager:
 
     async def remove_steward(self, tenant_name: str, username: str) -> None:
         """Remove steward assignment. Does not remove from tenant."""
-        await self._require_group_exists(tenant_name)
+        tenant_name = await self._require_group_exists(tenant_name)
         removed = await self.metadata_store.remove_steward(tenant_name, username)
         if not removed:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User '{username}' is not a steward of tenant '{tenant_name}'",
+            raise TenantNotFoundError(
+                f"User '{username}' is not a steward of tenant '{tenant_name}'"
             )
         logger.info("Removed %s as steward of tenant %s", username, tenant_name)
 
     # ── Private helpers ──────────────────────────────────────────────────
 
-    async def _require_group_exists(self, tenant_name: str) -> None:
-        """Raise 404 if the MinIO group does not exist."""
-        if not await self._group_manager.resource_exists(tenant_name):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Tenant '{tenant_name}' not found",
+    async def _require_group_exists(self, tenant_name: str) -> str:
+        """Validate format, reject RO suffixes, and check existence.
+
+        Returns the normalized tenant name (whitespace-stripped).
+        """
+        tenant_name = validate_group_name(tenant_name)
+        if tenant_name.endswith("ro"):
+            raise TenantOperationError(
+                f"'{tenant_name}' is a read-only group, not a tenant. Use the base tenant name."
             )
+        if not await self._group_manager.resource_exists(tenant_name):
+            raise TenantNotFoundError(f"Tenant '{tenant_name}' not found")
+        return tenant_name
 
     def _build_member_list(
         self,

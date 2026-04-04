@@ -200,6 +200,43 @@ class PolicyModel(BaseModel):
             )
         return v
 
-    def to_minio_policy_json(self) -> str:
+    def get_accessible_paths(self) -> list[str]:
+        """
+        Extract all S3 paths accessible through this policy.
+
+        Parses each Allow statement's resource ARNs (of the form
+        ``arn:aws:s3:::bucket/path/*``) and converts them to
+        ``s3a://bucket/path/`` URLs.
+        """
+        paths: set[str] = set()
+        for statement in self.policy_document.statement:
+            if statement.effect == PolicyEffect.ALLOW:
+                resources = (
+                    statement.resource
+                    if isinstance(statement.resource, list)
+                    else [statement.resource]
+                )
+                for resource in resources:
+                    if path := self._path_from_arn(resource):
+                        paths.add(path)
+        return sorted(paths)
+
+    @staticmethod
+    def _path_from_arn(resource: str) -> str | None:
+        """Convert ``arn:aws:s3:::bucket/key/*`` to ``s3a://bucket/key/``."""
+        if (
+            not isinstance(resource, str)
+            or "arn:aws:s3:::" not in resource
+            or not resource.endswith("/*")
+        ):
+            return None
+        arn_content = resource.split("arn:aws:s3:::")[1]
+        path_parts = arn_content.removesuffix("/*").split("/")
+        if len(path_parts) < 2:
+            return None
+        bucket, *segments = path_parts
+        return f"s3a://{bucket}/{'/'.join(segments)}/"
+
+    def to_policy_json(self) -> str:
         """Convert to S3 policy JSON string."""
         return json.dumps(self.policy_document.to_dict(), indent=2)

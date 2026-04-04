@@ -361,7 +361,7 @@ class TestPolicyModel:
         with pytest.raises(ValidationError):
             PolicyModel(policy_name="a" * 129, policy_document=doc)
 
-    def test_to_minio_policy_json(self):
+    def test_to_policy_json(self):
         """Test converting policy model to MinIO JSON format."""
         stmt = PolicyStatement(
             effect=PolicyEffect.ALLOW,
@@ -371,7 +371,7 @@ class TestPolicyModel:
         doc = PolicyDocument(statement=[stmt])
         policy = PolicyModel(policy_name="test-policy", policy_document=doc)
 
-        json_str = policy.to_minio_policy_json()
+        json_str = policy.to_policy_json()
         parsed = json.loads(json_str)
 
         assert parsed["Version"] == "2012-10-17"
@@ -405,3 +405,109 @@ class TestPolicyModel:
             policy2.policy_document.statement[0].action
             == policy.policy_document.statement[0].action
         )
+
+
+# =============================================================================
+# TestPolicyModelGetAccessiblePaths
+# =============================================================================
+
+
+class TestPolicyModelGetAccessiblePaths:
+    """Tests for PolicyModel.get_accessible_paths()."""
+
+    def _make_policy(self, statements: list[PolicyStatement]) -> PolicyModel:
+        return PolicyModel(
+            policy_name="user-home-policy-test",
+            policy_document=PolicyDocument(statement=statements),
+        )
+
+    def _allow(
+        self,
+        action: PolicyAction,
+        resource: str | list[str],
+    ) -> PolicyStatement:
+        return PolicyStatement(
+            effect=PolicyEffect.ALLOW,
+            action=action,
+            resource=resource,
+        )
+
+    def test_extracts_path_from_single_arn(self):
+        policy = self._make_policy(
+            [
+                self._allow(
+                    PolicyAction.GET_OBJECT,
+                    "arn:aws:s3:::my-bucket/some/path/*",
+                )
+            ]
+        )
+        assert policy.get_accessible_paths() == ["s3a://my-bucket/some/path/"]
+
+    def test_extracts_paths_from_list_resource(self):
+        policy = self._make_policy(
+            [
+                self._allow(
+                    PolicyAction.GET_OBJECT,
+                    [
+                        "arn:aws:s3:::bucket/path/a/*",
+                        "arn:aws:s3:::bucket/path/b/*",
+                    ],
+                )
+            ]
+        )
+        assert policy.get_accessible_paths() == [
+            "s3a://bucket/path/a/",
+            "s3a://bucket/path/b/",
+        ]
+
+    def test_deduplicates_paths(self):
+        policy = self._make_policy(
+            [
+                self._allow(
+                    PolicyAction.GET_OBJECT,
+                    "arn:aws:s3:::bucket/path/*",
+                ),
+                self._allow(
+                    PolicyAction.PUT_OBJECT,
+                    "arn:aws:s3:::bucket/path/*",
+                ),
+            ]
+        )
+        assert policy.get_accessible_paths() == ["s3a://bucket/path/"]
+
+    def test_returns_sorted_paths(self):
+        policy = self._make_policy(
+            [
+                self._allow(PolicyAction.GET_OBJECT, "arn:aws:s3:::bucket/z/*"),
+                self._allow(PolicyAction.GET_OBJECT, "arn:aws:s3:::bucket/a/*"),
+            ]
+        )
+        paths = policy.get_accessible_paths()
+        assert paths == sorted(paths)
+
+    def test_skips_non_wildcard_arns(self):
+        policy = self._make_policy(
+            [
+                self._allow(
+                    PolicyAction.GET_BUCKET_LOCATION,
+                    "arn:aws:s3:::my-bucket",
+                )
+            ]
+        )
+        assert policy.get_accessible_paths() == []
+
+    def test_skips_bucket_only_wildcard_arns(self):
+        """ARNs like arn:aws:s3:::bucket/* with no path prefix are skipped."""
+        policy = self._make_policy(
+            [
+                self._allow(
+                    PolicyAction.GET_OBJECT,
+                    "arn:aws:s3:::my-bucket/*",
+                )
+            ]
+        )
+        assert policy.get_accessible_paths() == []
+
+    def test_returns_empty_for_empty_policy(self):
+        policy = self._make_policy([])
+        assert policy.get_accessible_paths() == []
