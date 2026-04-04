@@ -60,7 +60,6 @@ def mock_policy_manager():
     pm.remove_path_access_for_target = AsyncMock()
     pm.list_resources = AsyncMock(return_value=[])
     pm._load_minio_policy = AsyncMock(return_value=None)
-    pm.get_accessible_paths_from_policy = MagicMock(return_value=[])
     pm.is_user_home_policy = MagicMock(return_value=False)
     pm.is_group_policy = MagicMock(return_value=False)
     return pm
@@ -675,12 +674,13 @@ class TestMakePrivate:
     ):
         """Test making path private removes user access."""
         # Setup: path is accessible by alice
+        # TODO: mocking PolicyModel is an anti-pattern; use a real instance with ARN statements
         mock_policy_model = MagicMock()
-        mock_policy_manager.list_resources.return_value = ["user-home-policy-alice"]
-        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
-        mock_policy_manager.get_accessible_paths_from_policy.return_value = [
+        mock_policy_model.get_accessible_paths.return_value = [
             "s3a://test-bucket/data/dataset/"
         ]
+        mock_policy_manager.list_resources.return_value = ["user-home-policy-alice"]
+        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
         mock_policy_manager.is_user_home_policy.return_value = True
 
         result = await sharing_manager.make_private(
@@ -697,12 +697,13 @@ class TestMakePrivate:
     ):
         """Test making path private does not remove owner's access."""
         # Setup: path is accessible by owner
+        # TODO: mocking PolicyModel is an anti-pattern; use a real instance with ARN statements
         mock_policy_model = MagicMock()
-        mock_policy_manager.list_resources.return_value = ["user-home-policy-owner"]
-        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
-        mock_policy_manager.get_accessible_paths_from_policy.return_value = [
+        mock_policy_model.get_accessible_paths.return_value = [
             "s3a://test-bucket/data/dataset/"
         ]
+        mock_policy_manager.list_resources.return_value = ["user-home-policy-owner"]
+        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
         mock_policy_manager.is_user_home_policy.return_value = True
 
         result = await sharing_manager.make_private(
@@ -719,12 +720,13 @@ class TestMakePrivate:
     ):
         """Test making path private removes group access."""
         # Setup: path is accessible by team1 group
+        # TODO: mocking PolicyModel is an anti-pattern; use a real instance with ARN statements
         mock_policy_model = MagicMock()
-        mock_policy_manager.list_resources.return_value = ["group-policy-team1"]
-        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
-        mock_policy_manager.get_accessible_paths_from_policy.return_value = [
+        mock_policy_model.get_accessible_paths.return_value = [
             "s3a://test-bucket/data/dataset/"
         ]
+        mock_policy_manager.list_resources.return_value = ["group-policy-team1"]
+        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
         mock_policy_manager.is_user_home_policy.return_value = False
         mock_policy_manager.is_group_policy.return_value = True
 
@@ -775,12 +777,13 @@ class TestGetPathAccessInfo:
         self, sharing_manager, mock_policy_manager
     ):
         """Test getting access info with user access."""
+        # TODO: mocking PolicyModel is an anti-pattern; use a real instance with ARN statements
         mock_policy_model = MagicMock()
-        mock_policy_manager.list_resources.return_value = ["user-home-policy-alice"]
-        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
-        mock_policy_manager.get_accessible_paths_from_policy.return_value = [
+        mock_policy_model.get_accessible_paths.return_value = [
             "s3a://test-bucket/data/path/"
         ]
+        mock_policy_manager.list_resources.return_value = ["user-home-policy-alice"]
+        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
         mock_policy_manager.is_user_home_policy.return_value = True
 
         result = await sharing_manager.get_path_access_info(
@@ -795,12 +798,13 @@ class TestGetPathAccessInfo:
         self, sharing_manager, mock_policy_manager
     ):
         """Test getting access info with group access."""
+        # TODO: mocking PolicyModel is an anti-pattern; use a real instance with ARN statements
         mock_policy_model = MagicMock()
-        mock_policy_manager.list_resources.return_value = ["group-policy-team1"]
-        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
-        mock_policy_manager.get_accessible_paths_from_policy.return_value = [
+        mock_policy_model.get_accessible_paths.return_value = [
             "s3a://test-bucket/data/path/"
         ]
+        mock_policy_manager.list_resources.return_value = ["group-policy-team1"]
+        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
         mock_policy_manager.is_user_home_policy.return_value = False
         mock_policy_manager.is_group_policy.return_value = True
 
@@ -815,12 +819,13 @@ class TestGetPathAccessInfo:
         self, sharing_manager, mock_policy_manager
     ):
         """Test getting access info for public path."""
+        # TODO: mocking PolicyModel is an anti-pattern; use a real instance with ARN statements
         mock_policy_model = MagicMock()
-        mock_policy_manager.list_resources.return_value = ["group-policy-globalusers"]
-        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
-        mock_policy_manager.get_accessible_paths_from_policy.return_value = [
+        mock_policy_model.get_accessible_paths.return_value = [
             "s3a://test-bucket/data/path/"
         ]
+        mock_policy_manager.list_resources.return_value = ["group-policy-globalusers"]
+        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
         mock_policy_manager.is_user_home_policy.return_value = False
         mock_policy_manager.is_group_policy.return_value = True
 
@@ -846,12 +851,14 @@ class TestGetPathAccessInfo:
             "user-home-policy-alice",
             "some-other-policy",
         ]
-        mock_policy_manager._load_minio_policy.side_effect = [
-            MagicMock(),  # alice's policy
-            None,  # unsupported policy returns None
-        ]
-        mock_policy_manager.get_accessible_paths_from_policy.return_value = [
+        # TODO: mocking PolicyModel is an anti-pattern; use a real instance with ARN statements
+        alice_policy = MagicMock()
+        alice_policy.get_accessible_paths.return_value = [
             "s3a://test-bucket/data/path/"
+        ]
+        mock_policy_manager._load_minio_policy.side_effect = [
+            alice_policy,  # alice's policy
+            None,  # unsupported policy returns None
         ]
         mock_policy_manager.is_user_home_policy.return_value = True
 
@@ -866,13 +873,14 @@ class TestGetPathAccessInfo:
         self, sharing_manager, mock_policy_manager
     ):
         """Test that parent path access is detected."""
+        # TODO: mocking PolicyModel is an anti-pattern; use a real instance with ARN statements
         mock_policy_model = MagicMock()
-        mock_policy_manager.list_resources.return_value = ["user-home-policy-alice"]
-        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
         # User has access to parent path
-        mock_policy_manager.get_accessible_paths_from_policy.return_value = [
+        mock_policy_model.get_accessible_paths.return_value = [
             "s3a://test-bucket/data/"
         ]
+        mock_policy_manager.list_resources.return_value = ["user-home-policy-alice"]
+        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
         mock_policy_manager.is_user_home_policy.return_value = True
 
         result = await sharing_manager.get_path_access_info(
@@ -1166,12 +1174,13 @@ class TestSharingManagerIntegration:
         assert share_result.success_count == 1
 
         # Setup for make_private - alice has access
+        # TODO: mocking PolicyModel is an anti-pattern; use a real instance with ARN statements
         mock_policy_model = MagicMock()
-        mock_policy_manager.list_resources.return_value = ["user-home-policy-alice"]
-        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
-        mock_policy_manager.get_accessible_paths_from_policy.return_value = [
+        mock_policy_model.get_accessible_paths.return_value = [
             "s3a://test-bucket/data/project/"
         ]
+        mock_policy_manager.list_resources.return_value = ["user-home-policy-alice"]
+        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
         mock_policy_manager.is_user_home_policy.return_value = True
 
         # Now make private
@@ -1219,12 +1228,13 @@ class TestSharingManagerIntegration:
         assert "globalusers" in public_result.shared_with_groups
 
         # Setup for make_private - global group has access
+        # TODO: mocking PolicyModel is an anti-pattern; use a real instance with ARN statements
         mock_policy_model = MagicMock()
-        mock_policy_manager.list_resources.return_value = ["group-policy-globalusers"]
-        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
-        mock_policy_manager.get_accessible_paths_from_policy.return_value = [
+        mock_policy_model.get_accessible_paths.return_value = [
             "s3a://test-bucket/data/dataset/"
         ]
+        mock_policy_manager.list_resources.return_value = ["group-policy-globalusers"]
+        mock_policy_manager._load_minio_policy.return_value = mock_policy_model
         mock_policy_manager.is_user_home_policy.return_value = False
         mock_policy_manager.is_group_policy.return_value = True
 

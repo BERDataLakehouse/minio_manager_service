@@ -357,7 +357,7 @@ class TestBuild:
         user_home_creator.create_default_policy()
         policy = user_home_creator.build()
 
-        json_str = policy.to_minio_policy_json()
+        json_str = policy.to_policy_json()
         assert isinstance(json_str, str)
         assert "Version" in json_str
         assert "Statement" in json_str
@@ -547,7 +547,7 @@ class TestEdgeCases:
         assert policy.policy_name == "group-policy-testgroupro"
 
         # But paths should use path_target_name
-        policy_json = policy.to_minio_policy_json()
+        policy_json = policy.to_policy_json()
         assert "testgroup" in policy_json  # Path uses path_target
 
 
@@ -579,7 +579,7 @@ class TestIntegration:
         assert len(policy.policy_document.statement) > 0
 
         # Verify can serialize to JSON
-        json_str = policy.to_minio_policy_json()
+        json_str = policy.to_policy_json()
         assert "user" in json_str or "User" in json_str
 
     def test_full_group_workflow(self, mock_s3_config):
@@ -619,5 +619,5 @@ class TestIntegration:
         assert PolicyAction.DELETE_OBJECT not in actions
 
         # Verify can serialize to JSON
-        json_str = policy.to_minio_policy_json()
+        json_str = policy.to_policy_json()
         assert "Statement" in json_str
