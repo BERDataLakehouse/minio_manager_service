@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import HTTPException
 
 from src.minio.managers.tenant_manager import (
     SYSTEM_GROUPS,
@@ -12,7 +11,12 @@ from src.minio.managers.tenant_manager import (
     _is_tenant_group,
 )
 from src.s3.models.tenant import TenantMetadataUpdate, UserProfile
-from src.service.exceptions import GroupOperationError
+from src.service.exceptions import (
+    GroupOperationError,
+    TenantAuthorizationError,
+    TenantNotFoundError,
+    TenantOperationError,
+)
 from src.service.kb_auth import AdminPermission, KBaseUser
 
 
@@ -124,6 +128,38 @@ class TestIsTenantGroup:
         assert len(SYSTEM_GROUPS) == 0
 
 
+# ── _require_group_exists ────────────────────────────────────────────────
+
+
+class TestRequireGroupExists:
+    @pytest.mark.asyncio
+    async def test_rejects_ro_group_name(self, manager):
+        with pytest.raises(TenantOperationError, match="read-only group"):
+            await manager._require_group_exists("kbasero")
+
+    @pytest.mark.asyncio
+    async def test_rejects_any_ro_suffix(self, manager):
+        with pytest.raises(TenantOperationError):
+            await manager._require_group_exists("mytenantro")
+
+    @pytest.mark.asyncio
+    async def test_invalid_name_rejected_before_ro_check(self, manager):
+        """Malformed names (e.g. uppercase) get a validation error, not 'read-only group'."""
+        with pytest.raises(GroupOperationError):
+            await manager._require_group_exists("KBASEro")
+
+    @pytest.mark.asyncio
+    async def test_allows_base_tenant(self, manager, mock_group_manager):
+        mock_group_manager.resource_exists.return_value = True
+        await manager._require_group_exists("kbase")  # Should not raise
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_group_404(self, manager, mock_group_manager):
+        mock_group_manager.resource_exists.return_value = False
+        with pytest.raises(TenantNotFoundError):
+            await manager._require_group_exists("nonexistent")
+
+
 # ── list_tenants ─────────────────────────────────────────────────────────
 
 
@@ -220,9 +256,8 @@ class TestGetTenantDetail:
     @pytest.mark.asyncio
     async def test_nonexistent_group_404(self, manager, mock_group_manager):
         mock_group_manager.resource_exists.return_value = False
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(TenantNotFoundError):
             await manager.get_tenant_detail("nope", "token")
-        assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
     async def test_ro_group_error_is_swallowed(self, manager, mock_group_manager):
@@ -253,9 +288,8 @@ class TestGetTenantMembers:
     @pytest.mark.asyncio
     async def test_outsider_forbidden(self, manager, mock_group_manager):
         mock_group_manager.get_group_members.return_value = ["alice"]
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(TenantAuthorizationError):
             await manager.get_tenant_members("t1", OUTSIDER, "token")
-        assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
     async def test_steward_can_view(self, manager, mock_metadata_store):
@@ -283,9 +317,8 @@ class TestAddMember:
     @pytest.mark.asyncio
     async def test_nonexistent_group_404(self, manager, mock_group_manager):
         mock_group_manager.resource_exists.return_value = False
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(TenantNotFoundError):
             await manager.add_member("nope", "charlie", "read_write", "token")
-        assert exc_info.value.status_code == 404
 
 
 # ── remove_member ────────────────────────────────────────────────────────
@@ -299,19 +332,16 @@ class TestRemoveMember:
 
     @pytest.mark.asyncio
     async def test_steward_cannot_remove_self(self, manager):
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(TenantOperationError, match="cannot remove themselves"):
             await manager.remove_member("t1", "alice", STEWARD)
-        assert exc_info.value.status_code == 400
-        assert "cannot remove themselves" in exc_info.value.detail
 
     @pytest.mark.asyncio
     async def test_steward_cannot_remove_other_steward(
         self, manager, mock_metadata_store
     ):
         mock_metadata_store.is_steward.return_value = True
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(TenantAuthorizationError):
             await manager.remove_member("t1", "bob", STEWARD)
-        assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
     async def test_admin_removes_steward_cascades(self, manager, mock_metadata_store):
@@ -353,9 +383,8 @@ class TestUpdateMetadata:
     async def test_update_not_found(self, manager, mock_metadata_store):
         mock_metadata_store.update_metadata.return_value = None
         update = TenantMetadataUpdate(display_name="X")
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(TenantNotFoundError):
             await manager.update_metadata("nope", update, "admin")
-        assert exc_info.value.status_code == 404
 
 
 # ── create_metadata ──────────────────────────────────────────────────────
@@ -402,9 +431,8 @@ class TestCreateMetadata:
     @pytest.mark.asyncio
     async def test_create_nonexistent_group_404(self, manager, mock_group_manager):
         mock_group_manager.resource_exists.return_value = False
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(TenantNotFoundError):
             await manager.create_metadata("nope", "admin")
-        assert exc_info.value.status_code == 404
 
 
 # ── delete_metadata ──────────────────────────────────────────────────────
@@ -418,9 +446,8 @@ class TestDeleteMetadata:
     @pytest.mark.asyncio
     async def test_delete_not_found(self, manager, mock_metadata_store):
         mock_metadata_store.delete_metadata.return_value = False
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(TenantNotFoundError):
             await manager.delete_metadata("nope")
-        assert exc_info.value.status_code == 404
 
 
 # ── ensure_metadata ──────────────────────────────────────────────────────
@@ -477,16 +504,14 @@ class TestGetStewards:
     @pytest.mark.asyncio
     async def test_outsider_forbidden(self, manager, mock_group_manager):
         mock_group_manager.get_group_members.return_value = ["alice"]
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(TenantAuthorizationError):
             await manager.get_stewards("t1", OUTSIDER, "token")
-        assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
     async def test_nonexistent_group_404(self, manager, mock_group_manager):
         mock_group_manager.resource_exists.return_value = False
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(TenantNotFoundError):
             await manager.get_stewards("nope", ADMIN, "token")
-        assert exc_info.value.status_code == 404
 
 
 # ── add_steward ──────────────────────────────────────────────────────────
@@ -495,24 +520,18 @@ class TestGetStewards:
 class TestAddSteward:
     @pytest.mark.asyncio
     async def test_add_success(self, manager, mock_group_manager):
-        mock_group_manager.is_user_in_group.return_value = True
         result = await manager.add_steward("t1", "alice", "admin", "token")
         assert result.username == "alice"
+        mock_group_manager.add_user_to_group.assert_called_once_with("alice", "t1")
 
     @pytest.mark.asyncio
-    async def test_add_non_member_raises(self, manager, mock_group_manager):
-        mock_group_manager.is_user_in_group.return_value = False
-        with pytest.raises(HTTPException) as exc_info:
-            await manager.add_steward("t1", "outsider", "admin", "token")
-        assert exc_info.value.status_code == 400
-        assert "must be a member" in exc_info.value.detail
-
-    @pytest.mark.asyncio
-    async def test_add_ro_only_member_succeeds(self, manager, mock_group_manager):
-        """User in RO group only should be assignable as steward."""
-        mock_group_manager.is_user_in_group.side_effect = [False, True]
-        result = await manager.add_steward("t1", "alice", "admin", "token")
-        assert result.username == "alice"
+    async def test_add_calls_add_user_unconditionally(
+        self, manager, mock_group_manager
+    ):
+        """add_user_to_group is idempotent and always called, no membership pre-check."""
+        result = await manager.add_steward("t1", "outsider", "admin", "token")
+        assert result.username == "outsider"
+        mock_group_manager.add_user_to_group.assert_called_once_with("outsider", "t1")
 
     @pytest.mark.asyncio
     async def test_add_duplicate_is_idempotent(self, manager, mock_metadata_store):
@@ -540,9 +559,8 @@ class TestRemoveSteward:
     @pytest.mark.asyncio
     async def test_remove_not_found(self, manager, mock_metadata_store):
         mock_metadata_store.remove_steward.return_value = False
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(TenantNotFoundError):
             await manager.remove_steward("t1", "nobody")
-        assert exc_info.value.status_code == 404
 
 
 # ── _build_member_list ───────────────────────────────────────────────────

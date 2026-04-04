@@ -415,9 +415,7 @@ class SharingManager:
             if policy_model is None:
                 continue
 
-            accessible_paths = self.policy_manager.get_accessible_paths_from_policy(
-                policy_model
-            )
+            accessible_paths = policy_model.get_accessible_paths()
 
             if self._path_matches_any_accessible_path(path, accessible_paths):
                 if self.policy_manager.is_user_home_policy(policy_name):

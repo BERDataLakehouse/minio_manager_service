@@ -1049,27 +1049,6 @@ class TestRemovePathAccessFromPolicy:
         assert result.policy_name == sample_policy_model.policy_name
 
 
-class TestGetAccessiblePathsFromPolicy:
-    """Tests for get_accessible_paths_from_policy method."""
-
-    def test_extracts_paths_from_policy(self, policy_manager, sample_user_home_policy):
-        """Test extracting accessible paths from policy."""
-        paths = policy_manager.get_accessible_paths_from_policy(sample_user_home_policy)
-
-        assert isinstance(paths, list)
-
-    def test_returns_empty_for_no_allow_statements(self, policy_manager):
-        """Test returns empty list when no allow statements."""
-        empty_policy = PolicyModel(
-            policy_name="user-home-policy-empty",
-            policy_document=PolicyDocument(version="2012-10-17", statement=[]),
-        )
-
-        paths = policy_manager.get_accessible_paths_from_policy(empty_policy)
-
-        assert paths == []
-
-
 # =============================================================================
 # Test: Shadow Policy Pattern
 # =============================================================================
@@ -1503,17 +1482,6 @@ class TestEdgeCases:
         result = policy_manager.get_policy_name(PolicyType.USER_HOME, "test.user_1")
         assert "test.user_1" in result
 
-    @pytest.mark.asyncio
-    async def test_empty_policy_document_handling(self, policy_manager):
-        """Test handling empty policy document."""
-        empty_policy = PolicyModel(
-            policy_name="user-home-policy-empty",
-            policy_document=PolicyDocument(version="2012-10-17", statement=[]),
-        )
-
-        paths = policy_manager.get_accessible_paths_from_policy(empty_policy)
-        assert paths == []
-
 
 class TestPolicyCreation:
     """Tests for internal policy creation methods."""
@@ -1752,22 +1720,6 @@ class TestPolicyDeletionErrors:
 
         with pytest.raises(PolicyOperationError, match="Error deleting group policy"):
             await policy_manager.delete_group_policy("testgroup")
-
-
-class TestARNPathExtraction:
-    """Tests for _extract_path_from_resource_arn edge cases."""
-
-    def test_extract_path_invalid_arn_format(self, policy_manager):
-        """Test extraction returns None for ARN not ending with /*."""
-        result = policy_manager._extract_path_from_resource_arn(
-            "arn:aws:s3:::bucket/path/to/file.txt"
-        )
-        assert result is None
-
-    def test_extract_path_insufficient_parts(self, policy_manager):
-        """Test extraction returns None when path has fewer than 2 parts."""
-        result = policy_manager._extract_path_from_resource_arn("arn:aws:s3:::bucket/*")
-        assert result is None
 
 
 class TestMinioPolicyCreationCleanup:

@@ -339,9 +339,6 @@ class TestGetGroupWorkspace:
         mock_app_state.policy_manager.get_group_policy = AsyncMock(
             return_value=sample_policy_model
         )
-        mock_app_state.policy_manager.get_accessible_paths_from_policy = MagicMock(
-            return_value=["s3a://test-bucket/tenant-sql-warehouse/testgroup/"]
-        )
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
@@ -390,9 +387,6 @@ class TestGetGroupWorkspace:
         mock_app_state.policy_manager.get_group_policy = AsyncMock(
             return_value=sample_policy_model
         )
-        mock_app_state.policy_manager.get_accessible_paths_from_policy = MagicMock(
-            return_value=["s3a://test-bucket/tenant-sql-warehouse/testgroup/"]
-        )
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
             with patch(
@@ -424,9 +418,6 @@ class TestGetGroupWorkspace:
         )
         mock_app_state.policy_manager.get_group_policy = AsyncMock(
             return_value=sample_policy_model
-        )
-        mock_app_state.policy_manager.get_accessible_paths_from_policy = MagicMock(
-            return_value=["s3a://test-bucket/tenant-sql-warehouse/testgroup/"]
         )
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):
@@ -462,9 +453,6 @@ class TestGetGroupWorkspace:
         )
         mock_app_state.policy_manager.get_group_policy = AsyncMock(
             return_value=sample_policy_model
-        )
-        mock_app_state.policy_manager.get_accessible_paths_from_policy = MagicMock(
-            return_value=["s3a://test-bucket/tenant-sql-warehouse/testgroup/"]
         )
 
         with patch("src.routes.workspaces.get_app_state", return_value=mock_app_state):

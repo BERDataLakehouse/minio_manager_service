@@ -89,7 +89,6 @@ def mock_policy_manager():
     manager.get_user_home_policy = AsyncMock()
     manager.get_user_system_policy = AsyncMock()
     manager.get_group_policy = AsyncMock()
-    manager.get_accessible_paths_from_policy = MagicMock(return_value=[])
     return manager
 
 
@@ -764,16 +763,13 @@ class TestGetUserAccessiblePaths:
         mock_policy_manager.get_user_system_policy.return_value = (
             sample_user_system_policy
         )
-        mock_policy_manager.get_accessible_paths_from_policy.return_value = [
-            "/path1",
-            "/path2",
-        ]
         mock_group_manager.get_user_groups.return_value = []
 
         result = await user_manager.get_user_accessible_paths("testuser")
 
         assert isinstance(result, list)
-        mock_policy_manager.get_accessible_paths_from_policy.assert_called()
+        # home policy ARN -> s3a://test-bucket/users-sql-warehouse/testuser/
+        assert "s3a://test-bucket/users-sql-warehouse/testuser/" in result
 
     @pytest.mark.asyncio
     async def test_accessible_paths_user_not_found(self, user_manager):
