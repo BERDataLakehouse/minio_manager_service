@@ -244,21 +244,15 @@ class UserManager(ResourceManager[UserModel]):
 
             # Calculate accessible paths
             all_accessible_paths = set()
-            all_accessible_paths.update(
-                self.policy_manager.get_accessible_paths_from_policy(user_policy)
-            )
-            all_accessible_paths.update(
-                self.policy_manager.get_accessible_paths_from_policy(system_policy)
-            )
+            all_accessible_paths.update(user_policy.get_accessible_paths())
+            all_accessible_paths.update(system_policy.get_accessible_paths())
 
             # Process group policies safely
             group_policies = []
             for group_name in user_groups:
                 group_policy = await self.policy_manager.get_group_policy(group_name)
                 group_policies.append(group_policy)
-                all_accessible_paths.update(
-                    self.policy_manager.get_accessible_paths_from_policy(group_policy)
-                )
+                all_accessible_paths.update(group_policy.get_accessible_paths())
 
             return UserModel(
                 username=username,
@@ -385,20 +379,14 @@ class UserManager(ResourceManager[UserModel]):
             # Add paths from user policies (both home and system)
             user_policy = await self.policy_manager.get_user_home_policy(username)
             system_policy = await self.policy_manager.get_user_system_policy(username)
-            all_accessible_paths.update(
-                self.policy_manager.get_accessible_paths_from_policy(user_policy)
-            )
-            all_accessible_paths.update(
-                self.policy_manager.get_accessible_paths_from_policy(system_policy)
-            )
+            all_accessible_paths.update(user_policy.get_accessible_paths())
+            all_accessible_paths.update(system_policy.get_accessible_paths())
 
             # Add paths from group policies
             user_groups = await self.group_manager.get_user_groups(username)
             for group_name in user_groups:
                 group_policy = await self.policy_manager.get_group_policy(group_name)
-                all_accessible_paths.update(
-                    self.policy_manager.get_accessible_paths_from_policy(group_policy)
-                )
+                all_accessible_paths.update(group_policy.get_accessible_paths())
 
             return sorted(list(all_accessible_paths))
 

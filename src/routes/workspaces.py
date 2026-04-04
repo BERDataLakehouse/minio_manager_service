@@ -274,9 +274,7 @@ async def get_group_workspace(
     # Get group information using base_group
     group_info = await app_state.group_manager.get_group_info(base_group)
     group_policy = await app_state.policy_manager.get_group_policy(base_group)
-    group_accessible_paths = app_state.policy_manager.get_accessible_paths_from_policy(
-        group_policy
-    )
+    group_accessible_paths = group_policy.get_accessible_paths()
 
     response = GroupWorkspaceResponse(
         group_name=base_group,
