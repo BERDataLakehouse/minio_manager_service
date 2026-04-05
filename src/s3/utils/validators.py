@@ -7,8 +7,8 @@ organized by domain and focused on data governance requirements.
 
 import re
 
-from ...service.arg_checkers import not_falsy
-from ...service.exceptions import (
+from service.arg_checkers import not_falsy
+from service.exceptions import (
     BucketValidationError,
     GroupOperationError,
     PolicyValidationError,

@@ -1,6 +1,6 @@
 """Tests for the service models module."""
 
-from src.service import models
+from service import models
 
 
 def test_models_imports():

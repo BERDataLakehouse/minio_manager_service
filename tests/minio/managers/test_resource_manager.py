@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.s3.core.s3_client import S3Client
-from src.minio.managers.resource_manager import ResourceManager
-from src.minio.models.command import CommandResult
-from src.s3.models.s3_config import S3Config
-from src.service.exceptions import S3ManagerError
+from s3.core.s3_client import S3Client
+from minio.managers.resource_manager import ResourceManager
+from minio.models.command import CommandResult
+from s3.models.s3_config import S3Config
+from service.exceptions import S3ManagerError
 
 # =============================================================================
 # Test Implementation of ResourceManager

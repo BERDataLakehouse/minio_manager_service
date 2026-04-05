@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.service.database import DatabasePool, run_migrations
+from service.database import DatabasePool, run_migrations
 
 
 # ── run_migrations ────────────────────────────────────────────────────────
@@ -13,9 +13,9 @@ from src.service.database import DatabasePool, run_migrations
 class TestRunMigrations:
     def test_calls_alembic_upgrade(self):
         with (
-            patch("src.service.database._ALEMBIC_INI") as mock_path,
-            patch("src.service.database.Config") as mock_config_cls,
-            patch("src.service.database.command") as mock_command,
+            patch("service.database._ALEMBIC_INI") as mock_path,
+            patch("service.database.Config") as mock_config_cls,
+            patch("service.database.command") as mock_command,
         ):
             mock_path.exists.return_value = True
             mock_cfg = MagicMock()
@@ -27,8 +27,8 @@ class TestRunMigrations:
 
     def test_skips_when_ini_missing(self):
         with (
-            patch("src.service.database._ALEMBIC_INI") as mock_path,
-            patch("src.service.database.command") as mock_command,
+            patch("service.database._ALEMBIC_INI") as mock_path,
+            patch("service.database.command") as mock_command,
         ):
             mock_path.exists.return_value = False
 
@@ -72,8 +72,8 @@ class TestCreate:
         mock_pool.connection = MockConnectionCM
 
         with (
-            patch("src.service.database.AsyncConnectionPool", return_value=mock_pool),
-            patch("src.service.database.make_conninfo", return_value="conninfo"),
+            patch("service.database.AsyncConnectionPool", return_value=mock_pool),
+            patch("service.database.make_conninfo", return_value="conninfo"),
         ):
             db = await DatabasePool.create(
                 host="localhost",
@@ -109,8 +109,8 @@ class TestCreate:
         mock_pool.connection = MockConnectionCM
 
         with (
-            patch("src.service.database.AsyncConnectionPool", return_value=mock_pool),
-            patch("src.service.database.make_conninfo", return_value="conninfo"),
+            patch("service.database.AsyncConnectionPool", return_value=mock_pool),
+            patch("service.database.make_conninfo", return_value="conninfo"),
         ):
             with pytest.raises(RuntimeError, match="pgcrypto"):
                 await DatabasePool.create(

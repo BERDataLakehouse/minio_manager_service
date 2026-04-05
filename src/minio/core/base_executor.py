@@ -5,11 +5,11 @@ import logging
 import os
 from typing import Optional
 
-from ...service.arg_checkers import not_falsy
-from ...service.exceptions import S3ManagerError
-from ..models.command import CommandResult
-from src.s3.models.s3_config import S3Config
-from .command_builder import MinIOCommandBuilder
+from service.arg_checkers import not_falsy
+from service.exceptions import S3ManagerError
+from minio.models.command import CommandResult
+from s3.models.s3_config import S3Config
+from minio.core.command_builder import MinIOCommandBuilder
 
 logger = logging.getLogger(__name__)
 

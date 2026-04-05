@@ -1,6 +1,6 @@
 """Tests for the errors module."""
 
-from src.service import errors
+from service import errors
 
 
 def test_errors_imports():

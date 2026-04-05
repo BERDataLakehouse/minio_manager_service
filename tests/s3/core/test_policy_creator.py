@@ -4,12 +4,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.s3.core.policy_creator import (
+from s3.core.policy_creator import (
     PolicyCreator,
     SYSTEM_RESOURCE_CONFIG,
     _POLICY_ACTION_TO_POLICY_SECTION,
 )
-from src.s3.models.policy import (
+from s3.models.policy import (
     PolicyAction,
     PolicyDocument,
     PolicyModel,
@@ -18,7 +18,7 @@ from src.s3.models.policy import (
     PolicyStatement,
     PolicyType,
 )
-from src.service.exceptions import PolicyOperationError
+from service.exceptions import PolicyOperationError
 
 
 # =============================================================================

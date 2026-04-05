@@ -3,8 +3,8 @@ from typing import Annotated
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
 
-from ...service.exceptions import BucketValidationError, ValidationError
-from ..utils.validators import validate_bucket_name, validate_path_prefix
+from service.exceptions import BucketValidationError, ValidationError
+from s3.utils.validators import validate_bucket_name, validate_path_prefix
 
 CDM_DEFAULT_BUCKET = os.getenv("CDM_DEFAULT_BUCKET", "cdm-lake")
 

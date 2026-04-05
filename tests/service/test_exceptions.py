@@ -1,6 +1,6 @@
 """Tests for the exceptions module."""
 
-from src.service import exceptions
+from service import exceptions
 
 
 def test_exceptions_imports():

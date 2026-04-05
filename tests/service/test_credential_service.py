@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.credentials.service import CredentialService
-from src.service.exceptions import CredentialOperationError
+from credentials.service import CredentialService
+from service.exceptions import CredentialOperationError
 
 
 # === FIXTURES ===

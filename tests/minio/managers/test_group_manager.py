@@ -6,17 +6,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.minio.managers.group_manager import GroupManager, RESOURCE_TYPE
-from src.minio.models.command import CommandResult
-from src.s3.models.group import GroupModel
-from src.s3.models.policy import (
+from minio.managers.group_manager import GroupManager, RESOURCE_TYPE
+from minio.models.command import CommandResult
+from s3.models.group import GroupModel
+from s3.models.policy import (
     PolicyAction,
     PolicyDocument,
     PolicyEffect,
     PolicyModel,
     PolicyStatement,
 )
-from src.service.exceptions import GroupOperationError
+from service.exceptions import GroupOperationError
 
 
 # =============================================================================
@@ -332,9 +332,7 @@ class TestLazyManagerInit:
         # Access the property - should trigger lazy init
         # The import is done inside the property method, so we need to patch at the module level
         with patch.object(group_manager_instance, "_policy_manager", None):
-            with patch(
-                "src.minio.managers.policy_manager.PolicyManager"
-            ) as mock_pm_class:
+            with patch("minio.managers.policy_manager.PolicyManager") as mock_pm_class:
                 mock_pm_instance = MagicMock()
                 mock_pm_class.return_value = mock_pm_instance
 
@@ -363,7 +361,7 @@ class TestLazyManagerInit:
 
         # Access the property - should trigger lazy init
         with patch.object(group_manager_instance, "_user_manager", None):
-            with patch("src.minio.managers.user_manager.UserManager") as mock_um_class:
+            with patch("minio.managers.user_manager.UserManager") as mock_um_class:
                 mock_um_instance = MagicMock()
                 mock_um_class.return_value = mock_um_instance
 

@@ -37,9 +37,9 @@ import logging
 from collections import defaultdict
 from typing import Dict, List
 
-from src.service.exceptions import PolicyOperationError
-from src.s3.models.s3_config import S3Config
-from src.s3.models.policy import (
+from service.exceptions import PolicyOperationError
+from s3.models.s3_config import S3Config
+from s3.models.policy import (
     PolicyAction,
     PolicyDocument,
     PolicyModel,
@@ -48,14 +48,14 @@ from src.s3.models.policy import (
     PolicyStatement,
     PolicyType,
 )
-from src.s3.utils.validators import (
+from s3.utils.validators import (
     GROUP_POLICY_PREFIX,
     USER_HOME_POLICY_PREFIX,
     USER_SYSTEM_POLICY_PREFIX,
     validate_policy_name,
 )
-from src.s3.core.policy_builder import PolicyBuilder
-from src.s3.utils.governance import (
+from s3.core.policy_builder import PolicyBuilder
+from s3.utils.governance import (
     generate_group_governance_prefix,
     generate_user_governance_prefix,
 )

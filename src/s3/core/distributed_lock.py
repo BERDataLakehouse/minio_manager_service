@@ -5,7 +5,7 @@ from typing import Optional
 
 import redis.asyncio as redis
 
-from src.service.exceptions import CredentialOperationError, PolicyOperationError
+from service.exceptions import CredentialOperationError, PolicyOperationError
 
 logger = logging.getLogger(__name__)
 

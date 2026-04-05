@@ -1,6 +1,6 @@
 """Tests for the health routes module."""
 
-from src.routes import health
+from routes import health
 
 
 def test_health_imports():
