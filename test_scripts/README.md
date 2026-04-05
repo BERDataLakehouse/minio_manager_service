@@ -22,8 +22,8 @@ docker compose up -d
 
 Exercises every method of `S3IAMClient` against the Ceph RadosGW instance defined in
 `docker-compose.yml`. Covers user and group lifecycle (create, exists, list, delete),
-inline policy round-trips, access key rotation, and the `exists_ok` / `except_if_absent`
-edge cases.
+inline policy round-trips, access key rotation, the `exists_ok` / `except_if_absent`
+edge cases, and S3 data-plane policy enforcement (PUT/GET allowed and denied paths).
 
 ```bash
 PYTHONPATH=. uv run python test_scripts/s3_iam_integration.py

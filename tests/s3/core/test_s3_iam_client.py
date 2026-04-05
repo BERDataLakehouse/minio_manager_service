@@ -751,7 +751,9 @@ async def test_rotate_access_key_at_limit_deletes_oldest_and_retries(
 
 
 @pytest.mark.asyncio
-async def test_rotate_access_key_trims_excess_old_keys(iam_client, mock_iam_boto_client):
+async def test_rotate_access_key_trims_excess_old_keys(
+    iam_client, mock_iam_boto_client
+):
     """Old keys beyond max_keys-1 are deleted after rotation (iam_client has max_keys=2)."""
     now = datetime.now(timezone.utc)
     older_key = {

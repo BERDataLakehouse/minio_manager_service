@@ -6,7 +6,9 @@ Run with: PYTHONPATH=. uv run python test_scripts/s3_iam_integration.py
 import asyncio
 import sys
 import traceback
+from contextlib import asynccontextmanager
 
+import aiobotocore.session
 from botocore.exceptions import ClientError
 
 from src.s3.core.s3_iam_client import S3IAMClient
@@ -39,11 +41,46 @@ SCOPING_USER = "inttest-bob"
 SCOPING_GROUP = "inttest-admins"
 POLICY_A = {
     "Version": "2012-10-17",
-    "Statement": [{"Effect": "Allow", "Action": ["s3:GetObject"], "Resource": ["arn:aws:s3:::bucket-a/*"]}],
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": ["s3:GetObject"],
+            "Resource": ["arn:aws:s3:::bucket-a/*"],
+        }
+    ],
 }
 POLICY_B = {
     "Version": "2012-10-17",
-    "Statement": [{"Effect": "Allow", "Action": ["s3:GetObject"], "Resource": ["arn:aws:s3:::bucket-b/*"]}],
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": ["s3:GetObject"],
+            "Resource": ["arn:aws:s3:::bucket-b/*"],
+        }
+    ],
+}
+
+# Policy enforcement test — a fresh user with credentials scoped to one path
+ENFORCEMENT_USER = "inttest-enforced"
+ENFORCEMENT_BUCKET = "inttest-bucket"
+ENFORCEMENT_ALLOWED_PREFIX = "allowed-path"
+ENFORCEMENT_DENIED_PREFIX = "denied-path"
+ENFORCEMENT_POLICY = {
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": ["s3:GetBucketLocation"],
+            "Resource": [f"arn:aws:s3:::{ENFORCEMENT_BUCKET}"],
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["s3:GetObject", "s3:PutObject"],
+            "Resource": [
+                f"arn:aws:s3:::{ENFORCEMENT_BUCKET}/{ENFORCEMENT_ALLOWED_PREFIX}/*"
+            ],
+        },
+    ],
 }
 
 passed = []
@@ -59,6 +96,20 @@ def fail(name, exc):
     print(f"  FAIL  {name}: {exc}")
     failed.append(name)
     traceback.print_exc()
+
+
+@asynccontextmanager
+async def s3_client_for(endpoint: str, access_key: str, secret_key: str):
+    """Raw aiobotocore S3 client for the given credentials."""
+    session = aiobotocore.session.get_session()
+    async with session.create_client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        use_ssl=False,
+    ) as s3:
+        yield s3
 
 
 async def run(client: S3IAMClient):
@@ -113,7 +164,9 @@ async def run(client: S3IAMClient):
 
     # ── User policies ─────────────────────────────────────────────────────────
     try:
-        result = await client.get_user_policy(USERNAME, POLICY_NAME_USER, except_if_absent=False)
+        result = await client.get_user_policy(
+            USERNAME, POLICY_NAME_USER, except_if_absent=False
+        )
         assert result is None, f"expected None, got {result}"
         ok("get_user_policy except_if_absent=False returns None when absent")
     except Exception as e:
@@ -121,7 +174,10 @@ async def run(client: S3IAMClient):
 
     try:
         await client.get_user_policy(USERNAME, POLICY_NAME_USER, except_if_absent=True)
-        fail("get_user_policy except_if_absent=True raises when absent", "no exception raised")
+        fail(
+            "get_user_policy except_if_absent=True raises when absent",
+            "no exception raised",
+        )
     except ClientError as e:
         if e.response["Error"]["Code"] == "NoSuchEntity":
             ok("get_user_policy except_if_absent=True raises when absent")
@@ -226,7 +282,9 @@ async def run(client: S3IAMClient):
 
     # ── Group policies ────────────────────────────────────────────────────────
     try:
-        result = await client.get_group_policy(GROUP, POLICY_NAME_GROUP, except_if_absent=False)
+        result = await client.get_group_policy(
+            GROUP, POLICY_NAME_GROUP, except_if_absent=False
+        )
         assert result is None
         ok("get_group_policy except_if_absent=False returns None when absent")
     except Exception as e:
@@ -234,7 +292,10 @@ async def run(client: S3IAMClient):
 
     try:
         await client.get_group_policy(GROUP, POLICY_NAME_GROUP, except_if_absent=True)
-        fail("get_group_policy except_if_absent=True raises when absent", "no exception raised")
+        fail(
+            "get_group_policy except_if_absent=True raises when absent",
+            "no exception raised",
+        )
     except ClientError as e:
         if e.response["Error"]["Code"] == "NoSuchEntity":
             ok("get_group_policy except_if_absent=True raises when absent")
@@ -298,6 +359,111 @@ async def run(client: S3IAMClient):
     except Exception as e:
         fail("policy scoping: cleanup", e)
 
+    # ── Policy enforcement (S3 data plane) ───────────────────────────────────
+    # Create a bucket as admin, give a fresh IAM user scoped credentials, then
+    # verify the policy actually gates S3 operations on the data plane.
+    try:
+        async with s3_client_for(ENDPOINT, ACCESS_KEY, SECRET_KEY) as admin_s3:
+            await admin_s3.create_bucket(Bucket=ENFORCEMENT_BUCKET)
+            # Seed an object in the denied path so GET failures are due to
+            # access control, not a missing key.
+            await admin_s3.put_object(
+                Bucket=ENFORCEMENT_BUCKET,
+                Key=f"{ENFORCEMENT_DENIED_PREFIX}/seed.txt",
+                Body=b"admin-seeded",
+            )
+        ok("policy enforcement: admin creates bucket and seeds denied-path object")
+    except Exception as e:
+        fail("policy enforcement: admin creates bucket and seeds denied-path object", e)
+
+    key_id, secret = None, None
+    try:
+        await client.create_user(ENFORCEMENT_USER)
+        key_id, secret = await client.rotate_access_key(ENFORCEMENT_USER)
+        await client.set_user_policy(
+            ENFORCEMENT_USER, POLICY_NAME_USER, ENFORCEMENT_POLICY
+        )
+        ok("policy enforcement: IAM user, key, and scoped policy created")
+    except Exception as e:
+        fail("policy enforcement: IAM user, key, and scoped policy created", e)
+
+    if key_id and secret:
+        try:
+            async with s3_client_for(ENDPOINT, key_id, secret) as user_s3:
+                await user_s3.put_object(
+                    Bucket=ENFORCEMENT_BUCKET,
+                    Key=f"{ENFORCEMENT_ALLOWED_PREFIX}/test.txt",
+                    Body=b"hello",
+                )
+            ok("policy enforcement: PUT to allowed path succeeds")
+        except Exception as e:
+            fail("policy enforcement: PUT to allowed path succeeds", e)
+
+        try:
+            async with s3_client_for(ENDPOINT, key_id, secret) as user_s3:
+                response = await user_s3.get_object(
+                    Bucket=ENFORCEMENT_BUCKET,
+                    Key=f"{ENFORCEMENT_ALLOWED_PREFIX}/test.txt",
+                )
+                body = await response["Body"].read()
+                assert body == b"hello", f"unexpected body: {body!r}"
+            ok("policy enforcement: GET from allowed path succeeds")
+        except Exception as e:
+            fail("policy enforcement: GET from allowed path succeeds", e)
+
+        try:
+            async with s3_client_for(ENDPOINT, key_id, secret) as user_s3:
+                await user_s3.put_object(
+                    Bucket=ENFORCEMENT_BUCKET,
+                    Key=f"{ENFORCEMENT_DENIED_PREFIX}/test.txt",
+                    Body=b"should be denied",
+                )
+            fail(
+                "policy enforcement: PUT to denied path is rejected",
+                "no exception raised",
+            )
+        except ClientError as e:
+            if e.response["Error"]["Code"] in ("AccessDenied", "403"):
+                ok("policy enforcement: PUT to denied path is rejected")
+            else:
+                fail("policy enforcement: PUT to denied path is rejected", e)
+        except Exception as e:
+            fail("policy enforcement: PUT to denied path is rejected", e)
+
+        try:
+            async with s3_client_for(ENDPOINT, key_id, secret) as user_s3:
+                await user_s3.get_object(
+                    Bucket=ENFORCEMENT_BUCKET,
+                    Key=f"{ENFORCEMENT_DENIED_PREFIX}/seed.txt",
+                )
+            fail(
+                "policy enforcement: GET from denied path is rejected",
+                "no exception raised",
+            )
+        except ClientError as e:
+            if e.response["Error"]["Code"] in ("AccessDenied", "403"):
+                ok("policy enforcement: GET from denied path is rejected")
+            else:
+                fail("policy enforcement: GET from denied path is rejected", e)
+        except Exception as e:
+            fail("policy enforcement: GET from denied path is rejected", e)
+
+    try:
+        await client.delete_user(ENFORCEMENT_USER)
+        async with s3_client_for(ENDPOINT, ACCESS_KEY, SECRET_KEY) as admin_s3:
+            for key in [
+                f"{ENFORCEMENT_ALLOWED_PREFIX}/test.txt",
+                f"{ENFORCEMENT_DENIED_PREFIX}/seed.txt",
+            ]:
+                try:
+                    await admin_s3.delete_object(Bucket=ENFORCEMENT_BUCKET, Key=key)
+                except Exception:
+                    pass
+            await admin_s3.delete_bucket(Bucket=ENFORCEMENT_BUCKET)
+        ok("policy enforcement: cleanup")
+    except Exception as e:
+        fail("policy enforcement: cleanup", e)
+
     # ── Cleanup / deletion ────────────────────────────────────────────────────
     try:
         await client.remove_user_from_group(USERNAME, GROUP)
@@ -327,7 +493,11 @@ async def run(client: S3IAMClient):
     # Use max_keys > Ceph's server key limit so every rotation once the limit is
     # reached exercises the LimitExceeded → delete-oldest → retry path.
     async with S3IAMClient(
-        ENDPOINT, ACCESS_KEY, SECRET_KEY, path_prefix=PATH_PREFIX, max_keys=ROTATION_MAX_KEYS
+        ENDPOINT,
+        ACCESS_KEY,
+        SECRET_KEY,
+        path_prefix=PATH_PREFIX,
+        max_keys=ROTATION_MAX_KEYS,
     ) as rot_client:
         await rot_client.create_user(ROTATION_USERNAME)
         try:
@@ -367,10 +537,22 @@ async def main():
                 await client.delete_user(ROTATION_USERNAME)
             if await client.user_exists(SCOPING_USER):
                 await client.delete_user(SCOPING_USER)
+            if await client.user_exists(ENFORCEMENT_USER):
+                await client.delete_user(ENFORCEMENT_USER)
             if await client.group_exists(GROUP):
                 await client.delete_group(GROUP)
             if await client.group_exists(SCOPING_GROUP):
                 await client.delete_group(SCOPING_GROUP)
+        async with s3_client_for(ENDPOINT, ACCESS_KEY, SECRET_KEY) as admin_s3:
+            try:
+                for key in [
+                    f"{ENFORCEMENT_ALLOWED_PREFIX}/test.txt",
+                    f"{ENFORCEMENT_DENIED_PREFIX}/seed.txt",
+                ]:
+                    await admin_s3.delete_object(Bucket=ENFORCEMENT_BUCKET, Key=key)
+                await admin_s3.delete_bucket(Bucket=ENFORCEMENT_BUCKET)
+            except Exception:
+                pass
     except Exception:
         pass
 
