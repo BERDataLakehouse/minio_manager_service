@@ -28,3 +28,15 @@ edge cases, and S3 data-plane policy enforcement (PUT/GET allowed and denied pat
 ```bash
 PYTHONPATH=src uv run python test_scripts/s3_iam_integration.py
 ```
+
+### `policy_manager_integration.py`
+
+Exercises the full public API of `PolicyManager` against the Ceph RadosGW and Redis
+instances defined in `docker-compose.yml`. Covers user and group policy lifecycle
+(`ensure_*`, `get_*`, `regenerate_*`), pure policy manipulation (`add/remove_path_access_to_policy`,
+`get_accessible_paths_from_policy`), and the distributed-lock read-modify-write path
+(`add/remove_path_access_for_target`).
+
+```bash
+PYTHONPATH=src uv run python test_scripts/policy_manager_integration.py
+```
