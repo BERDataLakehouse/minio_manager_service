@@ -9,8 +9,8 @@ from fastapi.openapi.models import HTTPBearer as HTTPBearerModel
 from fastapi.requests import Request
 from fastapi.security.http import HTTPBase
 
-from src.service import app_state, kb_auth
-from src.service.exceptions import MissingTokenError
+from service import app_state, kb_auth
+from service.exceptions import MissingTokenError
 
 # Modified from https://github.com/tiangolo/fastapi/blob/e13df8ee79d11ad8e338026d99b1dcdcb2261c9f/fastapi/security/http.py#L100
 # Basically the only reason for this class is to get the UI to work with auth.

@@ -27,4 +27,6 @@ COPY scripts/ scripts/
 
 EXPOSE 8000
 
-CMD ["uv", "run", "uvicorn", "--host", "0.0.0.0", "--port", "8000", "--factory", "src.main:create_application"]
+ENV PYTHONPATH=/app/src
+
+CMD ["uv", "run", "uvicorn", "--host", "0.0.0.0", "--port", "8000", "--factory", "main:create_application"]

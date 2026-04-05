@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.tenant_metadata.tenant_metadata_store import (
+from tenant_metadata.tenant_metadata_store import (
     TenantMetadataStore,
     _row_to_metadata,
     _row_to_steward,

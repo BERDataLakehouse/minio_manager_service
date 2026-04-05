@@ -12,16 +12,16 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.s3.models.policy import PolicyModel
-from src.s3.models.user import UserModel
-from ..service.app_state import get_app_state
-from src.s3.utils.governance import (
+from s3.models.policy import PolicyModel
+from s3.models.user import UserModel
+from service.app_state import get_app_state
+from s3.utils.governance import (
     generate_group_governance_prefix,
     generate_user_governance_prefix,
 )
-from ..service.dependencies import auth
-from ..service.exceptions import DataGovernanceError, GroupOperationError
-from ..service.kb_auth import KBaseUser
+from service.dependencies import auth
+from service.exceptions import DataGovernanceError, GroupOperationError
+from service.kb_auth import KBaseUser
 
 logger = logging.getLogger(__name__)
 

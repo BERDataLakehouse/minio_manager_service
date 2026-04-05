@@ -2,8 +2,8 @@
 
 from typing import List, Optional
 
-from ..models.command import AdminCommand, GroupAction, PolicyAction, UserAction
-from src.s3.utils.validators import validate_group_name, validate_username
+from minio.models.command import AdminCommand, GroupAction, PolicyAction, UserAction
+from s3.utils.validators import validate_group_name, validate_username
 
 
 class MinIOCommandBuilder:

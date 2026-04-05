@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from src.s3.models.tenant import TenantMetadataUpdate
+from s3.models.tenant import TenantMetadataUpdate
 
 
 class TestWebsiteValidation:

@@ -11,7 +11,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from src.s3.models.policy import (
+from s3.models.policy import (
     PolicyAction,
     PolicyDocument,
     PolicyEffect,

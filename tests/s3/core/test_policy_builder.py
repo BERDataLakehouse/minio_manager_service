@@ -7,8 +7,8 @@ No mocks needed - tests use real PolicyModel objects.
 
 import pytest
 
-from src.s3.core.policy_builder import PolicyBuilder
-from src.s3.models.policy import (
+from s3.core.policy_builder import PolicyBuilder
+from s3.models.policy import (
     PolicyAction,
     PolicyDocument,
     PolicyEffect,
@@ -16,7 +16,7 @@ from src.s3.models.policy import (
     PolicyPermissionLevel,
     PolicyStatement,
 )
-from src.service.exceptions import PolicyOperationError, PolicyValidationError
+from service.exceptions import PolicyOperationError, PolicyValidationError
 
 
 # =============================================================================

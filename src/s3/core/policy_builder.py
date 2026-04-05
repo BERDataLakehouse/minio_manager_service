@@ -5,15 +5,15 @@ Policy Builder module for modifying S3 policy documents.
 import logging
 import re
 
-from src.service.exceptions import PolicyOperationError
-from src.s3.models.policy import (
+from service.exceptions import PolicyOperationError
+from s3.models.policy import (
     PolicyAction,
     PolicyEffect,
     PolicyModel,
     PolicyPermissionLevel,
     PolicyStatement,
 )
-from src.s3.utils.validators import validate_s3_path
+from s3.utils.validators import validate_s3_path
 
 logger = logging.getLogger(__name__)
 

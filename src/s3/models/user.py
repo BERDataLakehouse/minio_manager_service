@@ -4,8 +4,8 @@ from typing import Annotated, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ..utils.validators import validate_username
-from .policy import PolicyModel
+from s3.utils.validators import validate_username
+from s3.models.policy import PolicyModel
 
 
 class BaseUserModel(BaseModel):

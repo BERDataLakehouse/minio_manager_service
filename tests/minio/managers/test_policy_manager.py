@@ -17,11 +17,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.minio.managers.policy_manager import PolicyManager
-from src.s3.core.s3_client import S3Client
-from src.minio.models.command import CommandResult
-from src.s3.models.s3_config import S3Config
-from src.s3.models.policy import (
+from minio.managers.policy_manager import PolicyManager
+from s3.core.s3_client import S3Client
+from minio.models.command import CommandResult
+from s3.models.s3_config import S3Config
+from s3.models.policy import (
     PolicyDocument,
     PolicyEffect,
     PolicyModel,
@@ -31,7 +31,7 @@ from src.s3.models.policy import (
     PolicyType,
     PolicyAction,
 )
-from src.service.exceptions import PolicyOperationError, PolicyValidationError
+from service.exceptions import PolicyOperationError, PolicyValidationError
 
 
 # =============================================================================
@@ -813,7 +813,7 @@ class TestPolicyAttachmentStatus:
         self, policy_manager, mock_executor
     ):
         """Test checking if user policies attached when one is missing."""
-        from src.minio.models.command import CommandResult
+        from minio.models.command import CommandResult
 
         # First call returns attached, second returns not attached
         responses = [
@@ -1199,7 +1199,7 @@ class TestCreateMinIOPolicy:
         self, policy_manager, sample_policy_model, mock_executor
     ):
         """Test creating policy writes JSON to temp file."""
-        from src.minio.models.command import CommandResult
+        from minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
@@ -1216,7 +1216,7 @@ class TestCreateMinIOPolicy:
         self, policy_manager, sample_policy_model, mock_executor
     ):
         """Test raises error when policy creation fails."""
-        from src.minio.models.command import CommandResult
+        from minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
@@ -1238,7 +1238,7 @@ class TestLoadMinIOPolicy:
     @pytest.mark.asyncio
     async def test_loads_policy_successfully(self, policy_manager, mock_executor):
         """Test loading policy from MinIO."""
-        from src.minio.models.command import CommandResult
+        from minio.models.command import CommandResult
 
         policy_response = {
             "Policy": {
@@ -1277,7 +1277,7 @@ class TestLoadMinIOPolicy:
     @pytest.mark.asyncio
     async def test_raises_on_command_failure(self, policy_manager, mock_executor):
         """Test raises error when command fails."""
-        from src.minio.models.command import CommandResult
+        from minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
@@ -1591,7 +1591,7 @@ class TestResourceExists:
     @pytest.mark.asyncio
     async def test_returns_true_when_exists(self, policy_manager, mock_executor):
         """Test resource_exists returns True when policy exists."""
-        from src.minio.models.command import CommandResult
+        from minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
@@ -1610,7 +1610,7 @@ class TestResourceExists:
     @pytest.mark.asyncio
     async def test_returns_false_when_not_exists(self, policy_manager, mock_executor):
         """Test resource_exists returns False when policy doesn't exist."""
-        from src.minio.models.command import CommandResult
+        from minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
@@ -1656,7 +1656,7 @@ class TestPolicyCreationExceptions:
     @pytest.mark.asyncio
     async def test_create_policy_model_handles_exception(self, policy_manager):
         """Test _create_policy_model handles and wraps exceptions."""
-        with patch("src.minio.managers.policy_manager.PolicyCreator") as mock_creator:
+        with patch("minio.managers.policy_manager.PolicyCreator") as mock_creator:
             mock_creator.side_effect = ValueError("Invalid policy configuration")
 
             with pytest.raises(PolicyOperationError, match="Failed to create"):
@@ -1943,7 +1943,7 @@ class TestRemovePathAccessErrors:
         self, policy_manager, sample_policy_model
     ):
         """Test remove_path_access_from_policy handles exceptions."""
-        with patch("src.minio.managers.policy_manager.PolicyBuilder") as mock_builder:
+        with patch("minio.managers.policy_manager.PolicyBuilder") as mock_builder:
             mock_builder.side_effect = Exception("Builder failed")
 
             with pytest.raises(

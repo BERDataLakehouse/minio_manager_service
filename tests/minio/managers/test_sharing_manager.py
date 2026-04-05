@@ -17,15 +17,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.minio.managers.sharing_manager import (
+from minio.managers.sharing_manager import (
     PathAccessInfo,
     SharingManager,
     SharingOperation,
     SharingResult,
     UnsharingResult,
 )
-from src.s3.models.policy import PolicyPermissionLevel, PolicyTarget
-from src.service.exceptions import DataGovernanceError, PolicyValidationError
+from s3.models.policy import PolicyPermissionLevel, PolicyTarget
+from service.exceptions import DataGovernanceError, PolicyValidationError
 
 
 # === FIXTURES ===

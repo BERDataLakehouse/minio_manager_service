@@ -13,18 +13,18 @@ from typing import List, Optional, Union
 
 from pydantic import BaseModel
 
-from ...service.exceptions import DataGovernanceError
-from src.s3.core.s3_client import S3Client
-from src.s3.models.s3_config import S3Config
-from src.s3.models.policy import PolicyPermissionLevel, PolicyTarget
-from src.s3.utils.validators import (
+from service.exceptions import DataGovernanceError
+from s3.core.s3_client import S3Client
+from s3.models.s3_config import S3Config
+from s3.models.policy import PolicyPermissionLevel, PolicyTarget
+from s3.utils.validators import (
     GROUP_POLICY_PREFIX,
     USER_HOME_POLICY_PREFIX,
     validate_s3_path,
 )
-from .group_manager import GroupManager
-from .policy_manager import PolicyManager
-from .user_manager import GLOBAL_USER_GROUP, UserManager
+from minio.managers.group_manager import GroupManager
+from minio.managers.policy_manager import PolicyManager
+from minio.managers.user_manager import GLOBAL_USER_GROUP, UserManager
 
 logger = logging.getLogger(__name__)
 

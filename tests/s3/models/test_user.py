@@ -1,6 +1,6 @@
 """Tests for the minio.models.user module."""
 
-from src.s3.models import user
+from s3.models import user
 
 
 def test_user_imports():

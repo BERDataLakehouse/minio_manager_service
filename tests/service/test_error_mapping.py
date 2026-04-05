@@ -2,9 +2,9 @@
 
 from fastapi import status
 
-from src.service.error_mapping import map_error
-from src.service.errors import ErrorType
-from src.service.exceptions import (
+from service.error_mapping import map_error
+from service.errors import ErrorType
+from service.exceptions import (
     S3Error,
     MissingTokenError,
     ValidationError,
@@ -13,7 +13,7 @@ from src.service.exceptions import (
 
 def test_error_mapping_imports():
     """Test that error_mapping module can be imported."""
-    from src.service import error_mapping
+    from service import error_mapping
 
     assert error_mapping is not None
 

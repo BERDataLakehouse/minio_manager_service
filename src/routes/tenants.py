@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from fastapi.security.utils import get_authorization_scheme_param
 
-from src.s3.models.tenant import (
+from s3.models.tenant import (
     TenantDetailResponse,
     TenantMemberResponse,
     TenantMetadataResponse,
@@ -16,9 +16,9 @@ from src.s3.models.tenant import (
     TenantStewardResponse,
     TenantSummaryResponse,
 )
-from src.service.app_state import get_app_state
-from src.service.dependencies import auth, require_admin, require_steward_or_admin
-from src.service.kb_auth import KBaseUser
+from service.app_state import get_app_state
+from service.dependencies import auth, require_admin, require_steward_or_admin
+from service.kb_auth import KBaseUser
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 
