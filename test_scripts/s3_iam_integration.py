@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 import aiobotocore.session
 from botocore.exceptions import ClientError
 
-from src.s3.core.s3_iam_client import S3IAMClient
+from s3.core.s3_iam_client import S3IAMClient
 
 ENDPOINT = "http://localhost:9050"
 ACCESS_KEY = "test_access_key"

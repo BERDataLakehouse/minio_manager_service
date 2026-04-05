@@ -13,7 +13,7 @@ from urllib.parse import quote
 import pytest
 from botocore.exceptions import ClientError
 
-from src.s3.core.s3_iam_client import S3IAMClient, _parse_policy
+from s3.core.s3_iam_client import S3IAMClient, _parse_policy
 
 
 # =============================================================================

@@ -26,5 +26,5 @@ inline policy round-trips, access key rotation, the `exists_ok` / `except_if_abs
 edge cases, and S3 data-plane policy enforcement (PUT/GET allowed and denied paths).
 
 ```bash
-PYTHONPATH=. uv run python test_scripts/s3_iam_integration.py
+PYTHONPATH=src uv run python test_scripts/s3_iam_integration.py
 ```
