@@ -12,6 +12,7 @@ import aiobotocore.session
 from botocore.exceptions import ClientError
 
 from s3.core.s3_iam_client import S3IAMClient
+from s3.exceptions import IamPolicyNotFoundError
 
 ENDPOINT = "http://localhost:9050"
 ACCESS_KEY = "test_access_key"
@@ -178,11 +179,8 @@ async def run(client: S3IAMClient):
             "get_user_policy except_if_absent=True raises when absent",
             "no exception raised",
         )
-    except ClientError as e:
-        if e.response["Error"]["Code"] == "NoSuchEntity":
-            ok("get_user_policy except_if_absent=True raises when absent")
-        else:
-            fail("get_user_policy except_if_absent=True raises when absent", e)
+    except IamPolicyNotFoundError:
+        ok("get_user_policy except_if_absent=True raises when absent")
     except Exception as e:
         fail("get_user_policy except_if_absent=True raises when absent", e)
 
@@ -296,11 +294,8 @@ async def run(client: S3IAMClient):
             "get_group_policy except_if_absent=True raises when absent",
             "no exception raised",
         )
-    except ClientError as e:
-        if e.response["Error"]["Code"] == "NoSuchEntity":
-            ok("get_group_policy except_if_absent=True raises when absent")
-        else:
-            fail("get_group_policy except_if_absent=True raises when absent", e)
+    except IamPolicyNotFoundError:
+        ok("get_group_policy except_if_absent=True raises when absent")
     except Exception as e:
         fail("get_group_policy except_if_absent=True raises when absent", e)
 

@@ -8,6 +8,8 @@ from urllib.parse import unquote
 import aiobotocore.session
 from botocore.exceptions import ClientError
 
+from s3.exceptions import IamPolicyNotFoundError
+
 logger = logging.getLogger(__name__)
 
 
@@ -286,8 +288,12 @@ class S3IAMClient:
                 UserName=username, PolicyName=policy_name
             )
         except ClientError as e:
-            if not except_if_absent and e.response["Error"]["Code"] == "NoSuchEntity":
-                return None
+            if e.response["Error"]["Code"] == "NoSuchEntity":
+                if not except_if_absent:
+                    return None
+                raise IamPolicyNotFoundError(
+                    f"Policy '{policy_name}' not found for user '{username}'"
+                ) from e
             raise
         return _parse_policy(resp["PolicyDocument"])
 
@@ -327,8 +333,12 @@ class S3IAMClient:
                 GroupName=group_name, PolicyName=policy_name
             )
         except ClientError as e:
-            if not except_if_absent and e.response["Error"]["Code"] == "NoSuchEntity":
-                return None
+            if e.response["Error"]["Code"] == "NoSuchEntity":
+                if not except_if_absent:
+                    return None
+                raise IamPolicyNotFoundError(
+                    f"Policy '{policy_name}' not found for group '{group_name}'"
+                ) from e
             raise
         return _parse_policy(resp["PolicyDocument"])
 

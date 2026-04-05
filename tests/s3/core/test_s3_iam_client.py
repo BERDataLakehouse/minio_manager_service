@@ -14,6 +14,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from s3.core.s3_iam_client import S3IAMClient, _parse_policy
+from s3.exceptions import IamPolicyNotFoundError
 
 
 # =============================================================================
@@ -549,7 +550,7 @@ async def test_get_user_policy_absent_except_if_absent_true_raises(
     mock_iam_boto_client.get_user_policy = AsyncMock(
         side_effect=no_such_entity("GetUserPolicy")
     )
-    with pytest.raises(ClientError):
+    with pytest.raises(IamPolicyNotFoundError):
         await iam_client.get_user_policy("alice", "home", except_if_absent=True)
 
 
@@ -603,7 +604,7 @@ async def test_get_group_policy_absent_except_if_absent_true_raises(
     mock_iam_boto_client.get_group_policy = AsyncMock(
         side_effect=no_such_entity("GetGroupPolicy")
     )
-    with pytest.raises(ClientError):
+    with pytest.raises(IamPolicyNotFoundError):
         await iam_client.get_group_policy("researchers", "group", except_if_absent=True)
 
 
