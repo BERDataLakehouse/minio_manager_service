@@ -16,25 +16,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from src.main import create_application
-from src.s3.core.s3_client import S3Client
-from src.minio.managers.group_manager import GroupManager
-from src.minio.managers.policy_manager import PolicyManager
-from src.minio.managers.user_manager import UserManager
-from src.s3.models.s3_config import S3Config
-from src.s3.models.policy import (
+from main import create_application
+from s3.core.s3_client import S3Client
+from minio.managers.group_manager import GroupManager
+from minio.managers.policy_manager import PolicyManager
+from minio.managers.user_manager import UserManager
+from s3.models.s3_config import S3Config
+from s3.models.policy import (
     PolicyDocument,
     PolicyEffect,
     PolicyModel,
     PolicyStatement,
     PolicyType,
 )
-from src.s3.models.user import UserModel
-from src.s3.models.group import GroupModel
-from src.credentials.store import CredentialStore
-from src.service.dependencies import auth
-from src.service.exceptions import PolicyOperationError
-from src.service.kb_auth import AdminPermission, KBaseUser
+from s3.models.user import UserModel
+from s3.models.group import GroupModel
+from credentials.store import CredentialStore
+from service.dependencies import auth
+from service.exceptions import PolicyOperationError
+from service.kb_auth import AdminPermission, KBaseUser
 
 
 # =============================================================================

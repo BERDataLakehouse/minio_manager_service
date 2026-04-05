@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from src.service.dependencies import require_admin, require_steward_or_admin
-from src.service.kb_auth import AdminPermission, KBaseUser
+from service.dependencies import require_admin, require_steward_or_admin
+from service.kb_auth import AdminPermission, KBaseUser
 
 
 class TestRequireAdmin:

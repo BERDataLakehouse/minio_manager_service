@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.s3.utils.validators import (
+from s3.utils.validators import (
     validate_username,
     validate_group_name,
     validate_bucket_name,
@@ -15,7 +15,7 @@ from src.s3.utils.validators import (
     USER_SYSTEM_POLICY_PREFIX,
     GROUP_POLICY_PREFIX,
 )
-from src.service.exceptions import (
+from service.exceptions import (
     UserOperationError,
     GroupOperationError,
     BucketValidationError,

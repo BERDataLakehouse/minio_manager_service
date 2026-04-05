@@ -6,9 +6,9 @@ and KBaseUserProfileClient (KBase Auth + local profiles).
 
 import logging
 
-from src.minio.managers.group_manager import GroupManager
-from src.s3.models.s3_config import S3Config
-from src.s3.models.tenant import (
+from minio.managers.group_manager import GroupManager
+from s3.models.s3_config import S3Config
+from s3.models.tenant import (
     TenantDetailResponse,
     TenantMemberResponse,
     TenantMetadataResponse,
@@ -18,16 +18,16 @@ from src.s3.models.tenant import (
     TenantSummaryResponse,
     UserProfile,
 )
-from src.s3.utils.validators import validate_group_name
-from src.service.exceptions import (
+from s3.utils.validators import validate_group_name
+from service.exceptions import (
     GroupOperationError,
     TenantAuthorizationError,
     TenantNotFoundError,
     TenantOperationError,
 )
-from src.service.kb_auth import AdminPermission, KBaseUser
-from src.tenant_metadata.kbase_profile_client import KBaseUserProfileClient
-from src.tenant_metadata.tenant_metadata_store import TenantMetadataStore
+from service.kb_auth import AdminPermission, KBaseUser
+from tenant_metadata.kbase_profile_client import KBaseUserProfileClient
+from tenant_metadata.tenant_metadata_store import TenantMetadataStore
 
 logger = logging.getLogger(__name__)
 

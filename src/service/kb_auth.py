@@ -15,11 +15,11 @@ from typing import TYPE_CHECKING, NamedTuple, Self
 import aiohttp
 from cacheout.lru import LRUCache
 
-from src.service.arg_checkers import not_falsy as _not_falsy
-from src.service.exceptions import InvalidTokenError, MissingRoleError
+from service.arg_checkers import not_falsy as _not_falsy
+from service.exceptions import InvalidTokenError, MissingRoleError
 
 if TYPE_CHECKING:
-    from src.tenant_metadata.user_profile_store import UserProfileStore
+    from tenant_metadata.user_profile_store import UserProfileStore
 
 
 class AdminPermission(IntEnum):

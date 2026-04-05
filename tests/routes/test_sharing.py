@@ -21,13 +21,13 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.minio.managers.sharing_manager import (
+from minio.managers.sharing_manager import (
     PathAccessInfo,
     SharingResult,
     UnsharingResult,
 )
-from src.s3.models.policy import PolicyPermissionLevel
-from src.routes.sharing import (
+from s3.models.policy import PolicyPermissionLevel
+from routes.sharing import (
     PathAccessResponse,
     PathRequest,
     PublicAccessResponse,
@@ -42,10 +42,10 @@ from src.routes.sharing import (
     share_data,
     unshare_data,
 )
-from src.service.dependencies import auth
-from src.service.exception_handlers import universal_error_handler
-from src.service.exceptions import DataGovernanceError, PolicyValidationError
-from src.service.kb_auth import AdminPermission, KBaseUser
+from service.dependencies import auth
+from service.exception_handlers import universal_error_handler
+from service.exceptions import DataGovernanceError, PolicyValidationError
+from service.kb_auth import AdminPermission, KBaseUser
 
 # === FIXTURES ===
 
@@ -150,7 +150,7 @@ def test_app(mock_app_state, mock_auth_user):
 @pytest.fixture
 def client(test_app, mock_app_state):
     """Create a test client with get_app_state patched."""
-    with patch("src.routes.sharing.get_app_state", return_value=mock_app_state):
+    with patch("routes.sharing.get_app_state", return_value=mock_app_state):
         yield TestClient(test_app, raise_server_exceptions=False)
 
 
@@ -664,7 +664,7 @@ class TestSharingFunctionsAsync:
         mock_app_state = MagicMock()
         mock_app_state.sharing_manager = mock_sharing_manager
 
-        with patch("src.routes.sharing.get_app_state", return_value=mock_app_state):
+        with patch("routes.sharing.get_app_state", return_value=mock_app_state):
             share_request = ShareRequest(
                 path="s3a://bucket/data/",
                 with_users=["alice"],
@@ -684,7 +684,7 @@ class TestSharingFunctionsAsync:
         mock_app_state = MagicMock()
         mock_app_state.sharing_manager = mock_sharing_manager
 
-        with patch("src.routes.sharing.get_app_state", return_value=mock_app_state):
+        with patch("routes.sharing.get_app_state", return_value=mock_app_state):
             unshare_request = UnshareRequest(
                 path="s3a://bucket/data/",
                 from_users=["alice"],
@@ -705,7 +705,7 @@ class TestSharingFunctionsAsync:
         mock_app_state = MagicMock()
         mock_app_state.sharing_manager = mock_sharing_manager
 
-        with patch("src.routes.sharing.get_app_state", return_value=mock_app_state):
+        with patch("routes.sharing.get_app_state", return_value=mock_app_state):
             path_request = PathRequest(path="s3a://bucket/data/")
             user = KBaseUser(user="owner", admin_perm=AdminPermission.FULL)
 
@@ -721,7 +721,7 @@ class TestSharingFunctionsAsync:
         mock_app_state = MagicMock()
         mock_app_state.sharing_manager = mock_sharing_manager
 
-        with patch("src.routes.sharing.get_app_state", return_value=mock_app_state):
+        with patch("routes.sharing.get_app_state", return_value=mock_app_state):
             path_request = PathRequest(path="s3a://bucket/data/")
             user = KBaseUser(user="owner", admin_perm=AdminPermission.FULL)
 
@@ -737,7 +737,7 @@ class TestSharingFunctionsAsync:
         mock_app_state = MagicMock()
         mock_app_state.sharing_manager = mock_sharing_manager
 
-        with patch("src.routes.sharing.get_app_state", return_value=mock_app_state):
+        with patch("routes.sharing.get_app_state", return_value=mock_app_state):
             path_request = PathRequest(path="s3a://bucket/data/")
             user = KBaseUser(user="owner", admin_perm=AdminPermission.FULL)
 
@@ -766,7 +766,7 @@ class TestSharingErrorHandling:
         mock_app_state = MagicMock()
         mock_app_state.sharing_manager = mock_sharing_manager
 
-        with patch("src.routes.sharing.get_app_state", return_value=mock_app_state):
+        with patch("routes.sharing.get_app_state", return_value=mock_app_state):
             path_request = PathRequest(path="s3a://bucket/data/")
             user = KBaseUser(user="unauthorized", admin_perm=AdminPermission.FULL)
 

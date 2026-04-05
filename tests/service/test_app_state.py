@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 
-from src.service import app_state
-from src.service.app_state import (
+from service import app_state
+from service.app_state import (
     AppState,
     RequestState,
     _get_app_state_from_app,
@@ -17,7 +17,7 @@ from src.service.app_state import (
     get_request_user,
     set_request_user,
 )
-from src.service.kb_auth import AdminPermission, KBaseUser
+from service.kb_auth import AdminPermission, KBaseUser
 
 
 def test_app_state_imports():
@@ -158,16 +158,16 @@ class TestBuildApp:
 
         with (
             patch.dict(os.environ, env, clear=False),
-            patch("src.service.app_state.run_migrations") as mock_migrate,
+            patch("service.app_state.run_migrations") as mock_migrate,
             patch(
-                "src.service.app_state.KBaseAuth.create", new_callable=AsyncMock
+                "service.app_state.KBaseAuth.create", new_callable=AsyncMock
             ) as mock_auth,
             patch(
-                "src.service.app_state.S3Client.create", new_callable=AsyncMock
+                "service.app_state.S3Client.create", new_callable=AsyncMock
             ) as mock_mc,
-            patch("src.service.app_state.DistributedLockManager") as mock_lock_cls,
+            patch("service.app_state.DistributedLockManager") as mock_lock_cls,
             patch(
-                "src.service.app_state.DatabasePool.create", new_callable=AsyncMock
+                "service.app_state.DatabasePool.create", new_callable=AsyncMock
             ) as mock_db_create,
         ):
             mock_auth.return_value = MagicMock()
@@ -209,17 +209,17 @@ class TestBuildApp:
 
         with (
             patch.dict(os.environ, env, clear=False),
-            patch("src.service.app_state.run_migrations"),
+            patch("service.app_state.run_migrations"),
             patch(
-                "src.service.app_state.DatabasePool.create", new_callable=AsyncMock
+                "service.app_state.DatabasePool.create", new_callable=AsyncMock
             ) as mock_db_create,
             patch(
-                "src.service.app_state.KBaseAuth.create", new_callable=AsyncMock
+                "service.app_state.KBaseAuth.create", new_callable=AsyncMock
             ) as mock_auth,
             patch(
-                "src.service.app_state.S3Client.create", new_callable=AsyncMock
+                "service.app_state.S3Client.create", new_callable=AsyncMock
             ) as mock_mc,
-            patch("src.service.app_state.DistributedLockManager") as mock_lock_cls,
+            patch("service.app_state.DistributedLockManager") as mock_lock_cls,
         ):
             mock_db_create.return_value = mock_db_pool
             mock_auth.return_value = MagicMock()

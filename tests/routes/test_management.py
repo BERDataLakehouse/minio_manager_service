@@ -18,9 +18,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.s3.models.policy import PolicyDocument, PolicyModel, PolicyTarget
-from src.s3.models.user import UserModel
-from src.routes.management import (
+from s3.models.policy import PolicyDocument, PolicyModel, PolicyTarget
+from s3.models.user import UserModel
+from routes.management import (
     GroupManagementResponse,
     GroupNamesResponse,
     ResourceDeleteResponse,
@@ -34,9 +34,9 @@ from src.routes.management import (
     list_users,
     router,
 )
-from src.service.dependencies import auth, require_admin
-from src.service.exception_handlers import universal_error_handler
-from src.service.kb_auth import AdminPermission, KBaseUser
+from service.dependencies import auth, require_admin
+from service.exception_handlers import universal_error_handler
+from service.kb_auth import AdminPermission, KBaseUser
 
 
 # === FIXTURES ===
@@ -170,7 +170,7 @@ def test_app(mock_app_state, mock_admin_user):
 @pytest.fixture
 def client(test_app, mock_app_state):
     """Create a test client with get_app_state patched."""
-    with patch("src.routes.management.get_app_state", return_value=mock_app_state):
+    with patch("routes.management.get_app_state", return_value=mock_app_state):
         yield TestClient(test_app, raise_server_exceptions=False)
 
 
@@ -429,7 +429,7 @@ class TestListGroupNamesEndpoint:
     @pytest.fixture
     def client_regular_user(self, test_app_with_regular_auth, mock_app_state):
         """Create a test client authenticated as regular user."""
-        with patch("src.routes.management.get_app_state", return_value=mock_app_state):
+        with patch("routes.management.get_app_state", return_value=mock_app_state):
             yield TestClient(test_app_with_regular_auth, raise_server_exceptions=False)
 
     def test_list_group_names_success(self, client_regular_user, mock_app_state):
@@ -503,7 +503,7 @@ class TestListGroupNamesEndpoint:
 
         mock_app_state.group_manager.list_resources.return_value = ["g1", "g2"]
 
-        with patch("src.routes.management.get_app_state", return_value=mock_app_state):
+        with patch("routes.management.get_app_state", return_value=mock_app_state):
             response = await list_group_names(mock_request, mock_user)
 
             assert response.group_names == ["g1", "g2"]
@@ -661,7 +661,7 @@ class TestManagementFunctionsAsync:
 
         mock_request = MagicMock()
 
-        with patch("src.routes.management.get_app_state", return_value=mock_app_state):
+        with patch("routes.management.get_app_state", return_value=mock_app_state):
             response = await list_users(
                 mock_request, mock_admin_user, page=1, page_size=50
             )
@@ -674,7 +674,7 @@ class TestManagementFunctionsAsync:
 
         mock_request = MagicMock()
 
-        with patch("src.routes.management.get_app_state", return_value=mock_app_state):
+        with patch("routes.management.get_app_state", return_value=mock_app_state):
             response = await create_user("newuser", mock_request, mock_admin_user)
 
             assert response.username == "newuser"
@@ -696,7 +696,7 @@ class TestManagementFunctionsAsync:
             "Detach error"
         )
 
-        with patch("src.routes.management.get_app_state", return_value=mock_app_state):
+        with patch("routes.management.get_app_state", return_value=mock_app_state):
             # Should not raise, just log warning
             response = await delete_policy("test-policy", mock_request, mock_admin_user)
 
@@ -865,7 +865,7 @@ class TestListUserNamesEndpoint:
 
         mock_app_state.user_manager.list_resources.return_value = ["a", "b"]
 
-        with patch("src.routes.management.get_app_state", return_value=mock_app_state):
+        with patch("routes.management.get_app_state", return_value=mock_app_state):
             response = await list_user_names(mock_request, mock_user)
 
             assert response.usernames == ["a", "b"]
@@ -890,9 +890,7 @@ class TestRegeneratePoliciesEndpoint:
 
     @pytest.fixture
     def migration_client(self, test_app, migration_app_state):
-        with patch(
-            "src.routes.management.get_app_state", return_value=migration_app_state
-        ):
+        with patch("routes.management.get_app_state", return_value=migration_app_state):
             yield TestClient(test_app, raise_server_exceptions=False)
 
     def test_regenerate_policies_success(self, migration_client, migration_app_state):

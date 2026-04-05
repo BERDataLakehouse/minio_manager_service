@@ -6,14 +6,14 @@ import string
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from ...service.exceptions import UserOperationError
-from src.s3.core.s3_client import S3Client
-from src.s3.core.policy_creator import SYSTEM_RESOURCE_CONFIG
-from ..models.command import UserAction
-from src.s3.models.s3_config import S3Config
-from src.s3.models.user import UserModel
-from src.s3.utils.validators import validate_username
-from .resource_manager import ResourceManager
+from service.exceptions import UserOperationError
+from s3.core.s3_client import S3Client
+from s3.core.policy_creator import SYSTEM_RESOURCE_CONFIG
+from minio.models.command import UserAction
+from s3.models.s3_config import S3Config
+from s3.models.user import UserModel
+from s3.utils.validators import validate_username
+from minio.managers.resource_manager import ResourceManager
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class UserManager(ResourceManager[UserModel]):
             PolicyManager: Initialized PolicyManager instance for policy operations
         """
         if self._policy_manager is None:
-            from .policy_manager import PolicyManager
+            from minio.managers.policy_manager import PolicyManager
 
             self._policy_manager = PolicyManager(self.client, self.config)
         return self._policy_manager
@@ -67,7 +67,7 @@ class UserManager(ResourceManager[UserModel]):
             GroupManager: Initialized GroupManager instance for group operations
         """
         if self._group_manager is None:
-            from .group_manager import GroupManager
+            from minio.managers.group_manager import GroupManager
 
             self._group_manager = GroupManager(self.client, self.config)
         return self._group_manager

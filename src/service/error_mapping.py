@@ -7,8 +7,8 @@ Map errors from exception type to custom error type and HTTP status.
 from typing import NamedTuple
 
 from fastapi import status
-from src.service.errors import ErrorType
-from src.service.exceptions import (  # MinIO specific exceptions
+from service.errors import ErrorType
+from service.exceptions import (  # MinIO specific exceptions
     AuthenticationError,
     BucketOperationError,
     BucketValidationError,

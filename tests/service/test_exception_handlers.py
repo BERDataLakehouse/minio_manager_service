@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
 
-from src.service.exception_handlers import _format_error, universal_error_handler
-from src.service.exceptions import (
+from service.exception_handlers import _format_error, universal_error_handler
+from service.exceptions import (
     InvalidTokenError,
     MissingTokenError,
     PolicyOperationError,

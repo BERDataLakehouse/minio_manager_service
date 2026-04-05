@@ -11,11 +11,11 @@ from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Generic, List, Optional, TypeVar
 
-from ...service.exceptions import S3ManagerError
-from ..core.base_executor import BaseMinIOExecutor
-from ..core.command_builder import MinIOCommandBuilder
-from src.s3.core.s3_client import S3Client
-from src.s3.models.s3_config import S3Config
+from service.exceptions import S3ManagerError
+from minio.core.base_executor import BaseMinIOExecutor
+from minio.core.command_builder import MinIOCommandBuilder
+from s3.core.s3_client import S3Client
+from s3.models.s3_config import S3Config
 
 # Generic type for resource models
 T = TypeVar("T")

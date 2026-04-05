@@ -10,8 +10,8 @@ import pytest
 from botocore.exceptions import ClientError
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.s3.core.s3_client import S3Client, MAX_LIST_OBJECTS_COUNT
-from src.service.exceptions import BucketOperationError, ConnectionError
+from s3.core.s3_client import S3Client, MAX_LIST_OBJECTS_COUNT
+from service.exceptions import BucketOperationError, ConnectionError
 
 
 # =============================================================================

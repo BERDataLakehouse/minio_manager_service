@@ -2,9 +2,9 @@
 
 import pytest
 
-from src.minio.core.command_builder import MinIOCommandBuilder
-from src.minio.models.command import GroupAction, PolicyAction, UserAction
-from src.service.exceptions import GroupOperationError, UserOperationError
+from minio.core.command_builder import MinIOCommandBuilder
+from minio.models.command import GroupAction, PolicyAction, UserAction
+from service.exceptions import GroupOperationError, UserOperationError
 
 
 # =============================================================================

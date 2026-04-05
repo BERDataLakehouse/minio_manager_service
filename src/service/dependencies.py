@@ -6,9 +6,9 @@ import logging
 
 from fastapi import Depends, HTTPException, Request, status
 
-from src.service.app_state import get_app_state
-from src.service.http_bearer import KBaseHTTPBearer
-from src.service.kb_auth import AdminPermission, KBaseUser
+from service.app_state import get_app_state
+from service.http_bearer import KBaseHTTPBearer
+from service.kb_auth import AdminPermission, KBaseUser
 
 logger = logging.getLogger(__name__)
 

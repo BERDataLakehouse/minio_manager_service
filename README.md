@@ -140,13 +140,13 @@ uv run alembic --help
 uv sync --locked
 
 # Run all tests
-PYTHONPATH=. uv run pytest tests
+uv run pytest tests
 
 # Run with coverage
-PYTHONPATH=. uv run pytest --cov=src tests/
+uv run pytest --cov=src tests/
 
 # Run specific tests
-PYTHONPATH=. uv run pytest tests/routes/test_credentials.py -v
+uv run pytest tests/routes/test_credentials.py -v
 ```
 
 ## Documentation

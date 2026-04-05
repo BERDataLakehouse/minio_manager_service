@@ -16,9 +16,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..service.app_state import get_app_state
-from ..service.dependencies import auth
-from ..service.kb_auth import KBaseUser
+from service.app_state import get_app_state
+from service.dependencies import auth
+from service.kb_auth import KBaseUser
 
 logger = logging.getLogger(__name__)
 
