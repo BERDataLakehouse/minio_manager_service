@@ -29,6 +29,17 @@ edge cases, and S3 data-plane policy enforcement (PUT/GET allowed and denied pat
 PYTHONPATH=src uv run python test_scripts/s3_iam_integration.py
 ```
 
+### `s3_client_integration.py`
+
+Exercises `S3Client` against the CEPH instance defined in `docker-compose.yml`.
+Note: MinIO raises on duplicate bucket creation; Ceph silently succeeds.
+Currently covers `create_bucket` (including `exists_ok` behaviour).
+See the TODO at the top of the file for methods still to be covered.
+
+```bash
+PYTHONPATH=src uv run python test_scripts/s3_client_integration.py
+```
+
 ### `policy_manager_integration.py`
 
 Exercises the full public API of `PolicyManager` against the Ceph RadosGW and Redis
