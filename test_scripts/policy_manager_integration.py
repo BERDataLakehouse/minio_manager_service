@@ -281,18 +281,22 @@ async def run(client: S3IAMClient, pm: PolicyManager):
 
     try:
         # Alter GROUP_RO's policy to something different so regenerate must overwrite it
-        await client.set_group_policy(GROUP_RO, "group", {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Action": "s3:PutObject",
-                    "Resource": "arn:aws:s3:::altered-bucket/*",
-                }
-            ],
-        })
+        await client.set_group_policy(
+            GROUP_RO,
+            "group",
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": "s3:PutObject",
+                        "Resource": "arn:aws:s3:::altered-bucket/*",
+                    }
+                ],
+            },
+        )
         mod = await pm.get_group_policy(GROUP_RO)
-        assert mod != ro_with_target 
+        assert mod != ro_with_target
         regen_target = await pm.regenerate_group_home_policy(
             GROUP_RO, read_only=True, path_target=GROUP
         )
@@ -309,9 +313,10 @@ async def run(client: S3IAMClient, pm: PolicyManager):
             "path_target policy must not grant read access to GROUP_RO paths"
         )
         refetched = await pm.get_group_policy(GROUP_RO)
-        assert refetched.policy_document.statement == regen_target.policy_document.statement, (
-            "regenerated read_only path_target policy must be persisted"
-        )
+        assert (
+            refetched.policy_document.statement
+            == regen_target.policy_document.statement
+        ), "regenerated read_only path_target policy must be persisted"
         ok("regenerate_group_home_policy read_only with path_target")
     except Exception as e:
         fail("regenerate_group_home_policy read_only with path_target", e)
