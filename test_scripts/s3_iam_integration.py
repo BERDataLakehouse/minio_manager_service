@@ -274,6 +274,16 @@ async def run(client: S3IAMClient):
         fail("add_user_to_group", e)
 
     try:
+        await client.add_user_to_group(USERNAME, GROUP)
+        members = await client.list_users_in_group(GROUP)
+        assert members.count(USERNAME) == 1, (
+            f"expected exactly one entry, got {members}"
+        )
+        ok("add_user_to_group is idempotent for existing member")
+    except Exception as e:
+        fail("add_user_to_group is idempotent for existing member", e)
+
+    try:
         members = await client.list_users_in_group(GROUP)
         assert USERNAME in members, f"{USERNAME} not in {members}"
         ok("list_users_in_group")
@@ -476,6 +486,14 @@ async def run(client: S3IAMClient):
         ok("remove_user_from_group")
     except Exception as e:
         fail("remove_user_from_group", e)
+
+    try:
+        await client.remove_user_from_group(USERNAME, GROUP)
+        members = await client.list_users_in_group(GROUP)
+        assert USERNAME not in members, f"expected no entry, got {members}"
+        ok("remove_user_from_group is idempotent for non-member")
+    except Exception as e:
+        fail("remove_user_from_group is idempotent for non-member", e)
 
     try:
         await client.delete_group(GROUP)
