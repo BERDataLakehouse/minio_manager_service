@@ -198,9 +198,10 @@ async def run(client: S3IAMClient):
         fail("get_user_policy roundtrip", e)
 
     # ── Access key rotation ───────────────────────────────────────────────────
+    key_id, key_id2 = "", ""
     try:
-        key_id, secret = await client.rotate_access_key(USERNAME)
-        assert key_id and secret
+        key_id, _ = await client.rotate_access_key(USERNAME)
+        assert key_id
         ok("rotate_access_key (first key)")
     except Exception as e:
         fail("rotate_access_key (first key)", e)
@@ -211,6 +212,14 @@ async def run(client: S3IAMClient):
         ok("rotate_access_key (rotation produces new key)")
     except Exception as e:
         fail("rotate_access_key (rotation produces new key)", e)
+
+    try:
+        ids = await client.list_access_key_ids(USERNAME)
+        assert key_id2 in ids, f"current key {key_id2} not in {ids}"
+        assert ids[0] == key_id2, f"expected active key first, got {ids}"
+        ok("list_access_key_ids returns current active key first")
+    except Exception as e:
+        fail("list_access_key_ids returns current active key first", e)
 
     # ── Groups ────────────────────────────────────────────────────────────────
     try:

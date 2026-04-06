@@ -361,6 +361,13 @@ class S3IAMClient:
 
     # ── Access keys ──────────────────────────────────────────────────────────
 
+    async def list_access_key_ids(self, username: str) -> list[str]:
+        """Return the active access key IDs for a user, most recently created first."""
+        resp = await self._client.list_access_keys(UserName=username)
+        keys = [k for k in resp["AccessKeyMetadata"] if k["Status"] == "Active"]
+        keys.sort(key=lambda k: k["CreateDate"], reverse=True)
+        return [k["AccessKeyId"] for k in keys]
+
     async def _delete_access_key(self, username: str, key_id: str) -> None:
         # make it a noop if the key doesn't exist
         try:

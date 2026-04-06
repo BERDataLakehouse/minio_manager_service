@@ -651,6 +651,42 @@ async def test_set_group_policy(iam_client, mock_iam_boto_client):
 
 
 @pytest.mark.asyncio
+async def test_list_access_key_ids_returns_only_active_keys(
+    iam_client, mock_iam_boto_client
+):
+    """Inactive keys are excluded; active keys are returned most-recently-created first."""
+    now = datetime.now(timezone.utc)
+    mock_iam_boto_client.list_access_keys = AsyncMock(
+        return_value={
+            "AccessKeyMetadata": [
+                {"AccessKeyId": "INACTIVE1", "Status": "Inactive", "CreateDate": now},
+                {
+                    "AccessKeyId": "ACTIVE_OLD",
+                    "Status": "Active",
+                    "CreateDate": now - timedelta(days=1),
+                },
+                {
+                    "AccessKeyId": "ACTIVE_NEW",
+                    "Status": "Active",
+                    "CreateDate": now,
+                },
+            ]
+        }
+    )
+    result = await iam_client.list_access_key_ids("alice")
+    assert result == ["ACTIVE_NEW", "ACTIVE_OLD"]
+    mock_iam_boto_client.list_access_keys.assert_called_once_with(UserName="alice")
+
+
+@pytest.mark.asyncio
+async def test_list_access_key_ids_empty(iam_client, mock_iam_boto_client):
+    mock_iam_boto_client.list_access_keys = AsyncMock(
+        return_value={"AccessKeyMetadata": []}
+    )
+    assert await iam_client.list_access_key_ids("alice") == []
+
+
+@pytest.mark.asyncio
 async def test_rotate_access_key_no_existing_keys(iam_client, mock_iam_boto_client):
     """First key creation for a new user — no cleanup needed."""
     now = datetime.now(timezone.utc)
