@@ -12,15 +12,15 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.routes.credentials import (
+from routes.credentials import (
     CredentialsResponse,
     get_credentials,
     rotate_credentials,
     router,
 )
-from src.service.app_state import AppState
-from src.service.dependencies import auth
-from src.service.kb_auth import AdminPermission, KBaseUser
+from service.app_state import AppState
+from service.dependencies import auth
+from service.kb_auth import AdminPermission, KBaseUser
 
 
 # === FIXTURES ===
@@ -68,7 +68,7 @@ def test_app(mock_app_state, mock_auth_user):
 @pytest.fixture
 def client(test_app, mock_app_state):
     """Create a test client with get_app_state patched."""
-    with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+    with patch("routes.credentials.get_app_state", return_value=mock_app_state):
         yield TestClient(test_app)
 
 
@@ -168,7 +168,7 @@ class TestGetCredentialsEndpoint:
         """Test get_credentials async function directly."""
         mock_request = MagicMock()
 
-        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+        with patch("routes.credentials.get_app_state", return_value=mock_app_state):
             user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
             response = await get_credentials(user, mock_request)
 
@@ -185,7 +185,7 @@ class TestGetCredentialsEndpoint:
             "Service failure"
         )
 
-        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+        with patch("routes.credentials.get_app_state", return_value=mock_app_state):
             user = KBaseUser(user="testuser", admin_perm=AdminPermission.FULL)
             with pytest.raises(Exception, match="Service failure"):
                 await get_credentials(user, mock_request)
@@ -213,7 +213,7 @@ class TestRotateCredentialsEndpoint:
         """Test rotate_credentials async function directly."""
         mock_request = MagicMock()
 
-        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+        with patch("routes.credentials.get_app_state", return_value=mock_app_state):
             user = KBaseUser(user="alice", admin_perm=AdminPermission.FULL)
             response = await rotate_credentials(user, mock_request)
 
@@ -228,7 +228,7 @@ class TestRotateCredentialsEndpoint:
             "Rotation failed"
         )
 
-        with patch("src.routes.credentials.get_app_state", return_value=mock_app_state):
+        with patch("routes.credentials.get_app_state", return_value=mock_app_state):
             user = KBaseUser(user="testuser", admin_perm=AdminPermission.FULL)
             with pytest.raises(Exception, match="Rotation failed"):
                 await rotate_credentials(user, mock_request)

@@ -5,8 +5,8 @@ from typing import Any, AsyncIterator, List
 import aiobotocore.session
 from botocore.exceptions import ClientError
 
-from src.service.exceptions import BucketOperationError, ConnectionError
-from src.s3.models.s3_config import S3Config
+from service.exceptions import BucketOperationError, ConnectionError
+from s3.models.s3_config import S3Config
 
 logger = logging.getLogger(__name__)
 

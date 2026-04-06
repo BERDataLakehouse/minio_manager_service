@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 
-from src.polaris.polaris_service import PolarisService
-from src.service.exceptions import PolarisOperationError
+from polaris.polaris_service import PolarisService
+from service.exceptions import PolarisOperationError
 
 
 # === FIXTURES ===

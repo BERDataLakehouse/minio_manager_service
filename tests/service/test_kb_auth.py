@@ -5,13 +5,13 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.service.kb_auth import (
+from service.kb_auth import (
     AdminPermission,
     KBaseAuth,
     KBaseUser,
     _check_error,
 )
-from src.service.exceptions import InvalidTokenError, MissingRoleError
+from service.exceptions import InvalidTokenError, MissingRoleError
 
 
 # === ADMIN PERMISSION TESTS ===
@@ -102,7 +102,7 @@ class TestKBaseAuth:
     async def test_create_success(self):
         """Test KBaseAuth.create with valid auth service."""
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
             return_value={"servicename": "Authentication Service"},
         ):
@@ -118,7 +118,7 @@ class TestKBaseAuth:
     async def test_create_adds_trailing_slash(self):
         """Test create appends trailing slash if missing."""
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
             return_value={"servicename": "Authentication Service"},
         ):
@@ -129,7 +129,7 @@ class TestKBaseAuth:
     async def test_create_wrong_service_raises(self):
         """Test create raises IOError if not Authentication Service."""
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
             return_value={"servicename": "Some Other Service"},
         ):
@@ -140,7 +140,7 @@ class TestKBaseAuth:
     async def test_get_user_success(self):
         """Test get_user returns KBaseUser with correct roles."""
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
         ) as mock_get:
             # First call: create
@@ -165,7 +165,7 @@ class TestKBaseAuth:
     async def test_get_user_admin(self):
         """Test get_user returns FULL admin for users with admin roles."""
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = {"servicename": "Authentication Service"}
@@ -187,7 +187,7 @@ class TestKBaseAuth:
     async def test_get_user_missing_role(self):
         """Test get_user raises MissingRoleError when required role is absent."""
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = {"servicename": "Authentication Service"}
@@ -208,7 +208,7 @@ class TestKBaseAuth:
     async def test_get_user_caching(self):
         """Test get_user caches results for the same token."""
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = {"servicename": "Authentication Service"}
@@ -233,7 +233,7 @@ class TestKBaseAuth:
     async def test_get_user_falsy_token_raises(self):
         """Test get_user raises ValueError for empty token."""
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
             return_value={"servicename": "Authentication Service"},
         ):
@@ -246,7 +246,7 @@ class TestKBaseAuth:
     async def test_get_user_no_required_roles(self):
         """Test get_user succeeds when no required roles are configured."""
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = {"servicename": "Authentication Service"}
@@ -267,7 +267,7 @@ class TestKBaseAuth:
         mock_store.upsert = AsyncMock()
 
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = {"servicename": "Authentication Service"}
@@ -295,7 +295,7 @@ class TestKBaseAuth:
     async def test_get_user_no_profile_upsert_without_store(self):
         """Test get_user does not fire profile upsert when profile_store is None."""
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = {"servicename": "Authentication Service"}
@@ -319,7 +319,7 @@ class TestKBaseAuth:
         mock_store.upsert = AsyncMock()
 
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = {"servicename": "Authentication Service"}
@@ -355,7 +355,7 @@ class TestSafeProfileUpsert:
         mock_store.upsert = AsyncMock(side_effect=Exception("DB down"))
 
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
             return_value={"servicename": "Authentication Service"},
         ):
@@ -375,7 +375,7 @@ class TestSafeProfileUpsert:
         mock_store.upsert = AsyncMock()
 
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
             return_value={"servicename": "Authentication Service"},
         ):
@@ -398,7 +398,7 @@ class TestGetAdminRole:
     async def test_admin_role_with_matching_role(self):
         """Test returns FULL when user has an admin role."""
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
             return_value={"servicename": "Authentication Service"},
         ):
@@ -413,7 +413,7 @@ class TestGetAdminRole:
     async def test_admin_role_without_matching_role(self):
         """Test returns NONE when user doesn't have admin roles."""
         with patch(
-            "src.service.kb_auth._get",
+            "service.kb_auth._get",
             new_callable=AsyncMock,
             return_value={"servicename": "Authentication Service"},
         ):

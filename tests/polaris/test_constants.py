@@ -1,6 +1,6 @@
 """Tests for the polaris.constants module."""
 
-from src.polaris.constants import (
+from polaris.constants import (
     ICEBERG_STORAGE_SUBDIRECTORY,
     normalize_group_name_for_polaris,
 )

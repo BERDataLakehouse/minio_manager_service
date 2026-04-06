@@ -10,10 +10,10 @@ from fastapi import HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from src.service import errors
-from src.service.error_mapping import map_error
-from src.service.exceptions import S3Error
-from src.service.models import ErrorResponse
+from service import errors
+from service.error_mapping import map_error
+from service.exceptions import S3Error
+from service.models import ErrorResponse
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.service.arg_checkers import contains_control_characters, not_falsy
+from service.arg_checkers import contains_control_characters, not_falsy
 
 
 class TestNotFalsy:

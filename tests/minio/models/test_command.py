@@ -1,6 +1,6 @@
 """Tests for the minio.models.command module."""
 
-from src.minio.models import command
+from minio.models import command
 
 
 def test_command_imports():

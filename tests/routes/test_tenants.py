@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.s3.models.tenant import (
+from s3.models.tenant import (
     TenantDetailResponse,
     TenantMemberResponse,
     TenantMetadataResponse,
@@ -15,10 +15,10 @@ from src.s3.models.tenant import (
     TenantStoragePaths,
     TenantSummaryResponse,
 )
-from src.routes.tenants import router
-from src.service.dependencies import auth, require_admin
-from src.service.exception_handlers import universal_error_handler
-from src.service.kb_auth import AdminPermission, KBaseUser
+from routes.tenants import router
+from service.dependencies import auth, require_admin
+from service.exception_handlers import universal_error_handler
+from service.kb_auth import AdminPermission, KBaseUser
 
 
 # ── Sample data ───────────────────────────────────────────────────────────
@@ -129,9 +129,9 @@ def admin_app(mock_app_state, admin_user):
 @pytest.fixture
 def admin_client(admin_app, mock_app_state):
     with (
-        patch("src.routes.tenants.get_app_state", return_value=mock_app_state),
+        patch("routes.tenants.get_app_state", return_value=mock_app_state),
         patch(
-            "src.routes.tenants.require_steward_or_admin",
+            "routes.tenants.require_steward_or_admin",
             new_callable=AsyncMock,
         ),
     ):

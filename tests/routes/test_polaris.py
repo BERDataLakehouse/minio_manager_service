@@ -7,11 +7,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.routes.polaris import router
-from src.service import app_state
-from src.service.dependencies import auth
-from src.service.exception_handlers import universal_error_handler
-from src.service.kb_auth import AdminPermission, KBaseUser
+from routes.polaris import router
+from service import app_state
+from service.dependencies import auth
+from service.exception_handlers import universal_error_handler
+from service.kb_auth import AdminPermission, KBaseUser
 
 
 # === FIXTURES ===

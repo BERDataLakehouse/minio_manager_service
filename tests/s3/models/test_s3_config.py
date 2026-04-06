@@ -2,12 +2,12 @@
 
 import pytest
 
-from src.s3.models.s3_config import S3Config
+from s3.models.s3_config import S3Config
 
 
 def test_config_imports():
     """Test that s3_config module can be imported."""
-    from src.s3.models import s3_config
+    from s3.models import s3_config
 
     assert s3_config is not None
 

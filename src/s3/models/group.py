@@ -2,7 +2,7 @@ from typing import Annotated, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ..utils.validators import validate_group_name
+from s3.utils.validators import validate_group_name
 
 
 class GroupModel(BaseModel):

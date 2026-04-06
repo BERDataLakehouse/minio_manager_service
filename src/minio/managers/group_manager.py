@@ -2,15 +2,15 @@ import json
 import logging
 from typing import List
 
-from ...service.exceptions import GroupOperationError
-from src.s3.core.s3_client import S3Client
-from ..models.command import GroupAction
-from src.s3.models.group import GroupModel
-from src.s3.models.s3_config import S3Config
-from src.s3.models.policy import PolicyModel, PolicyType
-from src.s3.utils.validators import validate_group_name
-from .resource_manager import ResourceManager
-from ...polaris.polaris_service import PolarisService
+from minio.managers.resource_manager import ResourceManager
+from minio.models.command import GroupAction
+from polaris.polaris_service import PolarisService
+from s3.core.s3_client import S3Client
+from s3.models.group import GroupModel
+from s3.models.policy import PolicyModel, PolicyType
+from s3.models.s3_config import S3Config
+from s3.utils.validators import validate_group_name
+from service.exceptions import GroupOperationError
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class GroupManager(ResourceManager[GroupModel]):
             UserManager: Initialized UserManager instance for user operations
         """
         if self._user_manager is None:
-            from .user_manager import UserManager
+            from minio.managers.user_manager import UserManager
 
             self._user_manager = UserManager(
                 self.client, self.config, polaris_service=self.polaris_service
@@ -68,7 +68,7 @@ class GroupManager(ResourceManager[GroupModel]):
             PolicyManager: Initialized PolicyManager instance for policy operations
         """
         if self._policy_manager is None:
-            from .policy_manager import PolicyManager
+            from minio.managers.policy_manager import PolicyManager
 
             self._policy_manager = PolicyManager(self.client, self.config)
         return self._policy_manager

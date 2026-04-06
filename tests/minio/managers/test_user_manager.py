@@ -14,17 +14,17 @@ import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.minio.managers.user_manager import UserManager, GLOBAL_USER_GROUP
-from src.s3.core.s3_client import S3Client
-from src.s3.models.s3_config import S3Config
-from src.s3.models.policy import (
+from minio.managers.user_manager import UserManager, GLOBAL_USER_GROUP
+from s3.core.s3_client import S3Client
+from s3.models.s3_config import S3Config
+from s3.models.policy import (
     PolicyDocument,
     PolicyEffect,
     PolicyModel,
     PolicyStatement,
     PolicyAction,
 )
-from src.service.exceptions import UserOperationError
+from service.exceptions import UserOperationError
 
 
 # =============================================================================

@@ -1,6 +1,6 @@
 """Tests for the minio.models.group module."""
 
-from src.s3.models import group
+from s3.models import group
 
 
 def test_group_imports():

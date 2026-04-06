@@ -12,13 +12,13 @@ from typing import Annotated
 from fastapi import APIRouter, Body, Depends, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ..minio.managers.sharing_manager import PathAccessInfo
-from src.s3.models.policy import PolicyPermissionLevel
-from src.s3.utils.validators import validate_s3_path
-from ..service.app_state import get_app_state
-from ..service.dependencies import auth
-from ..service.exceptions import DataGovernanceError
-from ..service.kb_auth import KBaseUser
+from minio.managers.sharing_manager import PathAccessInfo
+from s3.models.policy import PolicyPermissionLevel
+from s3.utils.validators import validate_s3_path
+from service.app_state import get_app_state
+from service.dependencies import auth
+from service.exceptions import DataGovernanceError
+from service.kb_auth import KBaseUser
 
 logger = logging.getLogger(__name__)
 

@@ -3,13 +3,13 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..polaris.constants import (
+from polaris.constants import (
     ICEBERG_STORAGE_SUBDIRECTORY,
     normalize_group_name_for_polaris,
 )
-from ..service import app_state
-from ..service.dependencies import auth
-from ..service.kb_auth import AdminPermission
+from service import app_state
+from service.dependencies import auth
+from service.kb_auth import AdminPermission
 
 logger = logging.getLogger(__name__)
 

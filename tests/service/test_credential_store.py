@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.credentials.store import CredentialStore
+from credentials.store import CredentialStore
 
 
 @pytest.fixture

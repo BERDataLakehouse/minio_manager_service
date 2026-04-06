@@ -13,16 +13,16 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.s3.models.policy import PolicyModel, PolicyTarget
-from src.s3.models.user import UserModel
-from src.s3.utils.validators import validate_group_name
-from ..polaris.constants import (
+from polaris.constants import (
     ICEBERG_STORAGE_SUBDIRECTORY,
     normalize_group_name_for_polaris,
 )
-from ..service.app_state import get_app_state
-from ..service.dependencies import auth, require_admin
-from ..service.exceptions import (
+from s3.models.policy import PolicyModel, PolicyTarget
+from s3.models.user import UserModel
+from s3.utils.validators import validate_group_name
+from service.app_state import get_app_state
+from service.dependencies import auth, require_admin
+from service.exceptions import (
     DataGovernanceError,
     GroupOperationError,
     PolicyOperationError,

@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from ..service.exceptions import PolarisOperationError
+from service.exceptions import PolarisOperationError
 
 logger = logging.getLogger(__name__)
 

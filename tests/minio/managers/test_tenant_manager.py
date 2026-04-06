@@ -5,19 +5,19 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.minio.managers.tenant_manager import (
+from minio.managers.tenant_manager import (
     SYSTEM_GROUPS,
     TenantManager,
     _is_tenant_group,
 )
-from src.s3.models.tenant import TenantMetadataUpdate, UserProfile
-from src.service.exceptions import (
+from s3.models.tenant import TenantMetadataUpdate, UserProfile
+from service.exceptions import (
     GroupOperationError,
     TenantAuthorizationError,
     TenantNotFoundError,
     TenantOperationError,
 )
-from src.service.kb_auth import AdminPermission, KBaseUser
+from service.kb_auth import AdminPermission, KBaseUser
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────

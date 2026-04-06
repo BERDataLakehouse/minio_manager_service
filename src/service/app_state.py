@@ -12,23 +12,23 @@ from typing import NamedTuple
 
 from fastapi import FastAPI, Request
 
-from src.credentials.service import CredentialService
-from src.credentials.store import CredentialStore
-from src.s3.core.distributed_lock import DistributedLockManager
-from src.s3.core.s3_client import S3Client
-from src.minio.managers.group_manager import GroupManager
-from src.minio.managers.policy_manager import PolicyManager
-from src.minio.managers.sharing_manager import SharingManager
-from src.minio.managers.tenant_manager import TenantManager
-from src.minio.managers.user_manager import UserManager
-from src.polaris.polaris_service import PolarisService
-from src.s3.models.s3_config import S3Config
-from src.service.arg_checkers import not_falsy
-from src.service.database import DatabasePool, run_migrations
-from src.service.kb_auth import KBaseAuth, KBaseUser
-from src.tenant_metadata.kbase_profile_client import KBaseUserProfileClient
-from src.tenant_metadata.tenant_metadata_store import TenantMetadataStore
-from src.tenant_metadata.user_profile_store import UserProfileStore
+from credentials.service import CredentialService
+from credentials.store import CredentialStore
+from minio.managers.group_manager import GroupManager
+from minio.managers.policy_manager import PolicyManager
+from minio.managers.sharing_manager import SharingManager
+from minio.managers.tenant_manager import TenantManager
+from minio.managers.user_manager import UserManager
+from polaris.polaris_service import PolarisService
+from s3.core.distributed_lock import DistributedLockManager
+from s3.core.s3_client import S3Client
+from s3.models.s3_config import S3Config
+from service.arg_checkers import not_falsy
+from service.database import DatabasePool, run_migrations
+from service.kb_auth import KBaseAuth, KBaseUser
+from tenant_metadata.kbase_profile_client import KBaseUserProfileClient
+from tenant_metadata.tenant_metadata_store import TenantMetadataStore
+from tenant_metadata.user_profile_store import UserProfileStore
 
 logger = logging.getLogger(__name__)
 

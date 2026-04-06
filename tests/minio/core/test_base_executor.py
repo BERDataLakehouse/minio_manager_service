@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.minio.core.base_executor import BaseMinIOExecutor
-from src.minio.models.command import CommandResult
-from src.service.exceptions import S3ManagerError
+from minio.core.base_executor import BaseMinIOExecutor
+from minio.models.command import CommandResult
+from service.exceptions import S3ManagerError
 
 
 # =============================================================================

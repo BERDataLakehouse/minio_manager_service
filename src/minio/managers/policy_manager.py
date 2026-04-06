@@ -5,28 +5,28 @@ import uuid
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from ...service.exceptions import PolicyOperationError
-from src.s3.core.distributed_lock import DistributedLockManager
-from src.s3.core.s3_client import S3Client
-from src.s3.core.policy_builder import PolicyBuilder
-from src.s3.core.policy_creator import PolicyCreator
-from ..models.command import PolicyAction as CommandPolicyAction
-from src.s3.models.s3_config import S3Config
-from src.s3.models.policy import (
+from service.exceptions import PolicyOperationError
+from s3.core.distributed_lock import DistributedLockManager
+from s3.core.s3_client import S3Client
+from s3.core.policy_builder import PolicyBuilder
+from s3.core.policy_creator import PolicyCreator
+from minio.models.command import PolicyAction as CommandPolicyAction
+from s3.models.s3_config import S3Config
+from s3.models.policy import (
     PolicyDocument,
     PolicyModel,
     PolicyPermissionLevel,
     PolicyTarget,
     PolicyType,
 )
-from src.s3.utils.validators import (
+from s3.utils.validators import (
     DATA_GOVERNANCE_POLICY_PREFIXES,
     GROUP_POLICY_PREFIX,
     USER_HOME_POLICY_PREFIX,
     USER_SYSTEM_POLICY_PREFIX,
     validate_policy_name,
 )
-from .resource_manager import ResourceManager
+from minio.managers.resource_manager import ResourceManager
 
 logger = logging.getLogger(__name__)
 

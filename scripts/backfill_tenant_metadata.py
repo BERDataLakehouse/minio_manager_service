@@ -35,10 +35,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import AsyncConnectionPool
 
-from src.s3.core.s3_client import S3Client
-from src.minio.managers.group_manager import GroupManager
-from src.minio.managers.tenant_manager import SYSTEM_GROUPS
-from src.s3.models.s3_config import S3Config
+from s3.core.s3_client import S3Client
+from minio.managers.group_manager import GroupManager
+from minio.managers.tenant_manager import SYSTEM_GROUPS
+from s3.models.s3_config import S3Config
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)

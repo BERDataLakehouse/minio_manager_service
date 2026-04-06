@@ -11,7 +11,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from src.s3.models.policy import (
+from s3.models.policy import (
     PolicyAction,
     PolicyDocument,
     PolicyEffect,
@@ -510,4 +510,21 @@ class TestPolicyModelGetAccessiblePaths:
 
     def test_returns_empty_for_empty_policy(self):
         policy = self._make_policy([])
+        assert policy.get_accessible_paths() == []
+
+    def test_ignores_non_s3_arns(self):
+        policy = self._make_policy(
+            [
+                self._allow(PolicyAction.GET_OBJECT, "arn:aws:iam::123456789012:root"),
+                self._allow(PolicyAction.GET_OBJECT, "*"),
+            ]
+        )
+        assert policy.get_accessible_paths() == []
+
+    def test_ignores_wrong_scheme(self):
+        policy = self._make_policy(
+            [
+                self._allow(PolicyAction.GET_OBJECT, "s3://bucket/path/*"),
+            ]
+        )
         assert policy.get_accessible_paths() == []
