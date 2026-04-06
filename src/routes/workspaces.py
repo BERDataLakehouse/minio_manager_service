@@ -349,6 +349,8 @@ async def get_my_sql_warehouse_prefix(
     app_state = get_app_state(request)
 
     username = authenticated_user.user
+    # TODO: Replace with a dedicated user_manager.get_user_sql_warehouse_path(username)
+    # method rather than reaching into config internals.
     sql_warehouse_prefix = f"s3a://{app_state.user_manager.config.default_bucket}/{app_state.user_manager.users_sql_warehouse_prefix}/{username}/"
 
     response = UserSqlWarehousePrefixResponse(

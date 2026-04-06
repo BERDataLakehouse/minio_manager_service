@@ -52,6 +52,18 @@ instances defined in `docker-compose.yml`. Covers group lifecycle (`create_group
 PYTHONPATH=src uv run python test_scripts/group_manager_integration.py
 ```
 
+### `user_manager_integration.py`
+
+Exercises the full public API of `UserManager` against the Ceph RadosGW, S3, and Redis
+instances defined in `docker-compose.yml`. Covers user lifecycle (`create_user`, `get_user`,
+`list_users`, `delete_user`, `user_exists`), credential rotation
+(`get_or_rotate_user_credentials`), policy inspection (`get_user_policies`,
+`get_user_accessible_paths`), and path ownership checks (`can_user_share_path`).
+
+```bash
+PYTHONPATH=src uv run python test_scripts/user_manager_integration.py
+```
+
 ### `policy_manager_integration.py`
 
 Exercises the full public API of `PolicyManager` against the Ceph RadosGW and Redis
