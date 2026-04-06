@@ -40,6 +40,18 @@ See the TODO at the top of the file for methods still to be covered.
 PYTHONPATH=src uv run python test_scripts/s3_client_integration.py
 ```
 
+### `group_manager_integration.py`
+
+Exercises the full public API of `GroupManager` against the Ceph RadosGW and S3
+instances defined in `docker-compose.yml`. Covers group lifecycle (`create_group`,
+`group_exists`, `list_groups`, `delete_group`), membership management
+(`add/remove_user_to/from_group`, `get_group_members`, `get_group_info`,
+`is_user_in_group`, `get_user_groups`), and idempotency of `create_group`.
+
+```bash
+PYTHONPATH=src uv run python test_scripts/group_manager_integration.py
+```
+
 ### `policy_manager_integration.py`
 
 Exercises the full public API of `PolicyManager` against the Ceph RadosGW and Redis
