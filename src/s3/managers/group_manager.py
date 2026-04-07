@@ -254,8 +254,8 @@ Happy collaborating!
             f"{self._config.tenant_sql_warehouse_prefix}/{group_name}/",
         ]:
             try:
-                # TODO this may cause memory / speed issues since it could fetch millions of objects
-                #      implement batching
+                # TODO this may cause memory / speed issues since it could fetch millions of
+                #       objects, implement batching
                 objects = await self._s3_client.list_objects(
                     bucket, prefix, list_all=True
                 )
