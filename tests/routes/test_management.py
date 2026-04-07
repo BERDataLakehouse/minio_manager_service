@@ -4,7 +4,6 @@ Comprehensive tests for the routes.management module.
 Tests cover:
 - User management endpoints (list, create, rotate, delete)
 - Group management endpoints (list, create, add/remove member, delete)
-- Policy management endpoints (list, delete)
 - Pagination
 - Response model validation
 - Error handling and admin authorization
@@ -18,7 +17,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from s3.models.policy import PolicyDocument, PolicyModel, PolicyTarget
 from s3.models.user import UserModel
 from routes.management import (
     GroupManagementResponse,
@@ -28,7 +26,6 @@ from routes.management import (
     UserManagementResponse,
     UserNamesResponse,
     create_user,
-    delete_policy,
     list_group_names,
     list_user_names,
     list_users,
@@ -105,24 +102,6 @@ def mock_app_state():
     app_state.credential_service.rotate = AsyncMock(
         return_value=("user1", "new-secret-key")
     )
-
-    # Mock policy manager
-    app_state.policy_manager = AsyncMock()
-    mock_policy = PolicyModel(
-        policy_name="user-home-user1",
-        policy_document=PolicyDocument(
-            version="2012-10-17",
-            statement=[],
-        ),
-    )
-    app_state.policy_manager.list_all_policies = AsyncMock(return_value=[mock_policy])
-    app_state.policy_manager.resource_exists = AsyncMock(return_value=True)
-    app_state.policy_manager._get_policy_attached_entities = AsyncMock(
-        return_value={PolicyTarget.USER: [], PolicyTarget.GROUP: []}
-    )
-    app_state.policy_manager.detach_policy_from_user = AsyncMock()
-    app_state.policy_manager.detach_policy_from_group = AsyncMock()
-    app_state.policy_manager.delete_resource = AsyncMock(return_value=True)
 
     # Mock tenant manager
     app_state.tenant_manager = AsyncMock()
@@ -567,88 +546,6 @@ class TestDeleteGroupEndpoint:
         assert response.status_code == 400  # GroupOperationError maps to 400
 
 
-# === POLICY MANAGEMENT ENDPOINT TESTS ===
-
-
-class TestListPoliciesEndpoint:
-    """Tests for list_policies endpoint."""
-
-    def test_list_policies_success(self, client, mock_app_state):
-        """Test listing policies successfully."""
-        response = client.get("/management/policies")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert "policies" in data
-        assert data["total_count"] == 1
-
-    def test_list_policies_pagination(self, client, mock_app_state):
-        """Test listing policies with pagination."""
-        response = client.get("/management/policies?page=1&page_size=25")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["page"] == 1
-        assert data["page_size"] == 25
-
-
-class TestDeletePolicyEndpoint:
-    """Tests for delete_policy endpoint."""
-
-    def test_delete_policy_success(self, client, mock_app_state):
-        """Test deleting a policy successfully."""
-        response = client.delete("/management/policies/user-home-user1")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["resource_type"] == "policy"
-        assert data["resource_name"] == "user-home-user1"
-
-    def test_delete_policy_not_found(self, client, mock_app_state):
-        """Test deleting non-existent policy (idempotent)."""
-        mock_app_state.policy_manager.resource_exists.return_value = False
-
-        response = client.delete("/management/policies/nonexistent")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert (
-            "already deleted" in data["message"] or "does not exist" in data["message"]
-        )
-
-    def test_delete_policy_with_attached_users(self, client, mock_app_state):
-        """Test deleting policy detaches from users first."""
-        mock_app_state.policy_manager._get_policy_attached_entities.return_value = {
-            PolicyTarget.USER: ["user1", "user2"],
-            PolicyTarget.GROUP: [],
-        }
-
-        response = client.delete("/management/policies/user-home-user1")
-
-        assert response.status_code == 200
-        assert mock_app_state.policy_manager.detach_policy_from_user.call_count == 2
-
-    def test_delete_policy_with_attached_groups(self, client, mock_app_state):
-        """Test deleting policy detaches from groups first."""
-        mock_app_state.policy_manager._get_policy_attached_entities.return_value = {
-            PolicyTarget.USER: [],
-            PolicyTarget.GROUP: ["group1"],
-        }
-
-        response = client.delete("/management/policies/user-home-user1")
-
-        assert response.status_code == 200
-        mock_app_state.policy_manager.detach_policy_from_group.assert_called_once()
-
-    def test_delete_policy_failure(self, client, mock_app_state):
-        """Test handling policy delete failure."""
-        mock_app_state.policy_manager.delete_resource.return_value = False
-
-        response = client.delete("/management/policies/user-home-user1")
-
-        assert response.status_code == 500  # PolicyOperationError
-
-
 # === ASYNC FUNCTION TESTS ===
 
 
@@ -679,28 +576,6 @@ class TestManagementFunctionsAsync:
 
             assert response.username == "newuser"
             assert response.operation == "create"
-
-    @pytest.mark.asyncio
-    async def test_delete_policy_detach_error_handling(
-        self, mock_app_state, mock_admin_user
-    ):
-        """Test that detach errors don't stop policy deletion."""
-
-        mock_request = MagicMock()
-
-        mock_app_state.policy_manager._get_policy_attached_entities.return_value = {
-            PolicyTarget.USER: ["user1"],
-            PolicyTarget.GROUP: [],
-        }
-        mock_app_state.policy_manager.detach_policy_from_user.side_effect = Exception(
-            "Detach error"
-        )
-
-        with patch("routes.management.get_app_state", return_value=mock_app_state):
-            # Should not raise, just log warning
-            response = await delete_policy("test-policy", mock_request, mock_admin_user)
-
-            assert response.resource_type == "policy"
 
 
 # === PAGINATION TESTS ===

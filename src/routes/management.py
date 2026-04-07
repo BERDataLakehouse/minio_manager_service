@@ -13,7 +13,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from s3.models.policy import PolicyModel, PolicyTarget
 from s3.models.user import UserModel
 from s3.utils.validators import validate_group_name
 from service.app_state import get_app_state
@@ -21,7 +20,6 @@ from service.dependencies import auth, require_admin
 from service.exceptions import (
     DataGovernanceError,
     GroupOperationError,
-    PolicyOperationError,
     UserOperationError,
 )
 
@@ -94,23 +92,6 @@ class GroupManagementResponse(BaseModel):
         str, Field(description="Admin who performed the operation", min_length=1)
     ]
     timestamp: Annotated[datetime, Field(description="When operation was performed")]
-
-
-class PolicyListResponse(BaseModel):
-    """Response model for policy listing with pagination."""
-
-    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
-
-    policies: Annotated[list[PolicyModel], Field(description="List of policies")]
-    total_count: Annotated[int, Field(description="Total number of policies", ge=0)]
-    retrieved_count: Annotated[
-        int, Field(description="Number of policies retrieved", ge=0)
-    ]
-    page: Annotated[int, Field(description="Current page number", ge=1)]
-    page_size: Annotated[int, Field(description="Number of items per page", ge=1)]
-    total_pages: Annotated[int, Field(description="Total number of pages", ge=1)]
-    has_next: Annotated[bool, Field(description="Whether there are more pages")]
-    has_prev: Annotated[bool, Field(description="Whether there are previous pages")]
 
 
 class ResourceDeleteResponse(BaseModel):
@@ -542,143 +523,6 @@ async def delete_group(
 
     logger.info(f"Admin {authenticated_user.user} deleted group {group_name}")
     return response
-
-
-# ===== POLICY MANAGEMENT ENDPOINTS =====
-
-
-@router.get(
-    "/policies",
-    response_model=PolicyListResponse,
-    summary="List all policies",
-    description="Get a paginated list of all policies in the system.",
-)
-async def list_policies(
-    request: Request,
-    authenticated_user=Depends(require_admin),
-    page: Annotated[
-        int,
-        Query(ge=1, description="Page number (1-based)"),
-    ] = 1,
-    page_size: Annotated[
-        int,
-        Query(ge=1, le=500, description="Number of policies per page"),
-    ] = 50,
-):
-    """List all policies in the system with pagination."""
-    app_state = get_app_state(request)
-
-    # Get all policies
-    all_policies = await app_state.policy_manager.list_all_policies()
-    total_count = len(all_policies)
-
-    # Calculate pagination
-    total_pages = (total_count + page_size - 1) // page_size  # Ceiling division
-    offset = (page - 1) * page_size
-    paginated_policies = all_policies[offset : offset + page_size]
-
-    response = PolicyListResponse(
-        policies=paginated_policies,
-        total_count=total_count,
-        retrieved_count=len(paginated_policies),
-        page=page,
-        page_size=page_size,
-        total_pages=max(1, total_pages),  # At least 1 page
-        has_next=page < total_pages,
-        has_prev=page > 1,
-    )
-
-    logger.info(
-        f"Admin {authenticated_user.user} listed {len(paginated_policies)} policies (page {page}/{total_pages})"
-    )
-    return response
-
-
-@router.delete(
-    "/policies/{policy_name}",
-    response_model=ResourceDeleteResponse,
-    summary="Delete policy",
-    description="Delete a policy from the system.",
-)
-async def delete_policy(
-    policy_name: Annotated[
-        str, Path(description="Policy name to delete", min_length=1)
-    ],
-    request: Request,
-    authenticated_user=Depends(require_admin),
-):
-    """Delete a policy."""
-    app_state = get_app_state(request)
-
-    try:
-        # Check if policy exists first
-        policy_exists = await app_state.policy_manager.resource_exists(policy_name)
-        if not policy_exists:
-            # Policy doesn't exist - return idempotent success response
-            response = ResourceDeleteResponse(
-                resource_type="policy",
-                resource_name=policy_name,
-                message=f"Policy {policy_name} was already deleted or does not exist",
-            )
-            logger.info(
-                f"Admin {authenticated_user.user} attempted to delete non-existent policy {policy_name} - returning idempotent success"
-            )
-            return response
-
-        # Get all entities (users and groups) that have this policy attached
-        try:
-            attached_entities = (
-                await app_state.policy_manager._get_policy_attached_entities(
-                    policy_name
-                )
-            )
-        except Exception as e:
-            logger.warning(
-                f"Could not get attached entities for policy {policy_name}: {e}"
-            )
-            attached_entities = {PolicyTarget.USER: [], PolicyTarget.GROUP: []}
-
-        # Detach policy from all users
-        for username in attached_entities.get(PolicyTarget.USER, []):
-            try:
-                await app_state.policy_manager.detach_policy_from_user(
-                    policy_name, username
-                )
-                logger.info(f"Detached policy {policy_name} from user {username}")
-            except Exception as e:
-                logger.warning(
-                    f"Failed to detach policy {policy_name} from user {username}: {e}"
-                )
-
-        # Detach policy from all groups
-        for group_name in attached_entities.get(PolicyTarget.GROUP, []):
-            try:
-                await app_state.policy_manager.detach_policy_from_group(
-                    policy_name, group_name
-                )
-                logger.info(f"Detached policy {policy_name} from group {group_name}")
-            except Exception as e:
-                logger.warning(
-                    f"Failed to detach policy {policy_name} from group {group_name}: {e}"
-                )
-
-        # Now delete the policy
-        success = await app_state.policy_manager.delete_resource(policy_name)
-        if not success:
-            raise PolicyOperationError(f"Failed to delete policy {policy_name}")
-
-        response = ResourceDeleteResponse(
-            resource_type="policy",
-            resource_name=policy_name,
-            message=f"Policy {policy_name} deleted successfully",
-        )
-
-        logger.info(f"Admin {authenticated_user.user} deleted policy {policy_name}")
-        return response
-
-    except Exception as e:
-        logger.error(f"Unexpected error deleting policy {policy_name}: {e}")
-        raise PolicyOperationError(f"Failed to delete policy {policy_name}") from e
 
 
 # ===== MIGRATION ENDPOINTS =====
