@@ -49,15 +49,8 @@ def mock_app_state():
     state.user_manager = MagicMock()
     state.group_manager = MagicMock()
     state.policy_manager = MagicMock()
-
-    # Set config attributes
-    state.user_manager.config = MagicMock()
-    state.user_manager.config.default_bucket = "test-bucket"
-    state.user_manager.users_sql_warehouse_prefix = "users-sql-warehouse"
-
-    state.group_manager.config = MagicMock()
-    state.group_manager.config.default_bucket = "test-bucket"
-    state.group_manager.tenant_sql_warehouse_prefix = "tenant-sql-warehouse"
+    state.users_sql_warehouse_base = "s3a://test-bucket/users-sql-warehouse"
+    state.tenant_sql_warehouse_base = "s3a://test-bucket/tenant-sql-warehouse"
 
     return state
 

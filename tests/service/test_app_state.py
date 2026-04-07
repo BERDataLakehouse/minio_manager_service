@@ -41,6 +41,8 @@ class TestAppStateNamedTuple:
             credential_service=MagicMock(),
             db_pool=MagicMock(),
             tenant_manager=MagicMock(),
+            users_sql_warehouse_base="s3a://test-bucket/users-sql",
+            tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
         )
         assert state.auth is not None
         assert state.credential_service is not None
@@ -260,6 +262,8 @@ class TestDestroyAppState:
             credential_service=MagicMock(),
             db_pool=mock_db_pool,
             tenant_manager=MagicMock(),
+            users_sql_warehouse_base="s3a://test-bucket/users-sql",
+            tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
         )
 
         await destroy_app_state(app)
@@ -297,6 +301,8 @@ class TestDestroyAppState:
             credential_service=MagicMock(),
             db_pool=mock_db_pool,
             tenant_manager=MagicMock(),
+            users_sql_warehouse_base="s3a://test-bucket/users-sql",
+            tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
         )
 
         # Should not raise

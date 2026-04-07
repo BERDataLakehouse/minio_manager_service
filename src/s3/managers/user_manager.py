@@ -51,9 +51,9 @@ class UserManager:
         self._s3_client = s3_client
         self._policy_manager = policy_manager
         self._group_manager = group_manager
-        self.config = config
-        self.users_general_warehouse_prefix = config.users_general_warehouse_prefix
-        self.users_sql_warehouse_prefix = config.users_sql_warehouse_prefix
+        self._config = config
+        self._users_general_warehouse_prefix = config.users_general_warehouse_prefix
+        self._users_sql_warehouse_prefix = config.users_sql_warehouse_prefix
 
     async def list_users(self) -> list[str]:
         """Return the usernames of all managed IAM users."""
@@ -298,8 +298,8 @@ class UserManager:
     # ── Private helpers ──────────────────────────────────────────────────────
 
     def _is_path_in_user_home(self, path: str, username: str) -> bool:
-        general_prefix = f"{self.users_general_warehouse_prefix}/{username}/"
-        sql_prefix = f"{self.users_sql_warehouse_prefix}/{username}/"
+        general_prefix = f"{self._users_general_warehouse_prefix}/{username}/"
+        sql_prefix = f"{self._users_sql_warehouse_prefix}/{username}/"
         clean = re.sub(r"^s3a?://", "", path)
         if "/" not in clean:
             return False
@@ -307,22 +307,22 @@ class UserManager:
         return key.startswith(general_prefix) or key.startswith(sql_prefix)
 
     def _get_user_home_paths(self, username: str) -> list[str]:
-        bucket = self.config.default_bucket
+        bucket = self._config.default_bucket
         return [
-            f"s3a://{bucket}/{self.users_general_warehouse_prefix}/{username}/",
-            f"s3a://{bucket}/{self.users_sql_warehouse_prefix}/{username}/",
+            f"s3a://{bucket}/{self._users_general_warehouse_prefix}/{username}/",
+            f"s3a://{bucket}/{self._users_sql_warehouse_prefix}/{username}/",
         ]
 
     async def _create_user_home_directory(self, username: str) -> None:
-        bucket = self.config.default_bucket
+        bucket = self._config.default_bucket
         await self._s3_client.create_bucket(bucket, exists_ok=True)
 
         keys = [
-            f"{self.users_sql_warehouse_prefix}/{username}/.s3keep",
-            f"{self.users_general_warehouse_prefix}/{username}/.s3keep",
-            f"{self.users_general_warehouse_prefix}/{username}/data/.s3keep",
-            f"{self.users_general_warehouse_prefix}/{username}/notebooks/.s3keep",
-            f"{self.users_general_warehouse_prefix}/{username}/shared/.s3keep",
+            f"{self._users_sql_warehouse_prefix}/{username}/.s3keep",
+            f"{self._users_general_warehouse_prefix}/{username}/.s3keep",
+            f"{self._users_general_warehouse_prefix}/{username}/data/.s3keep",
+            f"{self._users_general_warehouse_prefix}/{username}/notebooks/.s3keep",
+            f"{self._users_general_warehouse_prefix}/{username}/shared/.s3keep",
         ]
         for key in keys:
             await self._s3_client.put_object(bucket, key, b"User directory marker")
@@ -343,7 +343,7 @@ Directory structure:
 Happy data science!
 """.encode()
 
-        welcome_key = f"{self.users_general_warehouse_prefix}/{username}/README.txt"
+        welcome_key = f"{self._users_general_warehouse_prefix}/{username}/README.txt"
         await self._s3_client.put_object(bucket, welcome_key, welcome_content)
 
     async def _create_user_system_directory(self, username: str) -> None:
@@ -356,10 +356,10 @@ Happy data science!
                 logger.info(f"Created system directory: s3a://{bucket}/{prefix}/")
 
     async def _delete_user_home_directory(self, username: str) -> None:
-        bucket = self.config.default_bucket
+        bucket = self._config.default_bucket
         for dir_prefix in [
-            f"{self.users_general_warehouse_prefix}/{username}/",
-            f"{self.users_sql_warehouse_prefix}/{username}/",
+            f"{self._users_general_warehouse_prefix}/{username}/",
+            f"{self._users_sql_warehouse_prefix}/{username}/",
         ]:
             objects = await self._s3_client.list_objects(
                 bucket, dir_prefix, list_all=True
