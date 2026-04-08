@@ -32,19 +32,15 @@ class TestAppStateNamedTuple:
         """Test AppState has all expected fields."""
         state = AppState(
             auth=MagicMock(),
-            minio_client=MagicMock(),
             user_manager=MagicMock(),
             group_manager=MagicMock(),
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
-            lock_manager=MagicMock(),
             credential_service=MagicMock(),
-            db_pool=MagicMock(),
             tenant_manager=MagicMock(),
         )
         assert state.auth is not None
         assert state.credential_service is not None
-        assert state.db_pool is not None
         assert state.tenant_manager is not None
 
 
@@ -182,7 +178,7 @@ class TestBuildApp:
             mock_migrate.assert_called_once()
             state = app.state._minio_manager_state
             assert state.credential_service is not None
-            assert state.db_pool is mock_db_pool
+            assert app.state._db_pool is mock_db_pool
             assert state.tenant_manager is not None
             mock_db_create.assert_called_once()
 
@@ -244,28 +240,19 @@ class TestDestroyAppState:
         app = FastAPI()
         mock_lock = MagicMock()
         mock_lock.close = AsyncMock()
-        mock_client = MagicMock()
-        mock_client.close_session = AsyncMock()
+        mock_s3_client = MagicMock()
+        mock_s3_client.close_session = AsyncMock()
         mock_db_pool = MagicMock()
         mock_db_pool.close = AsyncMock()
 
-        app.state._minio_manager_state = AppState(
-            auth=MagicMock(),
-            minio_client=mock_client,
-            user_manager=MagicMock(),
-            group_manager=MagicMock(),
-            policy_manager=MagicMock(),
-            sharing_manager=MagicMock(),
-            lock_manager=mock_lock,
-            credential_service=MagicMock(),
-            db_pool=mock_db_pool,
-            tenant_manager=MagicMock(),
-        )
+        app.state._lock_manager = mock_lock
+        app.state._s3_client = mock_s3_client
+        app.state._db_pool = mock_db_pool
 
         await destroy_app_state(app)
 
         mock_lock.close.assert_called_once()
-        mock_client.close_session.assert_called_once()
+        mock_s3_client.close_session.assert_called_once()
         mock_db_pool.close.assert_called_once()
 
     @pytest.mark.asyncio
@@ -281,23 +268,14 @@ class TestDestroyAppState:
         app = FastAPI()
         mock_lock = MagicMock()
         mock_lock.close = AsyncMock(side_effect=Exception("Redis error"))
-        mock_client = MagicMock()
-        mock_client.close_session = AsyncMock(side_effect=Exception("MinIO error"))
+        mock_s3_client = MagicMock()
+        mock_s3_client.close_session = AsyncMock(side_effect=Exception("S3 error"))
         mock_db_pool = MagicMock()
         mock_db_pool.close = AsyncMock(side_effect=Exception("DB error"))
 
-        app.state._minio_manager_state = AppState(
-            auth=MagicMock(),
-            minio_client=mock_client,
-            user_manager=MagicMock(),
-            group_manager=MagicMock(),
-            policy_manager=MagicMock(),
-            sharing_manager=MagicMock(),
-            lock_manager=mock_lock,
-            credential_service=MagicMock(),
-            db_pool=mock_db_pool,
-            tenant_manager=MagicMock(),
-        )
+        app.state._lock_manager = mock_lock
+        app.state._s3_client = mock_s3_client
+        app.state._db_pool = mock_db_pool
 
         # Should not raise
         await destroy_app_state(app)
