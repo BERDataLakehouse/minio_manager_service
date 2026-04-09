@@ -124,34 +124,14 @@ def mock_auth_user():
 
 
 @pytest.fixture
-def test_app(mock_app_state, mock_auth_user):
-    """Create a test FastAPI application with mocked dependencies."""
-
+def client(mock_auth_user, mock_app_state):
+    """Create a test client with get_app_state patched."""
     app = FastAPI()
     app.include_router(router)
-
-    # Add exception handler (same as main app)
     app.add_exception_handler(Exception, universal_error_handler)
-
-    # Store app state
-    app.state.minio_client = MagicMock()
-    app.state.minio_config = MagicMock()
-    app.state.policy_manager = MagicMock()
-    app.state.user_manager = MagicMock()
-    app.state.group_manager = MagicMock()
-    app.state.sharing_manager = mock_app_state.sharing_manager
-
-    # Override auth dependency
     app.dependency_overrides[auth] = lambda: mock_auth_user
-
-    return app
-
-
-@pytest.fixture
-def client(test_app, mock_app_state):
-    """Create a test client with get_app_state patched."""
     with patch("routes.sharing.get_app_state", return_value=mock_app_state):
-        yield TestClient(test_app, raise_server_exceptions=False)
+        yield TestClient(app, raise_server_exceptions=False)
 
 
 # === REQUEST MODEL TESTS ===
