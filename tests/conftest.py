@@ -18,9 +18,6 @@ from fastapi.testclient import TestClient
 
 from main import create_application
 from s3.core.s3_client import S3Client
-from minio.managers.group_manager import GroupManager
-from minio.managers.policy_manager import PolicyManager
-from minio.managers.user_manager import UserManager
 from s3.models.s3_config import S3Config
 from s3.models.policy import (
     PolicyDocument,
@@ -321,32 +318,6 @@ def sample_group_data():
         return GroupModel(name=name, members=members or [], policies=policies or [])
 
     return _create_group
-
-
-# =============================================================================
-# Manager Fixtures
-# =============================================================================
-
-
-@pytest.fixture
-def mock_policy_manager(mock_s3_client, mock_s3_config):
-    """Create a PolicyManager with mocked dependencies."""
-
-    return PolicyManager(mock_s3_client, mock_s3_config)
-
-
-@pytest.fixture
-def mock_user_manager(mock_s3_client, mock_s3_config):
-    """Create a UserManager with mocked dependencies."""
-
-    return UserManager(mock_s3_client, mock_s3_config)
-
-
-@pytest.fixture
-def mock_group_manager(mock_s3_client, mock_s3_config):
-    """Create a GroupManager with mocked dependencies."""
-
-    return GroupManager(mock_s3_client, mock_s3_config)
 
 
 # =============================================================================

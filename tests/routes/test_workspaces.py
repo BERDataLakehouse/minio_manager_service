@@ -28,17 +28,11 @@ from service.kb_auth import AdminPermission, KBaseUser
 
 
 @pytest.fixture
-def app():
-    """Create a FastAPI app with the workspaces router and exception handlers."""
-    test_app = FastAPI()
-    test_app.include_router(router)
-    test_app.add_exception_handler(Exception, universal_error_handler)
-    return test_app
-
-
-@pytest.fixture
-def client(app):
-    """Create a test client."""
+def client():
+    """Create a test client for the workspaces router."""
+    app = FastAPI()
+    app.include_router(router)
+    app.add_exception_handler(Exception, universal_error_handler)
     return TestClient(app, raise_server_exceptions=False)
 
 
