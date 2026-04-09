@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 
-from service import app_state
 from service.app_state import (
     AppState,
     RequestState,

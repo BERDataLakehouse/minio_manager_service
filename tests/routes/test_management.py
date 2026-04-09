@@ -891,9 +891,7 @@ class TestPolarisIntegration:
     @pytest.fixture
     def polaris_client(self, test_app, polaris_app_state):
         """Create test client with Polaris-enabled app state."""
-        with patch(
-            "routes.management.get_app_state", return_value=polaris_app_state
-        ):
+        with patch("routes.management.get_app_state", return_value=polaris_app_state):
             yield TestClient(test_app, raise_server_exceptions=False)
 
     def test_create_group_calls_ensure_tenant_catalog(
