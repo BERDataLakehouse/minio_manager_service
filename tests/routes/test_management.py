@@ -123,7 +123,7 @@ def mock_admin_user():
 
 
 @pytest.fixture
-def test_app(mock_app_state, mock_admin_user):
+def test_app(mock_admin_user):
     """Create a test FastAPI application with mocked dependencies."""
 
     app = FastAPI()
@@ -131,14 +131,6 @@ def test_app(mock_app_state, mock_admin_user):
 
     # Add exception handler (same as main app)
     app.add_exception_handler(Exception, universal_error_handler)
-
-    # Store app state
-    app.state.minio_client = MagicMock()
-    app.state.minio_config = MagicMock()
-    app.state.policy_manager = mock_app_state.policy_manager
-    app.state.user_manager = mock_app_state.user_manager
-    app.state.group_manager = mock_app_state.group_manager
-    app.state.sharing_manager = MagicMock()
 
     # Override admin auth dependency
     app.dependency_overrides[require_admin] = lambda: mock_admin_user
@@ -384,19 +376,11 @@ class TestListGroupNamesEndpoint:
         return KBaseUser(user="regularuser", admin_perm=AdminPermission.NONE)
 
     @pytest.fixture
-    def test_app_with_regular_auth(self, mock_app_state, mock_regular_user):
+    def test_app_with_regular_auth(self, mock_regular_user):
         """Create a test app with regular user auth override (not admin)."""
         app = FastAPI()
         app.include_router(router)
         app.add_exception_handler(Exception, universal_error_handler)
-
-        # Store app state
-        app.state.minio_client = MagicMock()
-        app.state.minio_config = MagicMock()
-        app.state.policy_manager = mock_app_state.policy_manager
-        app.state.user_manager = mock_app_state.user_manager
-        app.state.group_manager = mock_app_state.group_manager
-        app.state.sharing_manager = MagicMock()
 
         # Override auth dependency (for regular authenticated user, not admin)
         app.dependency_overrides[auth] = lambda: mock_regular_user

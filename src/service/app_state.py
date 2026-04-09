@@ -36,14 +36,11 @@ class AppState(NamedTuple):
     """Holds application state."""
 
     auth: KBaseAuth
-    minio_client: S3Client
     user_manager: UserManager
     group_manager: GroupManager
     policy_manager: PolicyManager
     sharing_manager: SharingManager
-    lock_manager: DistributedLockManager
     credential_service: CredentialService
-    db_pool: DatabasePool
     tenant_manager: TenantManager
     users_sql_warehouse_base: str
     tenant_sql_warehouse_base: str
@@ -165,18 +162,18 @@ async def build_app(app: FastAPI) -> None:
     )
     logger.info("Tenant manager initialized")
 
-    # Store components in app state
-    app.state._auth = auth
+    # Store teardown-only resources directly on app state (only accessed in app_state.py)
+    app.state._s3_client = minio_client
+    app.state._lock_manager = lock_manager
+    app.state._db_pool = db_pool
+
     app.state._minio_manager_state = AppState(
         auth=auth,
-        minio_client=minio_client,
         user_manager=user_manager,
         group_manager=group_manager,
         policy_manager=policy_manager,
         sharing_manager=sharing_manager,
-        lock_manager=lock_manager,
         credential_service=credential_service,
-        db_pool=db_pool,
         tenant_manager=tenant_manager,
         # ruff is forcing these long lines, yuck
         users_sql_warehouse_base=f"s3a://{config.default_bucket}/{config.users_sql_warehouse_prefix}",
@@ -193,24 +190,26 @@ async def destroy_app_state(app: FastAPI) -> None:
         app: The FastAPI app.
     """
     # Close services if they exist
-    if hasattr(app.state, "_minio_manager_state") and app.state._minio_manager_state:
+    if hasattr(app.state, "_lock_manager"):
         try:
             # Close Redis connection
-            await app.state._minio_manager_state.lock_manager.close()
+            await app.state._lock_manager.close()
             logger.info("Redis connection closed")
         except Exception as e:
             logger.warning(f"Error closing Redis connection: {e}")
 
+    if hasattr(app.state, "_s3_client"):
         try:
             # Close S3 client session
-            await app.state._minio_manager_state.minio_client.close_session()
+            await app.state._s3_client.close_session()
             logger.info("S3 client session closed")
         except Exception as e:
             logger.warning(f"Error closing S3 client session: {e}")
 
+    if hasattr(app.state, "_db_pool"):
         try:
             # Close shared database pool (covers credential store, profile store, etc.)
-            await app.state._minio_manager_state.db_pool.close()
+            await app.state._db_pool.close()
             logger.info("Database pool closed")
         except Exception as e:
             logger.warning(f"Error closing database pool: {e}")
