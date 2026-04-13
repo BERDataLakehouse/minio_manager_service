@@ -349,6 +349,24 @@ async def test_user_exists_other_error_reraises(iam_client, mock_iam_boto_client
 
 
 @pytest.mark.asyncio
+async def test_get_user(iam_client, mock_iam_boto_client):
+    mock_iam_boto_client.get_user = AsyncMock(
+        return_value={"User": {"UserName": "alice", "Path": "/mms/"}}
+    )
+    result = await iam_client.get_user("alice")
+    assert result.username == "alice"
+    assert result.path == "/mms/"
+    mock_iam_boto_client.get_user.assert_called_once_with(UserName="alice")
+
+
+@pytest.mark.asyncio
+async def test_get_user_not_found_reraises(iam_client, mock_iam_boto_client):
+    mock_iam_boto_client.get_user = AsyncMock(side_effect=no_such_entity("GetUser"))
+    with pytest.raises(ClientError):
+        await iam_client.get_user("alice")
+
+
+@pytest.mark.asyncio
 async def test_list_users(iam_client, mock_iam_boto_client):
     mock_iam_boto_client.get_paginator = MagicMock(
         return_value=make_paginator(
@@ -459,6 +477,27 @@ async def test_group_exists_other_error_reraises(iam_client, mock_iam_boto_clien
     mock_iam_boto_client.get_group = AsyncMock(side_effect=other_error("GetGroup"))
     with pytest.raises(ClientError):
         await iam_client.group_exists("researchers")
+
+
+@pytest.mark.asyncio
+async def test_get_group(iam_client, mock_iam_boto_client):
+    mock_iam_boto_client.get_group = AsyncMock(
+        return_value={
+            "Group": {"GroupName": "researchers", "Path": "/mms/"},
+            "Users": [],
+        }
+    )
+    result = await iam_client.get_group("researchers")
+    assert result.group_name == "researchers"
+    assert result.path == "/mms/"
+    mock_iam_boto_client.get_group.assert_called_once_with(GroupName="researchers")
+
+
+@pytest.mark.asyncio
+async def test_get_group_not_found_reraises(iam_client, mock_iam_boto_client):
+    mock_iam_boto_client.get_group = AsyncMock(side_effect=no_such_entity("GetGroup"))
+    with pytest.raises(ClientError):
+        await iam_client.get_group("researchers")
 
 
 @pytest.mark.asyncio

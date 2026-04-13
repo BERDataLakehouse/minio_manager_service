@@ -317,10 +317,28 @@ async def verify(client: S3IAMClient) -> None:
         fail("alice exists in IAM", e)
 
     try:
+        info = await client.get_user(USER_ALICE)
+        assert info.path == DST_PATH_PREFIX, (
+            f"expected path {DST_PATH_PREFIX!r}, got {info.path!r}"
+        )
+        ok("alice has correct IAM path prefix")
+    except Exception as e:
+        fail("alice has correct IAM path prefix", e)
+
+    try:
         assert await client.user_exists(USER_BOB)
         ok("bob exists in IAM")
     except Exception as e:
         fail("bob exists in IAM", e)
+
+    try:
+        info = await client.get_user(USER_BOB)
+        assert info.path == DST_PATH_PREFIX, (
+            f"expected path {DST_PATH_PREFIX!r}, got {info.path!r}"
+        )
+        ok("bob has correct IAM path prefix")
+    except Exception as e:
+        fail("bob has correct IAM path prefix", e)
 
     try:
         doc = await client.get_user_policy(USER_ALICE, "home")
@@ -367,6 +385,15 @@ async def verify(client: S3IAMClient) -> None:
         ok("researchers group exists in IAM")
     except Exception as e:
         fail("researchers group exists in IAM", e)
+
+    try:
+        info = await client.get_group(GROUP)
+        assert info.path == DST_PATH_PREFIX, (
+            f"expected path {DST_PATH_PREFIX!r}, got {info.path!r}"
+        )
+        ok("researchers group has correct IAM path prefix")
+    except Exception as e:
+        fail("researchers group has correct IAM path prefix", e)
 
     try:
         doc = await client.get_group_policy(GROUP, "group")

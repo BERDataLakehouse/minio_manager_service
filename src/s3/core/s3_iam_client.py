@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any, Self
+from typing import Any, NamedTuple, Self
 from urllib.parse import unquote
 
 import aiobotocore.session
@@ -11,6 +11,20 @@ from botocore.exceptions import ClientError
 from s3.exceptions import IamPolicyNotFoundError
 
 logger = logging.getLogger(__name__)
+
+
+class IamUserInfo(NamedTuple):
+    """Name and IAM path of a user."""
+
+    username: str
+    path: str
+
+
+class IamGroupInfo(NamedTuple):
+    """Name and IAM path of a group."""
+
+    group_name: str
+    path: str
 
 
 def _parse_policy(doc: str | dict) -> dict:
@@ -169,6 +183,12 @@ class S3IAMClient:
                 return False
             raise
 
+    async def get_user(self, username: str) -> IamUserInfo:
+        """Return the name and IAM path of a user. Raises ClientError if not found."""
+        resp = await self._client.get_user(UserName=username)
+        user = resp["User"]
+        return IamUserInfo(username=user["UserName"], path=user["Path"])
+
     async def list_users(self) -> list[str]:
         """Return the usernames of all IAM users under the configured path prefix."""
         users = []
@@ -227,6 +247,12 @@ class S3IAMClient:
             if e.response["Error"]["Code"] == "NoSuchEntity":
                 return False
             raise
+
+    async def get_group(self, group_name: str) -> IamGroupInfo:
+        """Return the name and IAM path of a group. Raises ClientError if not found."""
+        resp = await self._client.get_group(GroupName=group_name)
+        group = resp["Group"]
+        return IamGroupInfo(group_name=group["GroupName"], path=group["Path"])
 
     async def list_groups(self) -> list[str]:
         """Return the names of all IAM groups under the configured path prefix."""

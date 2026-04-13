@@ -25,9 +25,10 @@ making any changes if that is not the case.
 Notable arguments: 
 
 --dst-path-prefix:
-    IAM path prefix applied to every created user and group (default: "/"). IAM
-    paths are a metadata tag on each entity used for filtering — e.g. listing only
-    MMS-managed users via PathPrefix="/mms/". They do not prevent name collisions:
+    IAM path prefix applied to every created user and group (default:
+    "/data_governance_service/"). IAM paths are a metadata tag on each entity used
+    for filtering — e.g. listing only MMS-managed users via
+    PathPrefix="/data_governance_service/". They do not prevent name collisions:
     usernames must still be unique within the account regardless of path. Set this
     to match whatever prefix the MMS deployment uses so that the migrated entities
     are indistinguishable from ones the service would have created itself. The
@@ -259,8 +260,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dst-secret-key", required=True, help="Target secret key")
     p.add_argument(
         "--dst-path-prefix",
-        default="/",
-        help="IAM path prefix for created users/groups (default: /)",
+        default="/data_governance_service/",
+        help="IAM path prefix for created users/groups (default: /data_governance_service/)",
     )
     p.add_argument(
         "--dry-run",

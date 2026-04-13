@@ -157,6 +157,29 @@ async def run(client: S3IAMClient):
         fail("user_exists False", e)
 
     try:
+        info = await client.get_user(USERNAME)
+        assert info.username == USERNAME, (
+            f"expected {USERNAME!r}, got {info.username!r}"
+        )
+        assert info.path == PATH_PREFIX, (
+            f"expected path {PATH_PREFIX!r}, got {info.path!r}"
+        )
+        ok("get_user returns correct name and path")
+    except Exception as e:
+        fail("get_user returns correct name and path", e)
+
+    try:
+        await client.get_user("inttest-nobody")
+        fail("get_user raises for nonexistent user", "no exception raised")
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "NoSuchEntity":
+            ok("get_user raises NoSuchEntity for nonexistent user")
+        else:
+            fail("get_user raises NoSuchEntity for nonexistent user", e)
+    except Exception as e:
+        fail("get_user raises NoSuchEntity for nonexistent user", e)
+
+    try:
         users = await client.list_users()
         assert USERNAME in users, f"{USERNAME} not in {users}"
         ok("list_users")
@@ -258,6 +281,27 @@ async def run(client: S3IAMClient):
         ok("group_exists False")
     except Exception as e:
         fail("group_exists False", e)
+
+    try:
+        info = await client.get_group(GROUP)
+        assert info.group_name == GROUP, f"expected {GROUP!r}, got {info.group_name!r}"
+        assert info.path == PATH_PREFIX, (
+            f"expected path {PATH_PREFIX!r}, got {info.path!r}"
+        )
+        ok("get_group returns correct name and path")
+    except Exception as e:
+        fail("get_group returns correct name and path", e)
+
+    try:
+        await client.get_group("inttest-nobody")
+        fail("get_group raises for nonexistent group", "no exception raised")
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "NoSuchEntity":
+            ok("get_group raises NoSuchEntity for nonexistent group")
+        else:
+            fail("get_group raises NoSuchEntity for nonexistent group", e)
+    except Exception as e:
+        fail("get_group raises NoSuchEntity for nonexistent group", e)
 
     try:
         groups = await client.list_groups()
