@@ -256,13 +256,21 @@ class TestGetTenantDetail:
         assert result.member_count == 2
 
     @pytest.mark.asyncio
-    async def test_steward_can_view(
+    async def test_steward_non_member_can_view_members(
         self, manager, mock_metadata_store, mock_group_manager
     ):
-        mock_group_manager.get_group_members.return_value = ["alice", "bob"]
-        mock_metadata_store.is_steward.return_value = True
+        """A steward who is not in RW/RO groups should still see the member list."""
+        mock_group_manager.get_group_members.return_value = ["bob"]
+        mock_metadata_store.get_stewards.return_value = [
+            {
+                "username": STEWARD.user,
+                "assigned_by": "admin",
+                "assigned_at": datetime.now(timezone.utc),
+            }
+        ]
         result = await manager.get_tenant_detail("t1", STEWARD, "token")
         assert result.metadata.tenant_name == "t1"
+        assert len(result.members) > 0
 
     @pytest.mark.asyncio
     async def test_read_only_no_metadata_write(self, manager, mock_metadata_store):
