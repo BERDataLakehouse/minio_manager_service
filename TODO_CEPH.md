@@ -26,13 +26,3 @@ Once the MinIO code (`src/minio/`) is deleted:
   the Ceph managers.
   - This also means the validate policy name method can be removed as well as various
     exceptions throughout the code base cause by failed validation in policy creator
-
-## Update the README
-
-Update the main `README.md` to document:
-
-- The switch from MinIO MC CLI to Ceph RadosGW IAM API
-- The `S3IAMClient` and its configuration (endpoint, credentials, path prefix)
-- Required environment variables for the IAM client
-- The inline policy model used in Ceph (policy names: `home`, `system` for users;
-  `group` for groups) and how it differs from MinIO's named managed policies
