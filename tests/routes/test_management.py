@@ -550,8 +550,8 @@ class TestDeleteGroupEndpoint:
 
     def test_delete_group_no_metadata(self, client, mock_app_state):
         """Deleting a group with no tenant metadata still succeeds."""
-        mock_app_state.tenant_manager.delete_metadata.side_effect = (
-            TenantNotFoundError("not found")
+        mock_app_state.tenant_manager.delete_metadata.side_effect = TenantNotFoundError(
+            "not found"
         )
         response = client.delete("/management/groups/group1")
 
