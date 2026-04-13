@@ -544,6 +544,8 @@ async def delete_group(
         await app_state.tenant_manager.delete_metadata(group_name)
     except TenantNotFoundError:
         pass  # no tenant metadata for this group
+    except Exception:
+        logger.warning("Failed to delete tenant metadata for group %s", group_name)
 
     response = ResourceDeleteResponse(
         resource_type="group",
