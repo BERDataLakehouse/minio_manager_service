@@ -124,9 +124,7 @@ class TenantManager:
         is_steward = await self.metadata_store.is_steward(
             tenant_name, requesting_user.user
         )
-        show_members = (
-            is_admin or is_steward or requesting_user.user in all_members
-        )
+        show_members = is_admin or is_steward or requesting_user.user in all_members
 
         # Metadata (read-only — no lazy-create on GET)
         meta = await self.metadata_store.get_metadata(tenant_name)
@@ -249,7 +247,9 @@ class TenantManager:
         tenant_name = await self._require_group_exists(tenant_name)
 
         target_group = tenant_name if permission == "read_write" else f"{tenant_name}ro"
-        opposite_group = f"{tenant_name}ro" if permission == "read_write" else tenant_name
+        opposite_group = (
+            f"{tenant_name}ro" if permission == "read_write" else tenant_name
+        )
 
         # Remove from opposite group so the user isn't in both
         try:

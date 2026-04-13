@@ -256,7 +256,9 @@ class TestGetTenantDetail:
         assert result.member_count == 2
 
     @pytest.mark.asyncio
-    async def test_steward_can_view(self, manager, mock_metadata_store, mock_group_manager):
+    async def test_steward_can_view(
+        self, manager, mock_metadata_store, mock_group_manager
+    ):
         mock_group_manager.get_group_members.return_value = ["alice", "bob"]
         mock_metadata_store.is_steward.return_value = True
         result = await manager.get_tenant_detail("t1", STEWARD, "token")
