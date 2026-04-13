@@ -251,11 +251,7 @@ class TenantManager:
             f"{tenant_name}ro" if permission == "read_write" else tenant_name
         )
 
-        # Remove from opposite group so the user isn't in both
-        try:
-            await self._group_manager.remove_user_from_group(username, opposite_group)
-        except GroupOperationError:
-            pass  # user wasn't in the opposite group
+        await self._group_manager.remove_user_from_group(username, opposite_group)
 
         await self._group_manager.add_user_to_group(username, target_group)
 

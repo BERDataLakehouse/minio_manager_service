@@ -360,6 +360,17 @@ class TestAddMember:
         mock_group_manager.add_user_to_group.assert_called_once_with("alice", "t1")
 
     @pytest.mark.asyncio
+    async def test_opposite_removal_failure_propagates(
+        self, manager, mock_group_manager
+    ):
+        """If removing from opposite group fails, the error must propagate."""
+        mock_group_manager.remove_user_from_group.side_effect = GroupOperationError(
+            "MinIO unavailable"
+        )
+        with pytest.raises(GroupOperationError):
+            await manager.add_member("t1", "alice", "read_only", "token")
+
+    @pytest.mark.asyncio
     async def test_nonexistent_group_404(self, manager, mock_group_manager):
         mock_group_manager.resource_exists.return_value = False
         with pytest.raises(TenantNotFoundError):
