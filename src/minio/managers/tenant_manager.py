@@ -104,7 +104,12 @@ class TenantManager:
     async def get_tenant_detail(
         self, tenant_name: str, requesting_user: KBaseUser, token: str
     ) -> TenantDetailResponse:
-        """Get full tenant detail with metadata, stewards, members, and profiles."""
+        """Get full tenant detail including metadata, stewards, and storage paths.
+
+        Members, stewards, and admins see the full member list with profiles.
+        Other authenticated users see an empty member list (member_count is
+        always included).
+        """
         tenant_name = await self._require_group_exists(tenant_name)
 
         # Gather data
@@ -119,19 +124,21 @@ class TenantManager:
         rw_set = set(rw_members)
         all_members = rw_set | set(ro_members)
 
-        # Determine visibility: outsiders see everything except the member list
-        is_admin = requesting_user.admin_perm == AdminPermission.FULL
-        is_steward = await self.metadata_store.is_steward(
-            tenant_name, requesting_user.user
-        )
-        show_members = is_admin or is_steward or requesting_user.user in all_members
-
         # Metadata (read-only — no lazy-create on GET)
         meta = await self.metadata_store.get_metadata(tenant_name)
 
-        # Stewards
+        # Stewards — fetched before show_members so we can derive is_steward
+        # without an extra DB round-trip
         steward_rows = await self.metadata_store.get_stewards(tenant_name)
         steward_usernames = {s["username"] for s in steward_rows}
+
+        # Determine visibility: outsiders see everything except the member list
+        is_admin = requesting_user.admin_perm == AdminPermission.FULL
+        show_members = (
+            is_admin
+            or requesting_user.user in steward_usernames
+            or requesting_user.user in all_members
+        )
 
         # Profiles and member list — only fetched for insiders
         if show_members:
