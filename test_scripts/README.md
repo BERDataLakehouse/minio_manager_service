@@ -18,6 +18,29 @@ docker compose up -d
 
 ## Scripts
 
+### `mms_routes_integration.py`
+
+> **Warning: this script deletes and recreates all MMS IAM data for the two token
+> users. Do not run it with tokens belonging to accounts that have real data in the
+> system.**
+
+End-to-end HTTP smoke-test for all MMS API routes using `requests`. Exercises the full
+service stack (Ceph, Redis, Postgres) via the running `minio-manager` container. Covers
+health, credentials, workspaces, management (users and groups), tenants, sharing, and
+policy regeneration.
+
+Requires two KBase tokens: one for a regular `BERDL_USER` and one for an MMS admin
+(`CDM_JUPYTERHUB_ADMIN` role). Usernames are resolved from the KBase auth API at startup;
+tokens are never logged or printed.
+
+```bash
+INTEG_TEST_KBASE_TOKEN_STANDARD=<token> \
+INTEG_TEST_KBASE_TOKEN_ADMIN=<token> \
+PYTHONPATH=src uv run python test_scripts/mms_routes_integration.py
+```
+
+Optional env var: `KBASE_AUTH_HOST` (default: `https://ci.kbase.us`).
+
 ### `s3_iam_integration.py`
 
 Exercises every method of `S3IAMClient` against the Ceph RadosGW instance defined in
@@ -31,7 +54,7 @@ PYTHONPATH=src uv run python test_scripts/s3_iam_integration.py
 
 ### `s3_client_integration.py`
 
-Exercises `S3Client` against the CEPH instance defined in `docker-compose.yml`.
+Exercises `S3Client` against the Ceph instance defined in `docker-compose.yml`.
 Note: MinIO raises on duplicate bucket creation; Ceph silently succeeds.
 Currently covers `create_bucket` (including `exists_ok` behaviour).
 See the TODO at the top of the file for methods still to be covered.
@@ -74,4 +97,19 @@ instances defined in `docker-compose.yml`. Covers user and group policy lifecycl
 
 ```bash
 PYTHONPATH=src uv run python test_scripts/policy_manager_integration.py
+```
+
+### `minio_to_s3_inline_iam_integration.py`
+
+Integration test for the `migrations/minio_to_s3_inline_iam.py` migration script.
+Creates test users and a group in MinIO with standalone policies, runs the migration
+against the local Ceph instance, and verifies that users, groups, inline policies, and
+memberships were correctly reproduced via the IAM API. Cleans up both source and target
+after the run.
+
+Requires the `mc` binary and both the MinIO and Ceph services to be running.
+
+```bash
+MC_PATH=/path/to/mc PYTHONPATH=src uv run python \
+    test_scripts/minio_to_s3_inline_iam_integration.py
 ```

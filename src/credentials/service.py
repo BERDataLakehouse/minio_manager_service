@@ -8,7 +8,7 @@ routes (user-facing and management) are thin one-liner callers.
 import logging
 
 from s3.core.distributed_lock import DistributedLockManager
-from minio.managers.user_manager import UserManager
+from s3.managers.user_manager import UserManager
 from credentials.store import CredentialStore
 
 logger = logging.getLogger(__name__)
