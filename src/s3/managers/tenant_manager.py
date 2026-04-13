@@ -102,9 +102,14 @@ class TenantManager:
     # ── Tenant detail ────────────────────────────────────────────────────
 
     async def get_tenant_detail(
-        self, tenant_name: str, token: str
+        self, tenant_name: str, requesting_user: KBaseUser, token: str
     ) -> TenantDetailResponse:
-        """Get full tenant detail with metadata, stewards, members, and profiles."""
+        """Get full tenant detail including metadata, stewards, and storage paths.
+
+        Members, stewards, and admins see the full member list with profiles.
+        Other authenticated users see an empty member list (member_count is
+        always included).
+        """
         tenant_name = await self._require_group_exists(tenant_name)
 
         # Gather data
@@ -122,18 +127,33 @@ class TenantManager:
         # Metadata (read-only — no lazy-create on GET)
         meta = await self.metadata_store.get_metadata(tenant_name)
 
-        # Stewards
+        # Stewards — fetched before show_members so we can derive is_steward
+        # without an extra DB round-trip
         steward_rows = await self.metadata_store.get_stewards(tenant_name)
         steward_usernames = {s["username"] for s in steward_rows}
 
-        # Profiles
-        all_usernames = list(all_members | steward_usernames)
-        profiles = await self._profile_client.get_user_profiles(all_usernames, token)
-
-        # Build member responses
-        members = self._build_member_list(
-            rw_set, ro_members, steward_usernames, profiles
+        # Determine visibility: outsiders see everything except the member list
+        is_admin = requesting_user.admin_perm == AdminPermission.FULL
+        show_members = (
+            is_admin
+            or requesting_user.user in steward_usernames
+            or requesting_user.user in all_members
         )
+
+        # Profiles and member list — only fetched for insiders
+        if show_members:
+            all_usernames = list(all_members | steward_usernames)
+            profiles = await self._profile_client.get_user_profiles(
+                all_usernames, token
+            )
+            members = self._build_member_list(
+                rw_set, ro_members, steward_usernames, profiles
+            )
+        else:
+            profiles = await self._profile_client.get_user_profiles(
+                list(steward_usernames), token
+            )
+            members = []
 
         # Build steward responses
         stewards = [
@@ -226,10 +246,20 @@ class TenantManager:
         permission: str,
         token: str,
     ) -> TenantMemberResponse:
-        """Add a user to a tenant with the given permission level."""
+        """Add a user to a tenant with the given permission level.
+
+        If the user is already in the opposite permission group, they are moved
+        (removed from the old group, added to the new one).
+        """
         tenant_name = await self._require_group_exists(tenant_name)
 
         target_group = tenant_name if permission == "read_write" else f"{tenant_name}ro"
+        opposite_group = (
+            f"{tenant_name}ro" if permission == "read_write" else tenant_name
+        )
+
+        await self._group_manager.remove_user_from_group(username, opposite_group)
+
         await self._group_manager.add_user_to_group(username, target_group)
 
         profiles = await self._profile_client.get_user_profiles([username], token)
