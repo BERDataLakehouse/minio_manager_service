@@ -483,7 +483,9 @@ def test_management_users(
             f"expected users {{{admin_user!r}, {standard_user!r}}}, "
             f"got {set(users_by_name)}"
         )
-        assert_user_entry(users_by_name[admin_user], admin_user, expect_globalusersro=True)
+        assert_user_entry(
+            users_by_name[admin_user], admin_user, expect_globalusersro=True
+        )
         assert_user_entry(users_by_name[standard_user], standard_user)
         ok("GET /management/users returns full paginated user list")
     except Exception as e:
@@ -586,7 +588,9 @@ def test_management_users(
         )
         ok(f"DELETE /management/users/{EPHEMERAL_USER} removes ephemeral test user")
     except Exception as e:
-        fail(f"DELETE /management/users/{EPHEMERAL_USER} removes ephemeral test user", e)
+        fail(
+            f"DELETE /management/users/{EPHEMERAL_USER} removes ephemeral test user", e
+        )
 
     # POST /management/users/{username} — idempotent; standard user already exists
     try:
@@ -1085,7 +1089,9 @@ def test_tenants(
         members = r.json()
         # Same membership as the detail call above: both users in the RW group,
         # admin_user also in the RO shadow but RW takes precedence. Sorted alphabetically.
-        assert [m["username"] for m in members] == sorted([admin_user, standard_user]), (
+        assert [m["username"] for m in members] == sorted(
+            [admin_user, standard_user]
+        ), (
             f"expected members {sorted([admin_user, standard_user])}, "
             f"got {[m['username'] for m in members]}"
         )
@@ -1113,9 +1119,14 @@ def test_tenants(
             token=admin_token,
         )
         assert r.status_code == 204, f"expected 204, got {r.status_code}: {r.text}"
-        ok("DELETE /tenants/{tenant_name}/members/{username} removes member (pre-POST setup)")
+        ok(
+            "DELETE /tenants/{tenant_name}/members/{username} removes member (pre-POST setup)"
+        )
     except Exception as e:
-        fail("DELETE /tenants/{tenant_name}/members/{username} removes member (pre-POST setup)", e)
+        fail(
+            "DELETE /tenants/{tenant_name}/members/{username} removes member (pre-POST setup)",
+            e,
+        )
 
     # POST /tenants/{tenant_name}/members/{username}
     try:
@@ -1418,9 +1429,7 @@ async def _verify_cleanup(admin_user: str, standard_user: str) -> list[str]:
             ]:
                 objects = await s3.list_objects(BUCKET, prefix)
                 if objects:
-                    errors.append(
-                        f"S3 objects remain at {BUCKET}/{prefix}: {objects}"
-                    )
+                    errors.append(f"S3 objects remain at {BUCKET}/{prefix}: {objects}")
             spark_prefix = f"{SPARK_LOGS_PREFIX}/{username}/"
             if await s3.bucket_exists(SPARK_LOGS_BUCKET):
                 objects = await s3.list_objects(SPARK_LOGS_BUCKET, spark_prefix)
@@ -1437,9 +1446,7 @@ async def _verify_cleanup(admin_user: str, standard_user: str) -> list[str]:
             ]:
                 objects = await s3.list_objects(BUCKET, prefix)
                 if objects:
-                    errors.append(
-                        f"S3 objects remain at {BUCKET}/{prefix}: {objects}"
-                    )
+                    errors.append(f"S3 objects remain at {BUCKET}/{prefix}: {objects}")
 
     return errors
 
@@ -1467,7 +1474,9 @@ def cleanup(admin_token: str, admin_user: str, standard_user: str) -> None:
                 f"DELETE {path}: expected resource_name {resource_name!r}, "
                 f"got {body.get('resource_name')!r}"
             )
-        expected_msg = f"{resource_type.capitalize()} {resource_name} deleted successfully"
+        expected_msg = (
+            f"{resource_type.capitalize()} {resource_name} deleted successfully"
+        )
         if body.get("message") != expected_msg:
             errors.append(
                 f"DELETE {path}: expected message {expected_msg!r}, "
@@ -1477,7 +1486,9 @@ def cleanup(admin_token: str, admin_user: str, standard_user: str) -> None:
     # Delete tenant metadata (204 no content)
     r = mms("DELETE", f"/tenants/{GROUP_NAME}", token=admin_token)
     if r.status_code != 204:
-        errors.append(f"DELETE /tenants/{GROUP_NAME}: expected 204, got {r.status_code} {r.text}")
+        errors.append(
+            f"DELETE /tenants/{GROUP_NAME}: expected 204, got {r.status_code} {r.text}"
+        )
 
     # Delete group (also deletes RO shadow and S3 workspace)
     r = mms("DELETE", f"/management/groups/{GROUP_NAME}", token=admin_token)
