@@ -36,6 +36,7 @@ from routes.management import (
 )
 from service.dependencies import auth, require_admin
 from service.exception_handlers import universal_error_handler
+from service.exceptions import TenantNotFoundError
 from service.kb_auth import AdminPermission, KBaseUser
 
 
@@ -545,6 +546,16 @@ class TestDeleteGroupEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["resource_type"] == "group"
+        mock_app_state.tenant_manager.delete_metadata.assert_called_once_with("group1")
+
+    def test_delete_group_no_metadata(self, client, mock_app_state):
+        """Deleting a group with no tenant metadata still succeeds."""
+        mock_app_state.tenant_manager.delete_metadata.side_effect = (
+            TenantNotFoundError("not found")
+        )
+        response = client.delete("/management/groups/group1")
+
+        assert response.status_code == 200
 
     def test_delete_group_failure(self, client, mock_app_state):
         """Test handling delete failure."""
