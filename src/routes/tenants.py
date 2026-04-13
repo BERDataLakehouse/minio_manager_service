@@ -56,9 +56,9 @@ async def list_tenants(
     response_model=TenantDetailResponse,
     summary="Get tenant detail",
     description=(
-        "Get full tenant detail including metadata, member list with profiles "
-        "(display name, email, access level), steward list, and storage paths. "
-        "Visible to any authenticated user."
+        "Get full tenant detail including metadata, steward list, and storage paths. "
+        "Member list with profiles (display name, email, access level) is only "
+        "included for members, stewards, and admins."
     ),
 )
 async def get_tenant_detail(
@@ -68,7 +68,9 @@ async def get_tenant_detail(
 ):
     app_state = get_app_state(request)
     token = _extract_token(request)
-    return await app_state.tenant_manager.get_tenant_detail(tenant_name, token)
+    return await app_state.tenant_manager.get_tenant_detail(
+        tenant_name, authenticated_user, token
+    )
 
 
 # ── Update tenant metadata ──────────────────────────────────────────────

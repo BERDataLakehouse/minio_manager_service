@@ -238,16 +238,45 @@ class TestListTenants:
 
 class TestGetTenantDetail:
     @pytest.mark.asyncio
-    async def test_any_user_can_view(self, manager):
-        result = await manager.get_tenant_detail("t1", "token")
+    async def test_member_can_view(self, manager):
+        result = await manager.get_tenant_detail("t1", MEMBER, "token")
         assert result.metadata.tenant_name == "t1"
         assert result.storage_paths is not None
+
+    @pytest.mark.asyncio
+    async def test_admin_can_view(self, manager):
+        result = await manager.get_tenant_detail("t1", ADMIN, "token")
+        assert result.metadata.tenant_name == "t1"
+
+    @pytest.mark.asyncio
+    async def test_outsider_sees_empty_members(self, manager, mock_group_manager):
+        mock_group_manager.get_group_members.return_value = ["alice", "bob"]
+        result = await manager.get_tenant_detail("t1", OUTSIDER, "token")
+        assert result.members == []
+        assert result.member_count == 2
+
+    @pytest.mark.asyncio
+    async def test_steward_non_member_can_view_members(
+        self, manager, mock_metadata_store, mock_group_manager
+    ):
+        """A steward who is not in RW/RO groups should still see the member list."""
+        mock_group_manager.get_group_members.return_value = ["bob"]
+        mock_metadata_store.get_stewards.return_value = [
+            {
+                "username": STEWARD.user,
+                "assigned_by": "admin",
+                "assigned_at": datetime.now(timezone.utc),
+            }
+        ]
+        result = await manager.get_tenant_detail("t1", STEWARD, "token")
+        assert result.metadata.tenant_name == "t1"
+        assert len(result.members) > 0
 
     @pytest.mark.asyncio
     async def test_read_only_no_metadata_write(self, manager, mock_metadata_store):
         """GET detail must not write to DB — returns defaults when metadata missing."""
         mock_metadata_store.get_metadata.return_value = None
-        result = await manager.get_tenant_detail("t1", "token")
+        result = await manager.get_tenant_detail("t1", ADMIN, "token")
         assert result.metadata.tenant_name == "t1"
         assert result.metadata.created_by is None
         assert result.metadata.created_at is None
@@ -257,7 +286,7 @@ class TestGetTenantDetail:
     async def test_nonexistent_group_404(self, manager, mock_group_manager):
         mock_group_manager.resource_exists.return_value = False
         with pytest.raises(TenantNotFoundError):
-            await manager.get_tenant_detail("nope", "token")
+            await manager.get_tenant_detail("nope", ADMIN, "token")
 
     @pytest.mark.asyncio
     async def test_ro_group_error_is_swallowed(self, manager, mock_group_manager):
@@ -272,7 +301,7 @@ class TestGetTenantDetail:
             return ["alice", "bob"]
 
         mock_group_manager.get_group_members.side_effect = get_members
-        result = await manager.get_tenant_detail("t1", "token")
+        result = await manager.get_tenant_detail("t1", MEMBER, "token")
         assert result.member_count == 2
 
 
@@ -307,12 +336,47 @@ class TestAddMember:
         result = await manager.add_member("t1", "charlie", "read_write", "token")
         assert result.access_level == "read_write"
         mock_group_manager.add_user_to_group.assert_called_once_with("charlie", "t1")
+        mock_group_manager.remove_user_from_group.assert_called_once_with(
+            "charlie", "t1ro"
+        )
 
     @pytest.mark.asyncio
     async def test_add_ro_member(self, manager, mock_group_manager):
         result = await manager.add_member("t1", "charlie", "read_only", "token")
         assert result.access_level == "read_only"
         mock_group_manager.add_user_to_group.assert_called_once_with("charlie", "t1ro")
+        mock_group_manager.remove_user_from_group.assert_called_once_with(
+            "charlie", "t1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_downgrade_rw_to_ro(self, manager, mock_group_manager):
+        """Moving a user from RW to RO removes them from RW first."""
+        result = await manager.add_member("t1", "alice", "read_only", "token")
+        assert result.access_level == "read_only"
+        mock_group_manager.remove_user_from_group.assert_called_once_with("alice", "t1")
+        mock_group_manager.add_user_to_group.assert_called_once_with("alice", "t1ro")
+
+    @pytest.mark.asyncio
+    async def test_upgrade_ro_to_rw(self, manager, mock_group_manager):
+        """Moving a user from RO to RW removes them from RO first."""
+        result = await manager.add_member("t1", "alice", "read_write", "token")
+        assert result.access_level == "read_write"
+        mock_group_manager.remove_user_from_group.assert_called_once_with(
+            "alice", "t1ro"
+        )
+        mock_group_manager.add_user_to_group.assert_called_once_with("alice", "t1")
+
+    @pytest.mark.asyncio
+    async def test_opposite_removal_failure_propagates(
+        self, manager, mock_group_manager
+    ):
+        """If removing from opposite group fails, the error must propagate."""
+        mock_group_manager.remove_user_from_group.side_effect = GroupOperationError(
+            "MinIO unavailable"
+        )
+        with pytest.raises(GroupOperationError):
+            await manager.add_member("t1", "alice", "read_only", "token")
 
     @pytest.mark.asyncio
     async def test_nonexistent_group_404(self, manager, mock_group_manager):
