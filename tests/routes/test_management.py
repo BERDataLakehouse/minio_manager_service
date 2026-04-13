@@ -556,6 +556,7 @@ class TestDeleteGroupEndpoint:
         response = client.delete("/management/groups/group1")
 
         assert response.status_code == 200
+        mock_app_state.tenant_manager.delete_metadata.assert_called_once_with("group1")
 
     def test_delete_group_failure(self, client, mock_app_state):
         """Test handling delete failure."""
