@@ -26,6 +26,7 @@ from service.exceptions import (
     DataGovernanceError,
     GroupOperationError,
     PolicyOperationError,
+    TenantNotFoundError,
     UserOperationError,
 )
 
@@ -581,12 +582,17 @@ async def delete_group(
     request: Request,
     authenticated_user=Depends(require_admin),
 ):
-    """Delete a group."""
+    """Delete a group and any associated tenant metadata."""
     app_state = get_app_state(request)
 
     success = await app_state.group_manager.delete_resource(group_name)
     if not success:
         raise GroupOperationError(f"Failed to delete group {group_name}")
+
+    try:
+        await app_state.tenant_manager.delete_metadata(group_name)
+    except TenantNotFoundError:
+        pass  # no tenant metadata for this group
 
     response = ResourceDeleteResponse(
         resource_type="group",
