@@ -23,6 +23,13 @@ RESOURCE_TYPE: str = "user"
 # This group can be used to apply policies, share paths, etc. to all users
 GLOBAL_USER_GROUP = "globalusers"
 
+# Read-only group of the RefData tenant. New users are automatically added to
+# this group on creation, giving them read-only access to reference datasets.
+# Unlike GLOBAL_USER_GROUP, this group is NOT auto-created — an admin must
+# create the RefData tenant explicitly via the normal tenant flow. If the group
+# is missing, auto-add is skipped with a warning.
+REFDATA_TENANT_RO_GROUP = "refdataro"
+
 
 class UserManager(ResourceManager[UserModel]):
     """UserManager for basic user operations with patterns and generic CRUD."""
@@ -201,6 +208,17 @@ class UserManager(ResourceManager[UserModel]):
             if not await self.group_manager.resource_exists(GLOBAL_USER_GROUP):
                 await self.group_manager.create_group(GLOBAL_USER_GROUP, username)
             await self.group_manager.add_user_to_group(username, GLOBAL_USER_GROUP)
+
+            if await self.group_manager.resource_exists(REFDATA_TENANT_RO_GROUP):
+                await self.group_manager.add_user_to_group(
+                    username, REFDATA_TENANT_RO_GROUP
+                )
+            else:
+                logger.warning(
+                    "RefData RO group '%s' does not exist; skipping auto-add for user '%s'",
+                    REFDATA_TENANT_RO_GROUP,
+                    username,
+                )
 
             return UserModel(
                 username=username,

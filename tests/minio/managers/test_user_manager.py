@@ -14,7 +14,11 @@ import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from minio.managers.user_manager import UserManager, GLOBAL_USER_GROUP
+from minio.managers.user_manager import (
+    GLOBAL_USER_GROUP,
+    REFDATA_TENANT_RO_GROUP,
+    UserManager,
+)
 from s3.core.s3_client import S3Client
 from s3.models.s3_config import S3Config
 from s3.models.policy import (
@@ -389,6 +393,65 @@ class TestCreateUser:
         mock_group_manager.create_group.assert_called_once_with(
             GLOBAL_USER_GROUP, "testuser"
         )
+
+    @pytest.mark.asyncio
+    async def test_adds_user_to_refdata_ro_when_group_exists(
+        self,
+        user_manager,
+        mock_executor,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
+    ):
+        """New users are auto-added to the RefData RO group when it exists."""
+        mock_executor._execute_command.return_value = MagicMock(success=True, stderr="")
+        mock_policy_manager.ensure_user_policies.return_value = (
+            sample_user_home_policy,
+            sample_user_system_policy,
+        )
+        user_manager.resource_exists = AsyncMock(return_value=False)
+        mock_group_manager.resource_exists.return_value = True
+
+        await user_manager.create_user("testuser")
+
+        mock_group_manager.add_user_to_group.assert_any_call(
+            "testuser", REFDATA_TENANT_RO_GROUP
+        )
+
+    @pytest.mark.asyncio
+    async def test_skips_refdata_ro_add_when_group_missing(
+        self,
+        user_manager,
+        mock_executor,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
+    ):
+        """If the RefData RO group does not exist, auto-add is skipped (not created)."""
+        mock_executor._execute_command.return_value = MagicMock(success=True, stderr="")
+        mock_policy_manager.ensure_user_policies.return_value = (
+            sample_user_home_policy,
+            sample_user_system_policy,
+        )
+        user_manager.resource_exists = AsyncMock(return_value=False)
+
+        # globalusers exists, refdataro does not
+        async def resource_exists_side_effect(name):
+            return name != REFDATA_TENANT_RO_GROUP
+
+        mock_group_manager.resource_exists.side_effect = resource_exists_side_effect
+
+        await user_manager.create_user("testuser")
+
+        # globalusers add happens; refdataro add does not
+        add_calls = mock_group_manager.add_user_to_group.call_args_list
+        assert ("testuser", GLOBAL_USER_GROUP) in [c.args for c in add_calls]
+        assert ("testuser", REFDATA_TENANT_RO_GROUP) not in [c.args for c in add_calls]
+        # Must not auto-create the RefData tenant
+        create_calls = [c.args for c in mock_group_manager.create_group.call_args_list]
+        assert all(args[0] != REFDATA_TENANT_RO_GROUP for args in create_calls)
 
     @pytest.mark.asyncio
     async def test_create_user_validates_username(self, user_manager):
