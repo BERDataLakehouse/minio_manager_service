@@ -6,7 +6,7 @@ import string
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from service.exceptions import UserOperationError
+from service.exceptions import GroupNotFoundError, UserOperationError
 from s3.core.s3_client import S3Client
 from s3.core.policy_creator import SYSTEM_RESOURCE_CONFIG
 from minio.models.command import UserAction
@@ -209,11 +209,11 @@ class UserManager(ResourceManager[UserModel]):
                 await self.group_manager.create_group(GLOBAL_USER_GROUP, username)
             await self.group_manager.add_user_to_group(username, GLOBAL_USER_GROUP)
 
-            if await self.group_manager.resource_exists(REFDATA_TENANT_RO_GROUP):
+            try:
                 await self.group_manager.add_user_to_group(
                     username, REFDATA_TENANT_RO_GROUP
                 )
-            else:
+            except GroupNotFoundError:
                 logger.warning(
                     "RefData RO group '%s' does not exist; skipping auto-add for user '%s'",
                     REFDATA_TENANT_RO_GROUP,

@@ -28,7 +28,7 @@ from s3.models.policy import (
     PolicyStatement,
     PolicyAction,
 )
-from service.exceptions import UserOperationError
+from service.exceptions import GroupNotFoundError, UserOperationError
 
 
 # =============================================================================
@@ -437,18 +437,20 @@ class TestCreateUser:
         )
         user_manager.resource_exists = AsyncMock(return_value=False)
 
-        # globalusers exists, refdataro does not
-        async def resource_exists_side_effect(name):
-            return name != REFDATA_TENANT_RO_GROUP
+        # add_user_to_group raises GroupNotFoundError only for refdataro
+        async def add_user_to_group_side_effect(username, group_name):
+            if group_name == REFDATA_TENANT_RO_GROUP:
+                raise GroupNotFoundError(f"Group {group_name} not found")
+            return None
 
-        mock_group_manager.resource_exists.side_effect = resource_exists_side_effect
+        mock_group_manager.add_user_to_group.side_effect = add_user_to_group_side_effect
 
         await user_manager.create_user("testuser")
 
-        # globalusers add happens; refdataro add does not
-        add_calls = mock_group_manager.add_user_to_group.call_args_list
-        assert ("testuser", GLOBAL_USER_GROUP) in [c.args for c in add_calls]
-        assert ("testuser", REFDATA_TENANT_RO_GROUP) not in [c.args for c in add_calls]
+        # globalusers add succeeded; refdataro add was attempted and swallowed
+        add_calls = [c.args for c in mock_group_manager.add_user_to_group.call_args_list]
+        assert ("testuser", GLOBAL_USER_GROUP) in add_calls
+        assert ("testuser", REFDATA_TENANT_RO_GROUP) in add_calls
         # Must not auto-create the RefData tenant
         create_calls = [c.args for c in mock_group_manager.create_group.call_args_list]
         assert all(args[0] != REFDATA_TENANT_RO_GROUP for args in create_calls)
