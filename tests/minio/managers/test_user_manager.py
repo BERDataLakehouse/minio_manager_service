@@ -453,9 +453,8 @@ class TestCreateUser:
         ]
         assert ("testuser", GLOBAL_USER_GROUP) in add_calls
         assert ("testuser", REFDATA_TENANT_RO_GROUP) in add_calls
-        # Must not auto-create the RefData tenant
-        create_calls = [c.args for c in mock_group_manager.create_group.call_args_list]
-        assert all(args[0] != REFDATA_TENANT_RO_GROUP for args in create_calls)
+        # Must not auto-create the RefData tenant (globalusers already exists here)
+        mock_group_manager.create_group.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_create_user_validates_username(self, user_manager):
