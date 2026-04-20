@@ -70,6 +70,10 @@ class GroupOperationError(S3ManagerError):
     """Raised when MinIO group operations fail."""
 
 
+class GroupNotFoundError(GroupOperationError):
+    """Raised when a MinIO group does not exist."""
+
+
 class DataGovernanceError(S3ManagerError):
     """Raised when data governance validation fails."""
 

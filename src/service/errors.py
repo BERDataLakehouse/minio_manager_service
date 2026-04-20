@@ -52,6 +52,9 @@ class ErrorType(Enum):
     GROUP_OPERATION_ERROR = (20040, "MinIO group operation error")
     """ A MinIO group operation failed. """
 
+    GROUP_NOT_FOUND_ERROR = (20041, "MinIO group not found")
+    """ A MinIO group was not found. """
+
     DATA_GOVERNANCE_ERROR = (20042, "Data governance policy violation")
     """ A data governance policy was violated. """
 
