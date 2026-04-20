@@ -448,7 +448,9 @@ class TestCreateUser:
         await user_manager.create_user("testuser")
 
         # globalusers add succeeded; refdataro add was attempted and swallowed
-        add_calls = [c.args for c in mock_group_manager.add_user_to_group.call_args_list]
+        add_calls = [
+            c.args for c in mock_group_manager.add_user_to_group.call_args_list
+        ]
         assert ("testuser", GLOBAL_USER_GROUP) in add_calls
         assert ("testuser", REFDATA_TENANT_RO_GROUP) in add_calls
         # Must not auto-create the RefData tenant
