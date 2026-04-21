@@ -5,7 +5,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
-from service.exceptions import UserOperationError
+from service.exceptions import GroupNotFoundError, UserOperationError
 from s3.core.policy_creator import SYSTEM_RESOURCE_CONFIG
 from s3.core.s3_client import S3Client
 from s3.core.s3_iam_client import S3IAMClient
@@ -19,6 +19,13 @@ logger = logging.getLogger(__name__)
 
 # All users are automatically added to this group on creation.
 GLOBAL_USER_GROUP = "globalusers"
+
+# Read-only group of the RefData tenant. New users are automatically added to
+# this group on creation, giving them read-only access to reference datasets.
+# Unlike GLOBAL_USER_GROUP, this group is NOT auto-created — an admin must
+# create the RefData tenant explicitly via the normal tenant flow. If the group
+# is missing, auto-add is skipped with a warning.
+REFDATA_TENANT_RO_GROUP = "refdataro"
 
 
 class UserManager:
@@ -166,6 +173,17 @@ class UserManager:
         if not await self._group_manager.group_exists(GLOBAL_USER_GROUP):
             await self._group_manager.create_group(GLOBAL_USER_GROUP, username)
         await self._group_manager.add_user_to_group(username, GLOBAL_USER_GROUP)
+
+        try:
+            await self._group_manager.add_user_to_group(
+                username, REFDATA_TENANT_RO_GROUP
+            )
+        except GroupNotFoundError:
+            logger.warning(
+                "RefData RO group '%s' does not exist; skipping auto-add for user '%s'",
+                REFDATA_TENANT_RO_GROUP,
+                username,
+            )
 
         return UserModel(
             username=username,

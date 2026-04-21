@@ -13,7 +13,11 @@ from s3.core.s3_client import S3Client
 from s3.core.s3_iam_client import S3IAMClient
 from s3.managers.group_manager import GroupManager
 from s3.managers.policy_manager import PolicyManager
-from s3.managers.user_manager import GLOBAL_USER_GROUP, UserManager
+from s3.managers.user_manager import (
+    GLOBAL_USER_GROUP,
+    REFDATA_TENANT_RO_GROUP,
+    UserManager,
+)
 from s3.models.policy import (
     PolicyAction,
     PolicyDocument,
@@ -22,7 +26,7 @@ from s3.models.policy import (
     PolicyStatement,
 )
 from s3.models.s3_config import S3Config
-from service.exceptions import UserOperationError
+from service.exceptions import GroupNotFoundError, UserOperationError
 
 
 # TODO TESTING these tests are AI generated and... aren't great. Could probably use a rework
@@ -158,9 +162,7 @@ async def test_create_user_creates_global_group_if_not_exists(
     mock_group_manager.group_exists.return_value = False
     await user_manager.create_user("alice")
     mock_group_manager.create_group.assert_called_once_with(GLOBAL_USER_GROUP, "alice")
-    mock_group_manager.add_user_to_group.assert_called_once_with(
-        "alice", GLOBAL_USER_GROUP
-    )
+    mock_group_manager.add_user_to_group.assert_any_call("alice", GLOBAL_USER_GROUP)
 
 
 async def test_create_user_skips_create_group_if_global_group_exists(
@@ -169,9 +171,36 @@ async def test_create_user_skips_create_group_if_global_group_exists(
     mock_group_manager.group_exists.return_value = True
     await user_manager.create_user("alice")
     mock_group_manager.create_group.assert_not_called()
-    mock_group_manager.add_user_to_group.assert_called_once_with(
-        "alice", GLOBAL_USER_GROUP
+    mock_group_manager.add_user_to_group.assert_any_call("alice", GLOBAL_USER_GROUP)
+
+
+async def test_adds_user_to_refdata_ro_when_group_exists(
+    user_manager, mock_group_manager
+):
+    """New users are auto-added to the RefData RO group when it exists."""
+    await user_manager.create_user("alice")
+    mock_group_manager.add_user_to_group.assert_any_call(
+        "alice", REFDATA_TENANT_RO_GROUP
     )
+
+
+async def test_skips_refdata_ro_add_when_group_missing(
+    user_manager, mock_group_manager
+):
+    """If the RefData RO group does not exist, auto-add is skipped (not created)."""
+
+    async def add_user_to_group_side_effect(username, group_name):
+        if group_name == REFDATA_TENANT_RO_GROUP:
+            raise GroupNotFoundError(f"Group {group_name} not found")
+        return None
+
+    mock_group_manager.add_user_to_group.side_effect = add_user_to_group_side_effect
+
+    await user_manager.create_user("alice")
+
+    mock_group_manager.add_user_to_group.assert_any_call("alice", GLOBAL_USER_GROUP)
+    mock_group_manager.add_user_to_group.assert_any_call("alice", REFDATA_TENANT_RO_GROUP)
+    mock_group_manager.create_group.assert_not_called()
 
 
 async def test_create_user_returns_user_model_with_credentials(user_manager):

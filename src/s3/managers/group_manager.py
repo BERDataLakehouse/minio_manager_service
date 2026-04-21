@@ -2,7 +2,7 @@
 
 import logging
 
-from service.exceptions import GroupOperationError
+from service.exceptions import GroupNotFoundError, GroupOperationError
 from s3.core.s3_client import S3Client
 from s3.core.s3_iam_client import S3IAMClient
 from s3.managers.policy_manager import PolicyManager
@@ -149,7 +149,7 @@ class GroupManager:
         group_name: Group to add the user to.
         """
         if not await self._iam_client.group_exists(group_name):
-            raise GroupOperationError(f"Group {group_name} not found")
+            raise GroupNotFoundError(f"Group {group_name} not found")
         if not await self._iam_client.user_exists(username):
             raise GroupOperationError(f"User {username} does not exist")
         await self._iam_client.add_user_to_group(username, group_name)
@@ -166,7 +166,7 @@ class GroupManager:
         group_name: Group to remove the user from.
         """
         if not await self._iam_client.group_exists(group_name):
-            raise GroupOperationError(f"Group {group_name} not found")
+            raise GroupNotFoundError(f"Group {group_name} not found")
         await self._iam_client.remove_user_from_group(username, group_name)
         logger.info("Removed user %s from group %s", username, group_name)
 
@@ -177,7 +177,7 @@ class GroupManager:
         group_name: Name of the group.
         """
         if not await self._iam_client.group_exists(group_name):
-            raise GroupOperationError(f"Group {group_name} not found")
+            raise GroupNotFoundError(f"Group {group_name} not found")
         return await self._iam_client.list_users_in_group(group_name)
 
     async def get_group_info(self, group_name: str) -> GroupModel:
@@ -187,7 +187,7 @@ class GroupManager:
         group_name: Name of the group.
         """
         if not await self._iam_client.group_exists(group_name):
-            raise GroupOperationError(f"Group {group_name} not found")
+            raise GroupNotFoundError(f"Group {group_name} not found")
         members = await self._iam_client.list_users_in_group(group_name)
         return GroupModel(group_name=group_name, members=members)
 
