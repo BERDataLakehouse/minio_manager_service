@@ -199,7 +199,9 @@ async def test_skips_refdata_ro_add_when_group_missing(
     await user_manager.create_user("alice")
 
     mock_group_manager.add_user_to_group.assert_any_call("alice", GLOBAL_USER_GROUP)
-    mock_group_manager.add_user_to_group.assert_any_call("alice", REFDATA_TENANT_RO_GROUP)
+    mock_group_manager.add_user_to_group.assert_any_call(
+        "alice", REFDATA_TENANT_RO_GROUP
+    )
     mock_group_manager.create_group.assert_not_called()
 
 
