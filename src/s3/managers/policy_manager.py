@@ -256,8 +256,7 @@ class PolicyManager:
         generated default.
 
         Unlike ensure_user_policies(), this always writes — it is used during
-        migrations to push new path statements (e.g. Iceberg paths) to all
-        pre-existing users.
+        migrations to push new path statements to all pre-existing users.
 
         username: The user whose home policy to regenerate.
         """
@@ -266,6 +265,23 @@ class PolicyManager:
             username, _USER_HOME_IAM_POLICY, _policy_to_dict(fresh)
         )
         logger.info(f"Regenerated user home policy for user {username}")
+        return fresh
+
+    async def regenerate_user_system_policy(self, username: str) -> PolicyModel:
+        """
+        Unconditionally overwrite the user's system inline policy with a freshly
+        generated default.
+
+        Unlike ensure_user_policies(), this always writes — it is used during
+        migrations to push new path statements to all pre-existing users.
+
+        username: The user whose system policy to regenerate.
+        """
+        fresh = self._create_policy_model(PolicyType.USER_SYSTEM, username)
+        await self._iam_client.set_user_policy(
+            username, _USER_SYSTEM_IAM_POLICY, _policy_to_dict(fresh)
+        )
+        logger.info(f"Regenerated user system policy for user {username}")
         return fresh
 
     async def regenerate_group_home_policy(
