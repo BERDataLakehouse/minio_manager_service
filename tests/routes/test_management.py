@@ -22,6 +22,7 @@ from routes.management import (
     GroupManagementResponse,
     GroupNamesResponse,
     ResourceDeleteResponse,
+    RotateAllCredentialsResponse,
     UserListResponse,
     UserManagementResponse,
     UserNamesResponse,
@@ -912,3 +913,91 @@ class TestRegeneratePoliciesEndpoint:
         assert data["users_updated"] == 0
         assert data["groups_updated"] == 0
         assert data["errors"] == []
+
+
+class TestRotateAllCredentialsEndpoint:
+    """Tests for rotate_all_credentials endpoint."""
+
+    @pytest.fixture
+    def rotate_app_state(self, mock_app_state):
+        mock_app_state.user_manager.list_resources = AsyncMock(
+            return_value=["alice", "bob"]
+        )
+        mock_app_state.credential_service.rotate = AsyncMock(
+            return_value=("alice", "new-secret")
+        )
+        return mock_app_state
+
+    @pytest.fixture
+    def rotate_client(self, test_app, rotate_app_state):
+        with patch("routes.management.get_app_state", return_value=rotate_app_state):
+            yield TestClient(test_app, raise_server_exceptions=False)
+
+    def test_rotate_all_success(self, rotate_client, rotate_app_state):
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_rotated"] == 2
+        assert data["users_failed"] == 0
+        assert data["errors"] == []
+        assert data["performed_by"] == "admin"
+
+    def test_rotate_all_calls_rotate_for_each_user(
+        self, rotate_client, rotate_app_state
+    ):
+        rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        calls = rotate_app_state.credential_service.rotate.call_args_list
+        assert len(calls) == 2
+        assert calls[0].args == ("alice",)
+        assert calls[1].args == ("bob",)
+
+    def test_rotate_all_error_continues(self, rotate_client, rotate_app_state):
+        rotate_app_state.credential_service.rotate.side_effect = [
+            Exception("alice rotate failed"),
+            ("bob", "new-secret"),
+        ]
+
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_rotated"] == 1
+        assert data["users_failed"] == 1
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["resource_name"] == "alice"
+        assert data["errors"][0]["resource_type"] == "user"
+        assert "alice rotate failed" in data["errors"][0]["error"]
+
+    def test_rotate_all_all_fail(self, rotate_client, rotate_app_state):
+        rotate_app_state.credential_service.rotate.side_effect = Exception(
+            "rotate failed"
+        )
+
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_rotated"] == 0
+        assert data["users_failed"] == 2
+        assert len(data["errors"]) == 2
+
+    def test_rotate_all_no_users(self, rotate_client, rotate_app_state):
+        rotate_app_state.user_manager.list_resources.return_value = []
+
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_rotated"] == 0
+        assert data["users_failed"] == 0
+        assert data["errors"] == []
+
+    def test_rotate_all_response_model_valid(self, rotate_client, rotate_app_state):
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        parsed = RotateAllCredentialsResponse(**response.json())
+        assert parsed.users_rotated == 2
+        assert parsed.users_failed == 0
