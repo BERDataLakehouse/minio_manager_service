@@ -149,6 +149,28 @@ async def test_regenerate_user_home_policy_overwrites_existing(
     mock_iam_client.set_user_policy.assert_called_once()
 
 
+async def test_regenerate_user_system_policy_always_writes(
+    policy_manager, mock_iam_client
+):
+    result = await policy_manager.regenerate_user_system_policy("alice")
+
+    assert result.policy_name is None
+    assert len(result.policy_document.statement) > 0
+    mock_iam_client.set_user_policy.assert_called_once_with(
+        "alice", _USER_SYSTEM_IAM_POLICY, result.policy_document.to_dict()
+    )
+
+
+async def test_regenerate_user_system_policy_overwrites_existing(
+    policy_manager, mock_iam_client
+):
+    mock_iam_client.get_user_policy = AsyncMock(return_value=empty_policy_doc())
+
+    await policy_manager.regenerate_user_system_policy("alice")
+
+    mock_iam_client.set_user_policy.assert_called_once()
+
+
 async def test_regenerate_group_home_policy_rw(policy_manager, mock_iam_client):
     result = await policy_manager.regenerate_group_home_policy("researchers")
 
