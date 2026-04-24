@@ -162,18 +162,23 @@ async def run(
             f"s3a://{BUCKET}/users-sql-warehouse/{USERNAME}/" in fetched.home_paths
         ), f"home_paths missing sql-warehouse: {fetched.home_paths}"
 
+        # USERNAME creates globalusers (it doesn't exist yet after cleanup), so it
+        # is also added to globalusersro as the group creator.
         assert GLOBAL_USER_GROUP in fetched.groups, (
             f"groups must contain {GLOBAL_USER_GROUP}: {fetched.groups}"
+        )
+        assert f"{GLOBAL_USER_GROUP}ro" in fetched.groups, (
+            f"groups must contain {GLOBAL_USER_GROUP}ro (creator of globalusers): {fetched.groups}"
         )
 
         assert len(fetched.user_policies) == 2, (
             f"expected 2 user policies (home + system), got {len(fetched.user_policies)}"
         )
-        assert len(fetched.group_policies) == 1, (
-            f"expected 1 group policy (globalusers), got {len(fetched.group_policies)}"
+        assert len(fetched.group_policies) == 2, (
+            f"expected 2 group policies (globalusers + globalusersro), got {len(fetched.group_policies)}"
         )
-        assert fetched.total_policies == 3, (
-            "expected total_policies == 3 (home + system + globalusers), "
+        assert fetched.total_policies == 4, (
+            "expected total_policies == 4 (home + system + globalusers + globalusersro), "
             + f"got {fetched.total_policies}"
         )
 
@@ -278,18 +283,18 @@ async def run(
         )
 
         group_policies = policies["group_policies"]
-        assert len(group_policies) == 1, (
-            f"expected 1 group policy (globalusers), got {len(group_policies)}"
+        assert len(group_policies) == 2, (
+            f"expected 2 group policies (globalusers + globalusersro), got {len(group_policies)}"
         )
-        global_group_paths = group_policies[0].get_accessible_paths()
+        all_group_paths = [p for gp in group_policies for p in gp.get_accessible_paths()]
         assert any(
             f"tenant-general-warehouse/{GLOBAL_USER_GROUP}/" in p
-            for p in global_group_paths
-        ), f"globalusers policy missing general-warehouse path: {global_group_paths}"
+            for p in all_group_paths
+        ), f"group policies missing globalusers general-warehouse path: {all_group_paths}"
         assert any(
             f"tenant-sql-warehouse/{GLOBAL_USER_GROUP}/" in p
-            for p in global_group_paths
-        ), f"globalusers policy missing sql-warehouse path: {global_group_paths}"
+            for p in all_group_paths
+        ), f"group policies missing globalusers sql-warehouse path: {all_group_paths}"
 
         ok(
             "get_user_policies returns correctly scoped home, system, and group policies"
@@ -390,6 +395,9 @@ async def run(
     # ── Cleanup ───────────────────────────────────────────────────────────────
     try:
         await iam_client.delete_user(USERNAME)
+        for group in [GLOBAL_USER_GROUP, f"{GLOBAL_USER_GROUP}ro"]:
+            if await iam_client.group_exists(group):
+                await iam_client.delete_group(group)
         ok("cleanup")
     except Exception as e:
         fail("cleanup", e)
@@ -410,6 +418,9 @@ async def main():
             for username in [USERNAME, USERNAME2]:
                 if await client.user_exists(username):
                     await client.delete_user(username)
+            for group in [GLOBAL_USER_GROUP, f"{GLOBAL_USER_GROUP}ro"]:
+                if await client.group_exists(group):
+                    await client.delete_group(group)
     except Exception:
         pass
 
