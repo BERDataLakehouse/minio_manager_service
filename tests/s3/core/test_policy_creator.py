@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from s3.core.policy_creator import (
+    ICEBERG_STORAGE_SUBDIRECTORY,
     PolicyCreator,
     SYSTEM_RESOURCE_CONFIG,
     _POLICY_ACTION_TO_POLICY_SECTION,
@@ -106,6 +107,10 @@ class TestPolicyCreatorInit:
             creator.user_general_warehouse_path
             == "s3a://data-lake/users-general-warehouse/testuser"
         )
+        assert (
+            creator.user_iceberg_warehouse_path
+            == "s3a://data-lake/users-sql-warehouse/testuser/iceberg"
+        )
 
     def test_init_user_system_policy(self, mock_s3_config):
         """Test initialization for user system policy."""
@@ -135,6 +140,10 @@ class TestPolicyCreatorInit:
             creator.tenant_general_warehouse_path
             == "s3a://data-lake/tenant-general-warehouse/testgroup"
         )
+        assert (
+            creator.tenant_iceberg_warehouse_path
+            == "s3a://data-lake/tenant-sql-warehouse/testgroup/iceberg"
+        )
 
     def test_init_group_read_only_policy(self, mock_s3_config):
         """Test initialization for group read-only policy."""
@@ -152,6 +161,10 @@ class TestPolicyCreatorInit:
         assert (
             creator.tenant_general_warehouse_path
             == "s3a://data-lake/tenant-general-warehouse/testgroup"
+        )
+        assert (
+            creator.tenant_iceberg_warehouse_path
+            == "s3a://data-lake/tenant-sql-warehouse/testgroup/iceberg"
         )
 
     def test_init_sections_empty(self, user_home_creator):
@@ -299,6 +312,52 @@ class TestCreateDefaultPolicy:
         # Should NOT have PUT_OBJECT or DELETE_OBJECT (write access)
         assert PolicyAction.PUT_OBJECT not in actions
         assert PolicyAction.DELETE_OBJECT not in actions
+
+    def test_default_user_home_policy_includes_iceberg_path(self, user_home_creator):
+        """User home policy must include an ungoverned Iceberg path for Polaris catalogs."""
+        policy = user_home_creator.create_default_policy().build()
+        policy_json = policy.to_policy_json()
+
+        # Iceberg path statement: ADMIN on /iceberg/ under user's SQL warehouse.
+        # No governance prefix (u_testuser__) — Polaris enforces catalog isolation.
+        iceberg_arn = "arn:aws:s3:::data-lake/users-sql-warehouse/testuser/iceberg/*"
+        assert iceberg_arn in policy_json
+
+        # Governed SQL warehouse path must still be present alongside iceberg.
+        governed_arn = (
+            "arn:aws:s3:::data-lake/users-sql-warehouse/testuser/u_testuser__*"
+        )
+        assert governed_arn in policy_json
+
+    def test_default_group_policy_includes_iceberg_path(self, group_policy_creator):
+        """Group (tenant) policy must include an ungoverned Iceberg path for Polaris catalogs."""
+        policy = group_policy_creator.create_default_policy().build()
+        policy_json = policy.to_policy_json()
+
+        iceberg_arn = "arn:aws:s3:::data-lake/tenant-sql-warehouse/testgroup/iceberg/*"
+        assert iceberg_arn in policy_json
+
+        governed_arn = (
+            "arn:aws:s3:::data-lake/tenant-sql-warehouse/testgroup/testgroup_*"
+        )
+        assert governed_arn in policy_json
+
+    def test_default_group_read_only_policy_iceberg_is_read_only(
+        self, group_read_only_policy_creator
+    ):
+        """RO group policy grants only READ on the iceberg path (no PUT/DELETE)."""
+        policy = group_read_only_policy_creator.create_default_policy().build()
+
+        iceberg_arn = "arn:aws:s3:::data-lake/tenant-sql-warehouse/testgroup/iceberg/*"
+        iceberg_actions = {
+            stmt.action
+            for stmt in policy.policy_document.statement
+            if stmt.resource == iceberg_arn
+            or (isinstance(stmt.resource, list) and iceberg_arn in stmt.resource)
+        }
+        assert PolicyAction.GET_OBJECT in iceberg_actions
+        assert PolicyAction.PUT_OBJECT not in iceberg_actions
+        assert PolicyAction.DELETE_OBJECT not in iceberg_actions
 
 
 # =============================================================================
@@ -468,6 +527,10 @@ class TestConstants:
         assert PolicyAction.GET_OBJECT in _POLICY_ACTION_TO_POLICY_SECTION
         assert PolicyAction.PUT_OBJECT in _POLICY_ACTION_TO_POLICY_SECTION
         assert PolicyAction.DELETE_OBJECT in _POLICY_ACTION_TO_POLICY_SECTION
+
+    def test_iceberg_storage_subdirectory_constant(self):
+        """Iceberg subdirectory name is the documented value used by Polaris catalogs."""
+        assert ICEBERG_STORAGE_SUBDIRECTORY == "iceberg"
 
 
 # =============================================================================
