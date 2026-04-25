@@ -19,6 +19,8 @@ from minio.managers.policy_manager import PolicyManager
 from minio.managers.sharing_manager import SharingManager
 from minio.managers.tenant_manager import TenantManager
 from minio.managers.user_manager import UserManager
+from polaris.credential_service import PolarisCredentialService
+from polaris.credential_store import PolarisCredentialStore
 from polaris.polaris_service import PolarisService
 from s3.core.distributed_lock import DistributedLockManager
 from s3.core.s3_client import S3Client
@@ -42,6 +44,7 @@ class AppState(NamedTuple):
     policy_manager: PolicyManager
     sharing_manager: SharingManager
     polaris_service: PolarisService
+    polaris_credential_service: PolarisCredentialService
     credential_service: CredentialService
     tenant_manager: TenantManager
 
@@ -86,6 +89,12 @@ async def build_app(app: FastAPI) -> None:
 
     # Initialize stores backed by the shared pool
     credential_store = CredentialStore(
+        pool=db_pool.pool,
+        encryption_key=not_falsy(
+            os.getenv("MMS_DB_ENCRYPTION_KEY"), "MMS_DB_ENCRYPTION_KEY"
+        ),
+    )
+    polaris_credential_store = PolarisCredentialStore(
         pool=db_pool.pool,
         encryption_key=not_falsy(
             os.getenv("MMS_DB_ENCRYPTION_KEY"), "MMS_DB_ENCRYPTION_KEY"
@@ -139,6 +148,14 @@ async def build_app(app: FastAPI) -> None:
     polaris_service = PolarisService(polaris_uri, polaris_cred, minio_endpoint)
     logger.info("Polaris Service initialized")
 
+    # Initialize Polaris credential service (coordinates lock + Polaris + DB)
+    polaris_credential_service = PolarisCredentialService(
+        polaris_service=polaris_service,
+        credential_store=polaris_credential_store,
+        lock_manager=lock_manager,
+    )
+    logger.info("Polaris credential service initialized")
+
     # Initialize all managers with the shared client and polaris hook
     user_manager = UserManager(minio_client, config, polaris_service=polaris_service)
     group_manager = GroupManager(minio_client, config, polaris_service=polaris_service)
@@ -182,6 +199,7 @@ async def build_app(app: FastAPI) -> None:
         policy_manager=policy_manager,
         sharing_manager=sharing_manager,
         polaris_service=polaris_service,
+        polaris_credential_service=polaris_credential_service,
         credential_service=credential_service,
         tenant_manager=tenant_manager,
     )

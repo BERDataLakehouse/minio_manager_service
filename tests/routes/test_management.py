@@ -112,6 +112,8 @@ def mock_app_state():
     app_state.credential_service.rotate = AsyncMock(
         return_value=("user1", "new-secret-key")
     )
+    app_state.polaris_credential_service = AsyncMock()
+    app_state.polaris_credential_service.delete_credentials = AsyncMock()
 
     # Mock policy manager
     app_state.policy_manager = AsyncMock()
@@ -346,11 +348,14 @@ class TestDeleteUserEndpoint:
         assert data["resource_name"] == "user1"
 
     def test_delete_user_cleans_up_credential_db(self, client, mock_app_state):
-        """Test deleting a user also deletes their credential DB record."""
+        """Test deleting a user also deletes their credential DB records."""
         response = client.delete("/management/users/user1")
 
         assert response.status_code == 200
         mock_app_state.credential_service.delete_credentials.assert_called_once_with(
+            "user1"
+        )
+        mock_app_state.polaris_credential_service.delete_credentials.assert_called_once_with(
             "user1"
         )
 
@@ -374,6 +379,19 @@ class TestDeleteUserEndpoint:
 
         assert response.status_code == 500
         # MinIO user should NOT be deleted if credential cleanup failed first
+        mock_app_state.user_manager.delete_resource.assert_not_called()
+
+    def test_delete_user_polaris_credential_cleanup_failure_propagates(
+        self, client, mock_app_state
+    ):
+        """Test Polaris credential cleanup failure propagates as a server error."""
+        mock_app_state.polaris_credential_service.delete_credentials.side_effect = (
+            Exception("DB error")
+        )
+
+        response = client.delete("/management/users/user1")
+
+        assert response.status_code == 500
         mock_app_state.user_manager.delete_resource.assert_not_called()
 
 

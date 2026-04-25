@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from routes.polaris import router
+from polaris.credential_store import PolarisCredentialRecord
 from service import app_state
 from service.dependencies import auth
 from service.exception_handlers import universal_error_handler
@@ -57,6 +58,7 @@ def mock_app_state_obj(mock_polaris_service):
     state.user_manager.config = MagicMock()
     state.user_manager.config.default_bucket = "cdm-lake"
     state.user_manager.config.users_sql_warehouse_prefix = "users-sql-warehouse"
+    state.user_manager.config.tenant_sql_warehouse_prefix = "tenant-sql-warehouse"
 
     # Mock group manager
     state.group_manager = AsyncMock()
@@ -64,6 +66,21 @@ def mock_app_state_obj(mock_polaris_service):
 
     # Polaris service
     state.polaris_service = mock_polaris_service
+    state.polaris_credential_service = AsyncMock()
+    state.polaris_credential_service.get_or_create = AsyncMock(
+        return_value=PolarisCredentialRecord(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            personal_catalog="user_testuser",
+        )
+    )
+    state.polaris_credential_service.rotate = AsyncMock(
+        return_value=PolarisCredentialRecord(
+            client_id="rotated-client-id",
+            client_secret="rotated-client-secret",
+            personal_catalog="user_testuser",
+        )
+    )
 
     return state
 
@@ -135,7 +152,7 @@ class TestProvisionPolarisUser:
         client = TestClient(app, raise_server_exceptions=False)
         client.post("/polaris/user_provision/testuser")
 
-        # Verify all 8 steps executed
+        # Verify all provisioning steps executed
         polaris.create_catalog.assert_called_once()
         polaris.create_principal.assert_called_once_with(name="testuser")
         polaris.create_catalog_role.assert_called_once_with(
@@ -155,7 +172,11 @@ class TestProvisionPolarisUser:
         polaris.grant_principal_role_to_principal.assert_called_once_with(
             principal="testuser", principal_role="testuser_role"
         )
-        polaris.rotate_principal_credentials.assert_called_once_with(name="testuser")
+        polaris.rotate_principal_credentials.assert_not_called()
+        mock_app_state_obj.polaris_credential_service.get_or_create.assert_called_once_with(
+            username="testuser",
+            personal_catalog="user_testuser",
+        )
 
     def test_provision_other_user_catalog_forbidden(
         self, mock_app_state_obj, regular_user
@@ -305,3 +326,45 @@ class TestProvisionPolarisUser:
         data = response.json()
         assert "Failed to provision Polaris environment" in data["detail"]
         assert "grant failed" not in data["detail"]
+
+
+class TestRotatePolarisCredentials:
+    """Tests for POST /polaris/credentials/rotate/{username}."""
+
+    def test_rotate_own_credentials_success(self, mock_app_state_obj, regular_user):
+        """Test users can explicitly rotate their own Polaris credentials."""
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/polaris/credentials/rotate/testuser")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["client_id"] == "rotated-client-id"
+        assert data["client_secret"] == "rotated-client-secret"
+        assert data["personal_catalog"] == "user_testuser"
+        mock_app_state_obj.polaris_credential_service.rotate.assert_called_once_with(
+            username="testuser",
+            personal_catalog="user_testuser",
+        )
+
+    def test_rotate_other_user_forbidden(self, mock_app_state_obj, regular_user):
+        """Test non-admin users cannot rotate another user's Polaris credentials."""
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/polaris/credentials/rotate/otheruser")
+
+        assert response.status_code == 403
+
+    def test_admin_rotate_other_user_credentials(
+        self, mock_app_state_obj, admin_user
+    ):
+        """Test admins can rotate another user's Polaris credentials."""
+        app = _create_test_app(mock_app_state_obj, admin_user)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/polaris/credentials/rotate/otheruser")
+
+        assert response.status_code == 200
+        mock_app_state_obj.polaris_credential_service.rotate.assert_called_once_with(
+            username="otheruser",
+            personal_catalog="user_otheruser",
+        )

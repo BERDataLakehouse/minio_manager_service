@@ -34,11 +34,13 @@ class TestAppStateNamedTuple:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             polaris_service=MagicMock(),
+            polaris_credential_service=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
         )
         assert state.auth is not None
         assert state.polaris_service is not None
+        assert state.polaris_credential_service is not None
         assert state.credential_service is not None
         assert state.tenant_manager is not None
 
@@ -52,6 +54,7 @@ class TestAppStateNamedTuple:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             polaris_service=polaris,
+            polaris_credential_service=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
         )
@@ -196,6 +199,7 @@ class TestBuildApp:
             mock_migrate.assert_called_once()
             state = app.state._minio_manager_state
             assert state.polaris_service is not None
+            assert state.polaris_credential_service is not None
             assert state.credential_service is not None
             # Verify Polaris was called with correct args
             call_args = mock_polaris_cls.call_args[0]
@@ -285,6 +289,7 @@ class TestDestroyAppState:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             polaris_service=mock_polaris,
+            polaris_credential_service=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
         )
@@ -326,6 +331,7 @@ class TestDestroyAppState:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             polaris_service=mock_polaris,
+            polaris_credential_service=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
         )
