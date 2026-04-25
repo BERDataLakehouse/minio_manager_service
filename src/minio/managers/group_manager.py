@@ -10,7 +10,7 @@ from s3.models.group import GroupModel
 from s3.models.policy import PolicyModel, PolicyType
 from s3.models.s3_config import S3Config
 from s3.utils.validators import validate_group_name
-from service.exceptions import GroupOperationError
+from service.exceptions import GroupNotFoundError, GroupOperationError
 
 logger = logging.getLogger(__name__)
 
@@ -331,7 +331,7 @@ class GroupManager(ResourceManager[GroupModel]):
         async with self.operation_context("add_user_to_group"):
             # Check if group exists
             if not await self.resource_exists(group_name):
-                raise GroupOperationError(f"Group {group_name} not found")
+                raise GroupNotFoundError(f"Group {group_name} not found")
 
             # Check if user exists
             if not await self.user_manager.resource_exists(username):
@@ -376,7 +376,7 @@ class GroupManager(ResourceManager[GroupModel]):
         async with self.operation_context("remove_user_from_group"):
             # Check if group exists
             if not await self.resource_exists(group_name):
-                raise GroupOperationError(f"Group {group_name} not found")
+                raise GroupNotFoundError(f"Group {group_name} not found")
 
             # MinIO group remove is idempotent - removing a non-member is a no-op
             # so we don't need to check if user is actually in the group
@@ -403,7 +403,7 @@ class GroupManager(ResourceManager[GroupModel]):
         async with self.operation_context("get_group_members"):
             # Check if group exists
             if not await self.resource_exists(group_name):
-                raise GroupOperationError(f"Group {group_name} not found")
+                raise GroupNotFoundError(f"Group {group_name} not found")
 
             # Get group info and parse members
             cmd_args = self._command_builder.build_group_command(
@@ -436,7 +436,7 @@ class GroupManager(ResourceManager[GroupModel]):
         async with self.operation_context("get_group_info"):
             # Check if group exists
             if not await self.resource_exists(group_name):
-                raise GroupOperationError(f"Group {group_name} not found")
+                raise GroupNotFoundError(f"Group {group_name} not found")
 
             # Get group members
             members = await self.get_group_members(group_name)
