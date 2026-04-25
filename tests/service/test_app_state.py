@@ -38,6 +38,8 @@ class TestAppStateNamedTuple:
             sharing_manager=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
+            users_sql_warehouse_base="s3a://test-bucket/users-sql",
+            tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
         )
         assert state.auth is not None
         assert state.credential_service is not None
@@ -161,6 +163,9 @@ class TestBuildApp:
             patch(
                 "service.app_state.S3Client.create", new_callable=AsyncMock
             ) as mock_mc,
+            patch(
+                "service.app_state.S3IAMClient.create", new_callable=AsyncMock
+            ) as mock_iam,
             patch("service.app_state.DistributedLockManager") as mock_lock_cls,
             patch(
                 "service.app_state.DatabasePool.create", new_callable=AsyncMock
@@ -168,6 +173,7 @@ class TestBuildApp:
         ):
             mock_auth.return_value = MagicMock()
             mock_mc.return_value = MagicMock()
+            mock_iam.return_value = MagicMock()
             mock_lock = MagicMock()
             mock_lock.health_check = AsyncMock(return_value=True)
             mock_lock_cls.return_value = mock_lock
@@ -215,11 +221,15 @@ class TestBuildApp:
             patch(
                 "service.app_state.S3Client.create", new_callable=AsyncMock
             ) as mock_mc,
+            patch(
+                "service.app_state.S3IAMClient.create", new_callable=AsyncMock
+            ) as mock_iam,
             patch("service.app_state.DistributedLockManager") as mock_lock_cls,
         ):
             mock_db_create.return_value = mock_db_pool
             mock_auth.return_value = MagicMock()
             mock_mc.return_value = MagicMock()
+            mock_iam.return_value = MagicMock()
             mock_lock = MagicMock()
             mock_lock.health_check = AsyncMock(return_value=False)
             mock_lock_cls.return_value = mock_lock
@@ -242,16 +252,20 @@ class TestDestroyAppState:
         mock_lock.close = AsyncMock()
         mock_s3_client = MagicMock()
         mock_s3_client.close_session = AsyncMock()
+        mock_iam_client = MagicMock()
+        mock_iam_client.close = AsyncMock()
         mock_db_pool = MagicMock()
         mock_db_pool.close = AsyncMock()
 
         app.state._lock_manager = mock_lock
         app.state._s3_client = mock_s3_client
+        app.state._iam_client = mock_iam_client
         app.state._db_pool = mock_db_pool
 
         await destroy_app_state(app)
 
         mock_lock.close.assert_called_once()
+        mock_iam_client.close.assert_called_once()
         mock_s3_client.close_session.assert_called_once()
         mock_db_pool.close.assert_called_once()
 
@@ -270,11 +284,14 @@ class TestDestroyAppState:
         mock_lock.close = AsyncMock(side_effect=Exception("Redis error"))
         mock_s3_client = MagicMock()
         mock_s3_client.close_session = AsyncMock(side_effect=Exception("S3 error"))
+        mock_iam_client = MagicMock()
+        mock_iam_client.close = AsyncMock(side_effect=Exception("IAM error"))
         mock_db_pool = MagicMock()
         mock_db_pool.close = AsyncMock(side_effect=Exception("DB error"))
 
         app.state._lock_manager = mock_lock
         app.state._s3_client = mock_s3_client
+        app.state._iam_client = mock_iam_client
         app.state._db_pool = mock_db_pool
 
         # Should not raise
