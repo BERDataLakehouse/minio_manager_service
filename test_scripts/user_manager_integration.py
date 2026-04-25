@@ -286,14 +286,17 @@ async def run(
         assert len(group_policies) == 2, (
             f"expected 2 group policies (globalusers + globalusersro), got {len(group_policies)}"
         )
-        all_group_paths = [p for gp in group_policies for p in gp.get_accessible_paths()]
+        all_group_paths = [
+            p for gp in group_policies for p in gp.get_accessible_paths()
+        ]
         assert any(
             f"tenant-general-warehouse/{GLOBAL_USER_GROUP}/" in p
             for p in all_group_paths
-        ), f"group policies missing globalusers general-warehouse path: {all_group_paths}"
+        ), (
+            f"group policies missing globalusers general-warehouse path: {all_group_paths}"
+        )
         assert any(
-            f"tenant-sql-warehouse/{GLOBAL_USER_GROUP}/" in p
-            for p in all_group_paths
+            f"tenant-sql-warehouse/{GLOBAL_USER_GROUP}/" in p for p in all_group_paths
         ), f"group policies missing globalusers sql-warehouse path: {all_group_paths}"
 
         ok(
