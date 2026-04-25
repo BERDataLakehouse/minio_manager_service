@@ -10,19 +10,23 @@ import mismatch error.
 Once `src/minio/` and `tests/minio/` are deleted, remove all of those
 `__init__.py` files so `tests/` is consistent with the rest of the codebase.
 
-## Remove policy_name from PolicyModel and GroupModel
+## Remove policy_name from GroupModel and PolicyCreator
 
 Once the MinIO code (`src/minio/`) is deleted:
 
-- Remove `policy_name` from `PolicyModel` (`src/s3/models/policy.py`) — it was only
-  meaningful in MinIO where policies are globally-scoped named objects. In Ceph, inline
-  policies have fixed names (`home`, `system`, `group`) local to the user/group.
 - Remove `policy_name` from `GroupModel` (`src/s3/models/group.py`) — it was populated
   by the MinIO group manager and exposed in the API. The Ceph group manager does not
   populate it and the field has been removed from API responses.
 - Remove `_generate_policy_name` from `PolicyCreator` (`src/s3/core/policy_creator.py`)
   and the `policy_name` field it populates in `build()` — only called from the MinIO
   policy manager (`src/minio/managers/policy_manager.py:1019`), not used anywhere in
-  the Ceph managers.
-  - This also means the validate policy name method can be removed as well as various
-    exceptions throughout the code base cause by failed validation in policy creator
+  the Ceph managers. `PolicyCreator` is a document builder and should not own IAM naming;
+  `build()` should return a `PolicyDocument` (or accept the name as a constructor
+  parameter), and `PolicyManager._create_policy_model` should set the name via
+  `_policy_name_for` as it already does.
+  - This also means `validate_policy_name` in `src/s3/utils/validators.py` can be
+    removed (it is only called from `_generate_policy_name`) along with
+    `DATA_GOVERNANCE_POLICY_PREFIXES` and the individual prefix constants
+    (`USER_HOME_POLICY_PREFIX`, `USER_SYSTEM_POLICY_PREFIX`, `GROUP_POLICY_PREFIX`).
+    Note: `PolicyModel` has its own inline `validate_policy_name` field validator that
+    should be kept.

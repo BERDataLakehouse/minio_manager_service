@@ -71,8 +71,8 @@ async def run(client: S3IAMClient, pm: PolicyManager):
     # ── ensure_user_policies ──────────────────────────────────────────────────
     try:
         home, system = await pm.ensure_user_policies(USERNAME)
-        assert home.policy_name is None
-        assert system.policy_name is None
+        assert home.policy_name == "home"
+        assert system.policy_name == "system"
         assert len(home.policy_document.statement) > 0
         assert len(system.policy_document.statement) > 0
         ok("ensure_user_policies creates home and system")
@@ -105,8 +105,8 @@ async def run(client: S3IAMClient, pm: PolicyManager):
         await client.set_user_policy(USERNAME, "home", altered_home)
         await client.set_user_policy(USERNAME, "system", altered_system)
         home2, system2 = await pm.ensure_user_policies(USERNAME)
-        assert home2.policy_name is None
-        assert system2.policy_name is None
+        assert home2.policy_name == "home"
+        assert system2.policy_name == "system"
         assert home2.policy_document.to_dict() == altered_home, (
             f"ensure_user_policies must return existing home policy unchanged, "
             f"got: {home2.policy_document.to_dict()}"
@@ -122,7 +122,7 @@ async def run(client: S3IAMClient, pm: PolicyManager):
     # ── get_user_home_policy / get_user_system_policy ─────────────────────────
     try:
         fetched = await pm.get_user_home_policy(USERNAME)
-        assert fetched.policy_name is None
+        assert fetched.policy_name == "home"
         assert fetched.policy_document.statement == home2.policy_document.statement
         ok("get_user_home_policy roundtrip")
     except Exception as e:
@@ -130,7 +130,7 @@ async def run(client: S3IAMClient, pm: PolicyManager):
 
     try:
         fetched = await pm.get_user_system_policy(USERNAME)
-        assert fetched.policy_name is None
+        assert fetched.policy_name == "system"
         assert fetched.policy_document.statement == system2.policy_document.statement
         ok("get_user_system_policy roundtrip")
     except Exception as e:
@@ -150,7 +150,7 @@ async def run(client: S3IAMClient, pm: PolicyManager):
     # ── regenerate_user_home_policy ───────────────────────────────────────────
     try:
         regenerated = await pm.regenerate_user_home_policy(USERNAME)
-        assert regenerated.policy_name is None
+        assert regenerated.policy_name == "home"
         assert (
             regenerated.policy_document.statement == home.policy_document.statement
         ), "regenerated policy must match the original default"
@@ -172,7 +172,7 @@ async def run(client: S3IAMClient, pm: PolicyManager):
 
     try:
         group_policy = await pm.ensure_group_policy(GROUP)
-        assert group_policy.policy_name is None
+        assert group_policy.policy_name == f"group-{GROUP}"
         stmts = group_policy.policy_document.statement
         assert stmt_applies(stmts, write_actions, group_arn), (
             "group policy should grant write access to group path"
@@ -196,7 +196,7 @@ async def run(client: S3IAMClient, pm: PolicyManager):
         }
         await client.set_group_policy(GROUP, "group", altered)
         group_policy2 = await pm.ensure_group_policy(GROUP)
-        assert group_policy2.policy_name is None
+        assert group_policy2.policy_name == f"group-{GROUP}"
         assert group_policy2.policy_document.to_dict() == altered, (
             f"ensure_group_policy must return the existing policy unchanged, "
             f"got: {group_policy2.policy_document.to_dict()}"
@@ -211,7 +211,7 @@ async def run(client: S3IAMClient, pm: PolicyManager):
         ro_with_target = await pm.ensure_group_policy(
             GROUP_RO, read_only=True, path_target=GROUP
         )
-        assert ro_with_target.policy_name is None
+        assert ro_with_target.policy_name == f"group-{GROUP_RO}"
         stmts = ro_with_target.policy_document.statement
         assert stmt_applies(stmts, {PolicyAction.GET_OBJECT}, group_arn), (
             "path_target policy should grant read access to GROUP path"
@@ -229,7 +229,7 @@ async def run(client: S3IAMClient, pm: PolicyManager):
     # ── get_group_policy ──────────────────────────────────────────────────────
     try:
         fetched = await pm.get_group_policy(GROUP)
-        assert fetched.policy_name is None
+        assert fetched.policy_name == f"group-{GROUP}"
         assert (
             fetched.policy_document.statement == group_policy2.policy_document.statement
         ), "get_group_policy must return the current (altered) policy"
@@ -251,7 +251,7 @@ async def run(client: S3IAMClient, pm: PolicyManager):
     # ── regenerate_group_home_policy ──────────────────────────────────────────
     try:
         regen = await pm.regenerate_group_home_policy(GROUP)
-        assert regen.policy_name is None
+        assert regen.policy_name == f"group-{GROUP}"
         assert (
             regen.policy_document.statement == group_policy.policy_document.statement
         ), "regenerated policy must match the original default"
@@ -267,7 +267,7 @@ async def run(client: S3IAMClient, pm: PolicyManager):
 
     try:
         regen_ro = await pm.regenerate_group_home_policy(GROUP, read_only=True)
-        assert regen_ro.policy_name is None
+        assert regen_ro.policy_name == f"group-{GROUP}"
         stmts = regen_ro.policy_document.statement
         assert stmt_applies(stmts, {PolicyAction.GET_OBJECT}, group_arn), (
             "read-only regenerated policy should grant read to group path"
@@ -301,7 +301,7 @@ async def run(client: S3IAMClient, pm: PolicyManager):
             GROUP_RO, read_only=True, path_target=GROUP
         )
         assert regen_target == ro_with_target
-        assert regen_target.policy_name is None
+        assert regen_target.policy_name == f"group-{GROUP_RO}"
         stmts = regen_target.policy_document.statement
         assert stmt_applies(stmts, {PolicyAction.GET_OBJECT}, group_arn), (
             "path_target policy should grant read access to GROUP path"

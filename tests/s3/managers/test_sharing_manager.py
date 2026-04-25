@@ -46,7 +46,9 @@ def make_policy_model(paths: list[str] | None = None) -> PolicyModel:
                 principal=None,
             )
         )
-    return PolicyModel(policy_document=PolicyDocument(statement=statements))
+    return PolicyModel(
+        policy_name="test-policy", policy_document=PolicyDocument(statement=statements)
+    )
 
 
 # =============================================================================

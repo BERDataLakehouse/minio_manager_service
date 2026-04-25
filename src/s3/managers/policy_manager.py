@@ -181,6 +181,17 @@ class PolicyManager:
             updated = transform(current)
             await self._store_policy_for_target(target_type, target_name, updated)
 
+    @staticmethod
+    def _policy_name_for(policy_type: PolicyType, target_name: str) -> str:
+        if policy_type == PolicyType.USER_HOME:
+            return _USER_HOME_IAM_POLICY
+        elif policy_type == PolicyType.USER_SYSTEM:
+            return _USER_SYSTEM_IAM_POLICY
+        elif policy_type in (PolicyType.GROUP_HOME, PolicyType.GROUP_HOME_RO):
+            return f"{_GROUP_IAM_POLICY}-{target_name}"
+        else:
+            raise PolicyOperationError(f"Unknown policy type: {policy_type}")
+
     # ── User/group policy management ─────────────────────────────────────────
 
     async def ensure_user_policies(
@@ -220,7 +231,10 @@ class PolicyManager:
             logger.info(f"Created {policy_type.value} policy for user {username}")
             return policy_model
         logger.info(f"User {policy_type.value} policy already exists for {username}")
-        return PolicyModel(policy_document=PolicyDocument.from_dict(doc))
+        return PolicyModel(
+            policy_name=self._policy_name_for(policy_type, username),
+            policy_document=PolicyDocument.from_dict(doc),
+        )
 
     def _create_policy_model(
         self,
@@ -240,7 +254,10 @@ class PolicyManager:
                 .create_default_policy()
                 .build()
             )
-            return PolicyModel(policy_document=built.policy_document)
+            policy_name = self._policy_name_for(policy_type, target_name)
+            return PolicyModel(
+                policy_name=policy_name, policy_document=built.policy_document
+            )
         except Exception as e:
             policy_desc = policy_type.value.replace("_", " ")
             logger.error(
@@ -332,13 +349,11 @@ class PolicyManager:
                      RO shadow groups whose paths should point at the base group.
         """
         suffix = " (read-only)" if read_only else ""
+        policy_type = PolicyType.GROUP_HOME_RO if read_only else PolicyType.GROUP_HOME
         doc = await self._iam_client.get_group_policy(
             group_name, _GROUP_IAM_POLICY, except_if_absent=False
         )
         if doc is None:
-            policy_type = (
-                PolicyType.GROUP_HOME_RO if read_only else PolicyType.GROUP_HOME
-            )
             policy_model = self._create_policy_model(
                 policy_type, group_name, path_target_name=path_target
             )
@@ -348,7 +363,10 @@ class PolicyManager:
             logger.info(f"Created group policy{suffix} for group {group_name}")
             return policy_model
         logger.info(f"Group policy{suffix} already exists for group {group_name}")
-        return PolicyModel(policy_document=PolicyDocument.from_dict(doc))
+        return PolicyModel(
+            policy_name=self._policy_name_for(policy_type, group_name),
+            policy_document=PolicyDocument.from_dict(doc),
+        )
 
     async def get_user_home_policy(self, username: str) -> PolicyModel:
         """
@@ -364,7 +382,10 @@ class PolicyManager:
             raise PolicyOperationError(
                 f"User home policy not found for user {username}"
             ) from e
-        return PolicyModel(policy_document=PolicyDocument.from_dict(doc))
+        return PolicyModel(
+            policy_name=self._policy_name_for(PolicyType.USER_HOME, username),
+            policy_document=PolicyDocument.from_dict(doc),
+        )
 
     async def get_user_system_policy(self, username: str) -> PolicyModel:
         """
@@ -380,7 +401,10 @@ class PolicyManager:
             raise PolicyOperationError(
                 f"User system policy not found for user {username}"
             ) from e
-        return PolicyModel(policy_document=PolicyDocument.from_dict(doc))
+        return PolicyModel(
+            policy_name=self._policy_name_for(PolicyType.USER_SYSTEM, username),
+            policy_document=PolicyDocument.from_dict(doc),
+        )
 
     async def get_group_policy(self, group_name: str) -> PolicyModel:
         """
@@ -394,7 +418,10 @@ class PolicyManager:
             raise PolicyOperationError(
                 f"Group policy not found for group {group_name}"
             ) from e
-        return PolicyModel(policy_document=PolicyDocument.from_dict(doc))
+        return PolicyModel(
+            policy_name=self._policy_name_for(PolicyType.GROUP_HOME, group_name),
+            policy_document=PolicyDocument.from_dict(doc),
+        )
 
     # ── Policy document manipulation ──────────────────────────────────────────
 

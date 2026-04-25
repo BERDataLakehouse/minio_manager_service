@@ -107,6 +107,9 @@ def policy_resources(policy: dict) -> set[str]:
 
 def check_user_policy(policy: dict, username: str) -> None:
     """Assert the user home policy has exactly the expected resource ARNs."""
+    assert policy["policy_name"] == "home", (
+        f"expected policy_name 'home', got {policy['policy_name']!r}"
+    )
     sql_base = f"{USERS_SQL_PREFIX}/{username}"
     gen_base = f"{USERS_GENERAL_PREFIX}/{username}"
     gov = f"u_{username}__"
@@ -129,6 +132,9 @@ def check_user_policy(policy: dict, username: str) -> None:
 
 def check_system_policy(policy: dict, username: str) -> None:
     """Assert the user system policy has exactly the expected resource ARNs."""
+    assert policy["policy_name"] == "system", (
+        f"expected policy_name 'system', got {policy['policy_name']!r}"
+    )
     spark_base = f"{SPARK_LOGS_PREFIX}/{username}"
     expected = {
         f"{S3_ARN}{SPARK_LOGS_BUCKET}",
@@ -149,10 +155,19 @@ def check_system_policy(policy: dict, username: str) -> None:
 
 
 def check_group_policy(policy: dict, group_name: str) -> None:
-    """Assert the group policy has exactly the expected resource ARNs."""
-    sql_base = f"{TENANT_SQL_PREFIX}/{group_name}"
-    gen_base = f"{TENANT_GENERAL_PREFIX}/{group_name}"
-    gov = f"{group_name}_"
+    """Assert the group policy has exactly the expected resource ARNs.
+
+    group_name is the IAM group name (e.g. "globalusers" or "globalusersro").
+    Resource ARNs are checked against the base group (stripping a trailing "ro"
+    if present) since RO shadow policies point at the main group's S3 paths.
+    """
+    assert policy["policy_name"] == f"group-{group_name}", (
+        f"expected policy_name 'group-{group_name}', got {policy['policy_name']!r}"
+    )
+    base_group = group_name.removesuffix("ro")
+    sql_base = f"{TENANT_SQL_PREFIX}/{base_group}"
+    gen_base = f"{TENANT_GENERAL_PREFIX}/{base_group}"
+    gov = f"{base_group}_"
     expected = {
         f"{S3_ARN}{BUCKET}",
         f"{S3_ARN}{BUCKET}/{sql_base}/{gov}*",
@@ -212,7 +227,7 @@ def assert_user_entry(
         f"got {len(user['group_policies'])}"
     )
     for policy in user["group_policies"]:
-        check_group_policy(policy, GLOBALUSERS)
+        check_group_policy(policy, policy["policy_name"].removeprefix("group-"))
     assert user["total_policies"] == expected_total_policies, (
         f"expected total_policies {expected_total_policies}, got {user['total_policies']}"
     )
