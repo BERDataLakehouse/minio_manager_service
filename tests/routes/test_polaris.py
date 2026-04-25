@@ -355,9 +355,7 @@ class TestRotatePolarisCredentials:
 
         assert response.status_code == 403
 
-    def test_admin_rotate_other_user_credentials(
-        self, mock_app_state_obj, admin_user
-    ):
+    def test_admin_rotate_other_user_credentials(self, mock_app_state_obj, admin_user):
         """Test admins can rotate another user's Polaris credentials."""
         app = _create_test_app(mock_app_state_obj, admin_user)
         client = TestClient(app, raise_server_exceptions=False)
