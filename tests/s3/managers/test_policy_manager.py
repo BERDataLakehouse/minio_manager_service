@@ -44,6 +44,7 @@ def empty_policy_doc() -> dict:
 
 def make_policy_model(statements: list | None = None) -> PolicyModel:
     return PolicyModel(
+        policy_name="test-policy",
         policy_document=PolicyDocument(statement=statements or []),
     )
 
@@ -131,7 +132,7 @@ async def test_regenerate_user_home_policy_always_writes(
 ):
     result = await policy_manager.regenerate_user_home_policy("alice")
 
-    assert result.policy_name is None
+    assert result.policy_name == "home"
     assert len(result.policy_document.statement) > 0
     mock_iam_client.set_user_policy.assert_called_once_with(
         "alice", _USER_HOME_IAM_POLICY, result.policy_document.to_dict()
@@ -154,7 +155,7 @@ async def test_regenerate_user_system_policy_always_writes(
 ):
     result = await policy_manager.regenerate_user_system_policy("alice")
 
-    assert result.policy_name is None
+    assert result.policy_name == "system"
     assert len(result.policy_document.statement) > 0
     mock_iam_client.set_user_policy.assert_called_once_with(
         "alice", _USER_SYSTEM_IAM_POLICY, result.policy_document.to_dict()
@@ -174,7 +175,7 @@ async def test_regenerate_user_system_policy_overwrites_existing(
 async def test_regenerate_group_home_policy_rw(policy_manager, mock_iam_client):
     result = await policy_manager.regenerate_group_home_policy("researchers")
 
-    assert result.policy_name is None
+    assert result.policy_name == "group-researchers"
     assert len(result.policy_document.statement) > 0
     mock_iam_client.set_group_policy.assert_called_once_with(
         "researchers", _GROUP_IAM_POLICY, result.policy_document.to_dict()
@@ -186,7 +187,7 @@ async def test_regenerate_group_home_policy_read_only(policy_manager, mock_iam_c
         "researchersro", read_only=True, path_target="researchers"
     )
 
-    assert result.policy_name is None
+    assert result.policy_name == "group-researchersro"
     mock_iam_client.set_group_policy.assert_called_once_with(
         "researchersro", _GROUP_IAM_POLICY, result.policy_document.to_dict()
     )
@@ -214,8 +215,8 @@ async def test_ensure_user_policies_creates_both_when_absent(
 
     home, system = await policy_manager.ensure_user_policies("alice")
 
-    assert home.policy_name is None
-    assert system.policy_name is None
+    assert home.policy_name == "home"
+    assert system.policy_name == "system"
     assert mock_iam_client.set_user_policy.call_count == 2
     calls = mock_iam_client.set_user_policy.call_args_list
     # First call: home policy
@@ -236,8 +237,8 @@ async def test_ensure_user_policies_returns_existing_when_present(
     home, system = await policy_manager.ensure_user_policies("bob")
 
     mock_iam_client.set_user_policy.assert_not_called()
-    assert home.policy_name is None
-    assert system.policy_name is None
+    assert home.policy_name == "home"
+    assert system.policy_name == "system"
 
 
 async def test_ensure_user_policies_creates_home_but_loads_existing_system(
@@ -252,8 +253,8 @@ async def test_ensure_user_policies_creates_home_but_loads_existing_system(
     mock_iam_client.set_user_policy.assert_called_once_with(
         "carol", _USER_HOME_IAM_POLICY, home.policy_document.to_dict()
     )
-    assert home.policy_name is None
-    assert system.policy_name is None
+    assert home.policy_name == "home"
+    assert system.policy_name == "system"
 
 
 # =============================================================================
@@ -266,7 +267,7 @@ async def test_ensure_group_policy_creates_when_absent(policy_manager, mock_iam_
 
     result = await policy_manager.ensure_group_policy("researchers")
 
-    assert result.policy_name is None
+    assert result.policy_name == "group-researchers"
     mock_iam_client.set_group_policy.assert_called_once_with(
         "researchers", _GROUP_IAM_POLICY, result.policy_document.to_dict()
     )
@@ -280,7 +281,7 @@ async def test_ensure_group_policy_returns_existing_when_present(
     result = await policy_manager.ensure_group_policy("researchers")
 
     mock_iam_client.set_group_policy.assert_not_called()
-    assert result.policy_name is None
+    assert result.policy_name == "group-researchers"
 
 
 async def test_ensure_group_policy_read_only_creates_ro_policy(
@@ -312,7 +313,7 @@ async def test_get_user_home_policy_returns_policy_model(
     mock_iam_client.get_user_policy.assert_called_once_with(
         "alice", _USER_HOME_IAM_POLICY
     )
-    assert result.policy_name is None
+    assert result.policy_name == "home"
     assert isinstance(result.policy_document, PolicyDocument)
 
 
@@ -342,7 +343,7 @@ async def test_get_user_system_policy_returns_policy_model(
     mock_iam_client.get_user_policy.assert_called_once_with(
         "alice", _USER_SYSTEM_IAM_POLICY
     )
-    assert result.policy_name is None
+    assert result.policy_name == "system"
 
 
 async def test_get_user_system_policy_raises_on_client_error(
@@ -369,7 +370,7 @@ async def test_get_group_policy_returns_policy_model(policy_manager, mock_iam_cl
     mock_iam_client.get_group_policy.assert_called_once_with(
         "researchers", _GROUP_IAM_POLICY
     )
-    assert result.policy_name is None
+    assert result.policy_name == "group-researchers"
 
 
 async def test_get_group_policy_raises_on_client_error(policy_manager, mock_iam_client):
