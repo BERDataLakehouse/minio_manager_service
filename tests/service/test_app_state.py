@@ -35,6 +35,7 @@ class TestAppStateNamedTuple:
             sharing_manager=MagicMock(),
             polaris_service=MagicMock(),
             polaris_credential_service=MagicMock(),
+            namespace_acl_manager=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
         )
@@ -55,6 +56,7 @@ class TestAppStateNamedTuple:
             sharing_manager=MagicMock(),
             polaris_service=polaris,
             polaris_credential_service=MagicMock(),
+            namespace_acl_manager=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
         )
@@ -290,6 +292,7 @@ class TestDestroyAppState:
             sharing_manager=MagicMock(),
             polaris_service=mock_polaris,
             polaris_credential_service=MagicMock(),
+            namespace_acl_manager=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
         )
@@ -332,6 +335,7 @@ class TestDestroyAppState:
             sharing_manager=MagicMock(),
             polaris_service=mock_polaris,
             polaris_credential_service=MagicMock(),
+            namespace_acl_manager=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
         )

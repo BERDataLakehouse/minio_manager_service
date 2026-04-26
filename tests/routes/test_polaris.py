@@ -1,5 +1,6 @@
 """Tests for the routes.polaris module."""
 
+import logging
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -81,6 +82,11 @@ def mock_app_state_obj(mock_polaris_service):
             personal_catalog="user_testuser",
         )
     )
+    state.namespace_acl_manager = AsyncMock()
+    state.namespace_acl_manager.reconcile_user = AsyncMock(
+        return_value=MagicMock(success=True, failed_grants=[])
+    )
+    state.namespace_acl_manager.list_grants_for_user = AsyncMock(return_value=[])
 
     return state
 
@@ -327,6 +333,27 @@ class TestProvisionPolarisUser:
         assert "Failed to provision Polaris environment" in data["detail"]
         assert "grant failed" not in data["detail"]
 
+    def test_provision_logs_namespace_acl_reconciliation_failure(
+        self,
+        mock_app_state_obj,
+        regular_user,
+        caplog,
+    ):
+        """Test namespace ACL sync failure is logged without blocking provisioning."""
+        namespace_sync = MagicMock(success=False, failed_grants=["grant-id"])
+        mock_app_state_obj.namespace_acl_manager.reconcile_user = AsyncMock(
+            return_value=namespace_sync
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        caplog.set_level(logging.WARNING, logger="routes.polaris")
+        response = client.post("/polaris/user_provision/testuser")
+
+        assert response.status_code == 200
+        assert "tenant_catalogs" in response.json()
+        assert "had 1 failures" in caplog.text
+
 
 class TestRotatePolarisCredentials:
     """Tests for POST /polaris/credentials/rotate/{username}."""
@@ -366,3 +393,135 @@ class TestRotatePolarisCredentials:
             username="otheruser",
             personal_catalog="user_otheruser",
         )
+
+    def test_rotate_credentials_returns_500_on_rotation_failure(
+        self,
+        mock_app_state_obj,
+        regular_user,
+    ):
+        """Test rotation errors return a clean 500."""
+        mock_app_state_obj.polaris_credential_service.rotate.side_effect = Exception(
+            "rotation failed"
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post("/polaris/credentials/rotate/testuser")
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Failed to rotate Polaris credentials for testuser"
+        )
+
+
+class TestEffectiveAccess:
+    """Tests for GET /polaris/effective-access endpoints."""
+
+    def test_get_my_effective_access(
+        self,
+        mock_app_state_obj,
+        regular_user,
+    ):
+        mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
+            return_value=["teamA", "teamBro"]
+        )
+        grant = MagicMock()
+        grant.id = "grant-id"
+        grant.tenant_name = "kbase"
+        grant.catalog_name = "tenant_kbase"
+        grant.namespace_parts = ("shared_data",)
+        grant.namespace_name = "shared_data"
+        grant.access_level = "read"
+        grant.status = "active"
+        mock_app_state_obj.namespace_acl_manager.list_grants_for_user = AsyncMock(
+            return_value=[grant]
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.get("/polaris/effective-access/me")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["username"] == "testuser"
+        assert data["personal_catalog"] == "user_testuser"
+        assert data["group_tenants"] == [
+            {
+                "tenant_name": "teamA",
+                "catalog_name": "tenant_teamA",
+                "access_level": "read_write",
+            },
+            {
+                "tenant_name": "teamB",
+                "catalog_name": "tenant_teamB",
+                "access_level": "read_only",
+            },
+        ]
+        assert data["namespace_acl_tenants"] == [
+            {
+                "tenant_name": "kbase",
+                "catalog_name": "tenant_kbase",
+                "namespaces": [
+                    {
+                        "grant_id": "grant-id",
+                        "namespace": ["shared_data"],
+                        "namespace_name": "shared_data",
+                        "access_level": "read",
+                    }
+                ],
+            }
+        ]
+
+    def test_admin_gets_effective_access_for_user(
+        self,
+        mock_app_state_obj,
+        admin_user,
+    ):
+        app = _create_test_app(mock_app_state_obj, admin_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.get("/polaris/effective-access/alice")
+
+        assert response.status_code == 200
+        assert response.json()["username"] == "alice"
+        mock_app_state_obj.group_manager.get_user_groups.assert_called_with("alice")
+
+    def test_effective_access_skips_empty_group_and_prefers_read_write(
+        self,
+        mock_app_state_obj,
+        regular_user,
+    ):
+        mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
+            return_value=["", "teamA", "teamAro"]
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.get("/polaris/effective-access/me")
+
+        assert response.status_code == 200
+        assert response.json()["group_tenants"] == [
+            {
+                "tenant_name": "teamA",
+                "catalog_name": "tenant_teamA",
+                "access_level": "read_write",
+            }
+        ]
+
+    def test_effective_access_omits_inactive_namespace_grants(
+        self,
+        mock_app_state_obj,
+        regular_user,
+    ):
+        grant = MagicMock()
+        grant.status = "sync_error"
+        mock_app_state_obj.namespace_acl_manager.list_grants_for_user = AsyncMock(
+            return_value=[grant]
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.get("/polaris/effective-access/me")
+
+        assert response.status_code == 200
+        assert response.json()["namespace_acl_tenants"] == []

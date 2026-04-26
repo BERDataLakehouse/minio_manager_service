@@ -1,12 +1,27 @@
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
+from urllib.parse import quote
 
 import aiohttp
 
 from service.exceptions import PolarisOperationError
 
 logger = logging.getLogger(__name__)
+
+NAMESPACE_READ_PRIVILEGES = (
+    "NAMESPACE_LIST",
+    "NAMESPACE_READ_PROPERTIES",
+    "TABLE_LIST",
+    "TABLE_READ_PROPERTIES",
+    "TABLE_READ_DATA",
+)
+NAMESPACE_WRITE_PRIVILEGES = (
+    *NAMESPACE_READ_PRIVILEGES,
+    "NAMESPACE_WRITE_PROPERTIES",
+    "TABLE_WRITE_PROPERTIES",
+    "TABLE_WRITE_DATA",
+)
 
 
 class PolarisService:
@@ -31,11 +46,13 @@ class PolarisService:
         base_uri = polaris_uri.rstrip("/")
         if base_uri.endswith("/api/catalog"):
             self.base_url = base_uri.replace("/api/catalog", "/api/management/v1")
+            self.catalog_base_url = base_uri.replace("/api/catalog", "/api/catalog/v1")
             self.oauth_url = base_uri.replace(
                 "/api/catalog", "/api/catalog/v1/oauth/tokens"
             )
         else:
             self.base_url = f"{base_uri}/api/management/v1"
+            self.catalog_base_url = f"{base_uri}/api/catalog/v1"
             self.oauth_url = f"{base_uri}/api/catalog/v1/oauth/tokens"
 
         parts = root_credential.split(":", 1)
@@ -75,7 +92,7 @@ class PolarisService:
             return str(self._token)
 
     async def _request(
-        self, method: str, endpoint: str, **kwargs: Any
+        self, method: str, endpoint: str, base_url: str | None = None, **kwargs: Any
     ) -> Dict[str, Any]:
         """Make an authenticated request to Polaris management API."""
         session = await self._get_session()
@@ -86,7 +103,7 @@ class PolarisService:
         headers["Polaris-Realm"] = "POLARIS"
         headers["Accept"] = "application/json"
 
-        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        url = f"{base_url or self.base_url}/{endpoint.lstrip('/')}"
 
         try:
             async with session.request(method, url, headers=headers, **kwargs) as resp:
@@ -130,6 +147,17 @@ class PolarisService:
                     "Polaris admin token expired or invalid, clearing cache."
                 )
             raise PolarisOperationError(str(e.message), status=e.status) from e
+
+    async def _catalog_request(
+        self, method: str, endpoint: str, **kwargs: Any
+    ) -> Dict[str, Any]:
+        """Make an authenticated request to the Polaris Iceberg catalog API."""
+        return await self._request(
+            method,
+            endpoint,
+            base_url=self.catalog_base_url,
+            **kwargs,
+        )
 
     async def create_catalog(
         self,
@@ -249,12 +277,22 @@ class PolarisService:
     async def get_grants_for_catalog_role(
         self, catalog: str, role_name: str
     ) -> List[str]:
-        """List privilege names already granted to a catalog role."""
+        """List catalog-scoped privilege names already granted to a catalog role."""
+        grants = await self.list_grants_for_catalog_role(catalog, role_name)
+        return [
+            grant.get("privilege", "")
+            for grant in grants
+            if grant.get("privilege") and grant.get("type", "catalog") == "catalog"
+        ]
+
+    async def list_grants_for_catalog_role(
+        self, catalog: str, role_name: str
+    ) -> List[Dict[str, Any]]:
+        """List full grant resources already assigned to a catalog role."""
         resp = await self._request(
             "GET", f"/catalogs/{catalog}/catalog-roles/{role_name}/grants"
         )
-        grants = resp.get("grants", [])
-        return [g.get("privilege", "") for g in grants if g.get("privilege")]
+        return [_unwrap_grant_resource(grant) for grant in resp.get("grants", [])]
 
     async def grant_catalog_privilege(
         self, catalog: str, role_name: str, privilege: str = "CATALOG_MANAGE_CONTENT"
@@ -276,6 +314,114 @@ class PolarisService:
             f"/catalogs/{catalog}/catalog-roles/{role_name}/grants",
             json=payload,
         )
+
+    async def grant_namespace_privilege(
+        self,
+        catalog: str,
+        role_name: str,
+        namespace: Sequence[str],
+        privilege: str,
+    ) -> Dict[str, Any]:
+        """Grant a namespace-scoped privilege to a catalog role."""
+        namespace_parts = _normalize_namespace(namespace)
+        existing = await self.list_grants_for_catalog_role(catalog, role_name)
+        if _has_namespace_grant(existing, namespace_parts, privilege):
+            logger.info(
+                "Namespace privilege '%s' already granted to role '%s' on %s/%s, skipping.",
+                privilege,
+                role_name,
+                catalog,
+                ".".join(namespace_parts),
+            )
+            return {}
+
+        payload = {
+            "grant": {
+                "type": "namespace",
+                "namespace": list(namespace_parts),
+                "privilege": privilege,
+            }
+        }
+        return await self._request(
+            "PUT",
+            f"/catalogs/{catalog}/catalog-roles/{role_name}/grants",
+            json=payload,
+        )
+
+    async def revoke_namespace_privilege(
+        self,
+        catalog: str,
+        role_name: str,
+        namespace: Sequence[str],
+        privilege: str,
+    ) -> Dict[str, Any]:
+        """Revoke a namespace-scoped privilege from a catalog role."""
+        namespace_parts = _normalize_namespace(namespace)
+        existing = await self.list_grants_for_catalog_role(catalog, role_name)
+        if not _has_namespace_grant(existing, namespace_parts, privilege):
+            logger.info(
+                "Namespace privilege '%s' is not granted to role '%s' on %s/%s, skipping revoke.",
+                privilege,
+                role_name,
+                catalog,
+                ".".join(namespace_parts),
+            )
+            return {}
+
+        payload = {
+            "grant": {
+                "type": "namespace",
+                "namespace": list(namespace_parts),
+                "privilege": privilege,
+            }
+        }
+        return await self._request(
+            "DELETE",
+            f"/catalogs/{catalog}/catalog-roles/{role_name}/grants",
+            json=payload,
+        )
+
+    async def ensure_namespace_acl_role_bindings(
+        self,
+        catalog: str,
+        catalog_role: str,
+        principal_role: str,
+        namespace: Sequence[str],
+        access_level: str,
+    ) -> None:
+        """Ensure Polaris roles and grants for one namespace ACL role record."""
+        namespace_parts = _normalize_namespace(namespace)
+        await self.create_catalog_role(catalog, catalog_role)
+        for privilege in namespace_privileges_for_access_level(access_level):
+            await self.grant_namespace_privilege(
+                catalog,
+                catalog_role,
+                namespace_parts,
+                privilege,
+            )
+        await self.create_principal_role(principal_role)
+        await self.grant_catalog_role_to_principal_role(
+            catalog,
+            catalog_role,
+            principal_role,
+        )
+
+    async def revoke_namespace_acl_role_privileges(
+        self,
+        catalog: str,
+        catalog_role: str,
+        namespace: Sequence[str],
+        access_level: str,
+    ) -> None:
+        """Revoke all namespace-scoped privileges for an ACL role."""
+        namespace_parts = _normalize_namespace(namespace)
+        for privilege in namespace_privileges_for_access_level(access_level):
+            await self.revoke_namespace_privilege(
+                catalog,
+                catalog_role,
+                namespace_parts,
+                privilege,
+            )
 
     async def create_principal_role(self, role_name: str) -> Dict[str, Any]:
         """Create a principal role."""
@@ -463,3 +609,140 @@ class PolarisService:
         # Delete the top-level principal roles bound to users
         await self.delete_principal_role(writer_principal_role)
         await self.delete_principal_role(reader_principal_role)
+
+    async def namespace_exists(self, catalog: str, namespace: Sequence[str]) -> bool:
+        """Return whether a namespace exists in the Iceberg REST catalog API."""
+        namespace_path = _namespace_url(_normalize_namespace(namespace))
+        try:
+            await self._catalog_request(
+                "GET", f"/{catalog}/namespaces/{namespace_path}"
+            )
+            return True
+        except PolarisOperationError as e:
+            if e.status == 404:
+                return False
+            raise
+
+    async def list_namespaces(
+        self,
+        catalog: str,
+        parent: Sequence[str] | None = None,
+    ) -> List[tuple[str, ...]]:
+        """List child namespaces in a catalog or under a parent namespace."""
+        params = None
+        if parent is not None:
+            params = {"parent": _namespace_query_value(_normalize_namespace(parent))}
+        resp = await self._catalog_request(
+            "GET",
+            f"/{catalog}/namespaces",
+            params=params,
+        )
+        namespaces = resp.get("namespaces", [])
+        if not isinstance(namespaces, list):
+            return []
+        return [
+            namespace
+            for item in namespaces
+            if (namespace := _namespace_from_payload_item(item))
+        ]
+
+    async def list_tables_in_namespace(
+        self, catalog: str, namespace: Sequence[str]
+    ) -> List[str]:
+        """List table names inside a namespace via the Iceberg REST catalog API."""
+        namespace_path = _namespace_url(_normalize_namespace(namespace))
+        resp = await self._catalog_request(
+            "GET", f"/{catalog}/namespaces/{namespace_path}/tables"
+        )
+        identifiers = resp.get("identifiers")
+        if isinstance(identifiers, list):
+            return [
+                item["name"]
+                for item in identifiers
+                if isinstance(item, dict) and item.get("name")
+            ]
+        tables = resp.get("tables", [])
+        return [
+            item["name"] if isinstance(item, dict) else str(item)
+            for item in tables
+            if item
+        ]
+
+    async def load_table(
+        self,
+        catalog: str,
+        namespace: Sequence[str],
+        table_name: str,
+    ) -> Dict[str, Any]:
+        """Load table metadata from the Iceberg REST catalog API."""
+        namespace_path = _namespace_url(_normalize_namespace(namespace))
+        table_path = quote(table_name, safe="")
+        return await self._catalog_request(
+            "GET",
+            f"/{catalog}/namespaces/{namespace_path}/tables/{table_path}",
+        )
+
+
+def namespace_privileges_for_access_level(access_level: str) -> tuple[str, ...]:
+    """Return the Polaris namespace privilege set for a read or write grant."""
+    normalized = access_level.strip().lower()
+    if normalized == "read":
+        return NAMESPACE_READ_PRIVILEGES
+    if normalized == "write":
+        return NAMESPACE_WRITE_PRIVILEGES
+    raise ValueError("access_level must be 'read' or 'write'")
+
+
+def _normalize_namespace(namespace: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(namespace, str):
+        raise ValueError("namespace must be a sequence, not a dotted string")
+    namespace_parts = tuple(part.strip() for part in namespace)
+    if not namespace_parts:
+        raise ValueError("namespace must not be empty")
+    if any(not part for part in namespace_parts):
+        raise ValueError("namespace must not contain empty values")
+    return namespace_parts
+
+
+def _namespace_url(namespace: Sequence[str]) -> str:
+    return "%1F".join(quote(part, safe="") for part in namespace)
+
+
+def _namespace_query_value(namespace: Sequence[str]) -> str:
+    return "\x1f".join(namespace)
+
+
+def _namespace_from_payload_item(item: Any) -> tuple[str, ...] | None:
+    if isinstance(item, list):
+        return tuple(str(part) for part in item if part)
+    if isinstance(item, str):
+        return tuple(part for part in item.split(".") if part)
+    if isinstance(item, dict):
+        namespace = item.get("namespace")
+        if isinstance(namespace, list):
+            return tuple(str(part) for part in namespace if part)
+        name = item.get("name")
+        if isinstance(name, str):
+            return tuple(part for part in name.split(".") if part)
+    return None
+
+
+def _unwrap_grant_resource(grant: Dict[str, Any]) -> Dict[str, Any]:
+    nested = grant.get("grant")
+    if isinstance(nested, dict):
+        return nested
+    return grant
+
+
+def _has_namespace_grant(
+    grants: Sequence[Dict[str, Any]],
+    namespace: Sequence[str],
+    privilege: str,
+) -> bool:
+    namespace_parts = list(namespace)
+    return any(
+        grant.get("type") == "namespace"
+        and grant.get("namespace") == namespace_parts
+        and grant.get("privilege") == privilege
+        for grant in grants
+    )

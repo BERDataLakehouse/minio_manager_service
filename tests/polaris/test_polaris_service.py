@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 
 from polaris.polaris_service import PolarisService
+from polaris.polaris_service import namespace_privileges_for_access_level
 from service.exceptions import PolarisOperationError
 
 
@@ -86,6 +87,7 @@ class TestPolarisServiceInit:
         """Test init with a plain base URI."""
         svc = PolarisService("http://polaris:8181", "root:secret")
         assert svc.base_url == "http://polaris:8181/api/management/v1"
+        assert svc.catalog_base_url == "http://polaris:8181/api/catalog/v1"
         assert svc.oauth_url == "http://polaris:8181/api/catalog/v1/oauth/tokens"
         assert svc.client_id == "root"
         assert svc.client_secret == "secret"
@@ -95,6 +97,7 @@ class TestPolarisServiceInit:
         """Test init with /api/catalog in the URI — should be rewritten."""
         svc = PolarisService("http://polaris:8181/api/catalog", "root:secret")
         assert svc.base_url == "http://polaris:8181/api/management/v1"
+        assert svc.catalog_base_url == "http://polaris:8181/api/catalog/v1"
         assert svc.oauth_url == "http://polaris:8181/api/catalog/v1/oauth/tokens"
 
     def test_init_with_trailing_slash(self):
@@ -516,7 +519,7 @@ class TestCatalogRoles:
 
     @pytest.mark.asyncio
     async def test_get_grants_for_catalog_role(self, polaris_service):
-        """Test listing privilege names for a catalog role."""
+        """Test listing catalog-scoped privilege names for a catalog role."""
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
@@ -524,6 +527,11 @@ class TestCatalogRoles:
                 "grants": [
                     {"type": "catalog", "privilege": "CATALOG_MANAGE_CONTENT"},
                     {"type": "catalog", "privilege": "TABLE_READ_DATA"},
+                    {
+                        "type": "namespace",
+                        "namespace": ["shared_data"],
+                        "privilege": "TABLE_READ_DATA",
+                    },
                 ]
             }
 
@@ -533,6 +541,36 @@ class TestCatalogRoles:
             mock_req.assert_called_once_with(
                 "GET", "/catalogs/cat/catalog-roles/role/grants"
             )
+
+    @pytest.mark.asyncio
+    async def test_list_grants_for_catalog_role_returns_full_grants(
+        self, polaris_service
+    ):
+        """Test listing full grant resources for scope-aware checks."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = {
+                "grants": [
+                    {
+                        "grant": {
+                            "type": "namespace",
+                            "namespace": ["shared_data"],
+                            "privilege": "TABLE_READ_DATA",
+                        }
+                    },
+                ]
+            }
+
+            result = await polaris_service.list_grants_for_catalog_role("cat", "role")
+
+            assert result == [
+                {
+                    "type": "namespace",
+                    "namespace": ["shared_data"],
+                    "privilege": "TABLE_READ_DATA",
+                }
+            ]
 
     @pytest.mark.asyncio
     async def test_get_grants_for_catalog_role_empty(self, polaris_service):
@@ -594,6 +632,248 @@ class TestCatalogRoles:
 
             assert result == {}
             mock_req.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_namespace_privileges_for_access_level(self):
+        """Test read/write namespace privilege bundles."""
+        assert namespace_privileges_for_access_level("read") == (
+            "NAMESPACE_LIST",
+            "NAMESPACE_READ_PROPERTIES",
+            "TABLE_LIST",
+            "TABLE_READ_PROPERTIES",
+            "TABLE_READ_DATA",
+        )
+        assert namespace_privileges_for_access_level("write")[-3:] == (
+            "NAMESPACE_WRITE_PROPERTIES",
+            "TABLE_WRITE_PROPERTIES",
+            "TABLE_WRITE_DATA",
+        )
+        with pytest.raises(ValueError, match="access_level"):
+            namespace_privileges_for_access_level("admin")
+
+    @pytest.mark.asyncio
+    async def test_grant_namespace_privilege(self, polaris_service):
+        """Test granting a namespace-scoped privilege."""
+        with (
+            patch.object(
+                polaris_service,
+                "list_grants_for_catalog_role",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(
+                polaris_service, "_request", new_callable=AsyncMock
+            ) as mock_req,
+        ):
+            await polaris_service.grant_namespace_privilege(
+                "tenant_kbase",
+                "namespace_acl_hash_read",
+                ["shared_data"],
+                "TABLE_READ_DATA",
+            )
+
+            mock_req.assert_called_once_with(
+                "PUT",
+                "/catalogs/tenant_kbase/catalog-roles/namespace_acl_hash_read/grants",
+                json={
+                    "grant": {
+                        "type": "namespace",
+                        "namespace": ["shared_data"],
+                        "privilege": "TABLE_READ_DATA",
+                    }
+                },
+            )
+
+    @pytest.mark.asyncio
+    async def test_grant_namespace_privilege_already_granted_skips(
+        self, polaris_service
+    ):
+        """Test namespace grant idempotency checks the namespace scope."""
+        with (
+            patch.object(
+                polaris_service,
+                "list_grants_for_catalog_role",
+                new_callable=AsyncMock,
+                return_value=[
+                    {
+                        "type": "namespace",
+                        "namespace": ["shared_data"],
+                        "privilege": "TABLE_READ_DATA",
+                    }
+                ],
+            ),
+            patch.object(
+                polaris_service, "_request", new_callable=AsyncMock
+            ) as mock_req,
+        ):
+            result = await polaris_service.grant_namespace_privilege(
+                "tenant_kbase",
+                "namespace_acl_hash_read",
+                ["shared_data"],
+                "TABLE_READ_DATA",
+            )
+
+            assert result == {}
+            mock_req.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_revoke_namespace_privilege(self, polaris_service):
+        """Test revoking a namespace-scoped privilege."""
+        with (
+            patch.object(
+                polaris_service,
+                "list_grants_for_catalog_role",
+                new_callable=AsyncMock,
+                return_value=[
+                    {
+                        "type": "namespace",
+                        "namespace": ["shared_data"],
+                        "privilege": "TABLE_READ_DATA",
+                    }
+                ],
+            ),
+            patch.object(
+                polaris_service, "_request", new_callable=AsyncMock
+            ) as mock_req,
+        ):
+            await polaris_service.revoke_namespace_privilege(
+                "tenant_kbase",
+                "namespace_acl_hash_read",
+                ["shared_data"],
+                "TABLE_READ_DATA",
+            )
+
+            mock_req.assert_called_once_with(
+                "DELETE",
+                "/catalogs/tenant_kbase/catalog-roles/namespace_acl_hash_read/grants",
+                json={
+                    "grant": {
+                        "type": "namespace",
+                        "namespace": ["shared_data"],
+                        "privilege": "TABLE_READ_DATA",
+                    }
+                },
+            )
+
+    @pytest.mark.asyncio
+    async def test_revoke_namespace_privilege_missing_skips(self, polaris_service):
+        """Test revoking a missing namespace privilege is a no-op."""
+        with (
+            patch.object(
+                polaris_service,
+                "list_grants_for_catalog_role",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(
+                polaris_service, "_request", new_callable=AsyncMock
+            ) as mock_req,
+        ):
+            result = await polaris_service.revoke_namespace_privilege(
+                "tenant_kbase",
+                "namespace_acl_hash_read",
+                ["shared_data"],
+                "TABLE_READ_DATA",
+            )
+
+            assert result == {}
+            mock_req.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ensure_namespace_acl_role_bindings(self, polaris_service):
+        """Test namespace ACL role orchestration."""
+        with (
+            patch.object(
+                polaris_service, "create_catalog_role", new_callable=AsyncMock
+            ) as mock_create_catalog_role,
+            patch.object(
+                polaris_service, "grant_namespace_privilege", new_callable=AsyncMock
+            ) as mock_grant_namespace_privilege,
+            patch.object(
+                polaris_service, "create_principal_role", new_callable=AsyncMock
+            ) as mock_create_principal_role,
+            patch.object(
+                polaris_service,
+                "grant_catalog_role_to_principal_role",
+                new_callable=AsyncMock,
+            ) as mock_grant_catalog_role,
+        ):
+            await polaris_service.ensure_namespace_acl_role_bindings(
+                "tenant_kbase",
+                "namespace_acl_hash_read",
+                "namespace_acl_hash_read_member",
+                ["shared_data"],
+                "read",
+            )
+
+            mock_create_catalog_role.assert_called_once_with(
+                "tenant_kbase", "namespace_acl_hash_read"
+            )
+            assert mock_grant_namespace_privilege.call_count == 5
+            mock_grant_namespace_privilege.assert_any_call(
+                "tenant_kbase",
+                "namespace_acl_hash_read",
+                ("shared_data",),
+                "TABLE_READ_DATA",
+            )
+            mock_create_principal_role.assert_called_once_with(
+                "namespace_acl_hash_read_member"
+            )
+            mock_grant_catalog_role.assert_called_once_with(
+                "tenant_kbase",
+                "namespace_acl_hash_read",
+                "namespace_acl_hash_read_member",
+            )
+
+    @pytest.mark.asyncio
+    async def test_list_namespaces_with_parent(self, polaris_service):
+        """Test listing child namespaces through the catalog API."""
+        with patch.object(
+            polaris_service,
+            "_catalog_request",
+            new_callable=AsyncMock,
+            return_value={
+                "namespaces": [
+                    {"namespace": ["shared_data", "curated"]},
+                    ["shared_data", "raw"],
+                ]
+            },
+        ) as mock_request:
+            result = await polaris_service.list_namespaces(
+                "tenant_kbase",
+                parent=["geo", "curated"],
+            )
+
+            assert result == [
+                ("shared_data", "curated"),
+                ("shared_data", "raw"),
+            ]
+            mock_request.assert_called_once_with(
+                "GET",
+                "/tenant_kbase/namespaces",
+                params={"parent": "geo\x1fcurated"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_load_table(self, polaris_service):
+        """Test loading table metadata through the catalog API."""
+        with patch.object(
+            polaris_service,
+            "_catalog_request",
+            new_callable=AsyncMock,
+            return_value={"metadata": {"location": "s3a://bucket/path/table"}},
+        ) as mock_request:
+            result = await polaris_service.load_table(
+                "tenant_kbase",
+                ["shared_data"],
+                "measurements",
+            )
+
+            assert result["metadata"]["location"] == "s3a://bucket/path/table"
+            mock_request.assert_called_once_with(
+                "GET",
+                "/tenant_kbase/namespaces/shared_data/tables/measurements",
+            )
 
 
 # === PRINCIPAL ROLE TESTS ===
@@ -822,6 +1102,62 @@ class TestListAndGet:
 
             result = await polaris_service.list_catalogs()
             assert result == []
+
+    @pytest.mark.asyncio
+    async def test_namespace_exists_true(self, polaris_service):
+        """Test namespace_exists calls the Iceberg REST catalog API."""
+        with patch.object(
+            polaris_service, "_catalog_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = {"namespace": ["geo", "curated"]}
+
+            result = await polaris_service.namespace_exists(
+                "tenant_kbase",
+                ["geo", "curated"],
+            )
+
+            assert result is True
+            mock_req.assert_called_once_with(
+                "GET", "/tenant_kbase/namespaces/geo%1Fcurated"
+            )
+
+    @pytest.mark.asyncio
+    async def test_namespace_exists_false_on_404(self, polaris_service):
+        """Test namespace_exists returns false for missing namespaces."""
+        with patch.object(
+            polaris_service, "_catalog_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Not Found", status=404)
+
+            result = await polaris_service.namespace_exists(
+                "tenant_kbase",
+                ["missing"],
+            )
+
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_list_tables_in_namespace(self, polaris_service):
+        """Test table listing extracts names from Iceberg identifiers."""
+        with patch.object(
+            polaris_service, "_catalog_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = {
+                "identifiers": [
+                    {"namespace": ["shared_data"], "name": "measurements"},
+                    {"namespace": ["shared_data"], "name": "samples"},
+                ]
+            }
+
+            result = await polaris_service.list_tables_in_namespace(
+                "tenant_kbase",
+                ["shared_data"],
+            )
+
+            assert result == ["measurements", "samples"]
+            mock_req.assert_called_once_with(
+                "GET", "/tenant_kbase/namespaces/shared_data/tables"
+            )
 
 
 # === DELETION TESTS ===

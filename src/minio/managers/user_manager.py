@@ -46,6 +46,7 @@ class UserManager(ResourceManager[UserModel]):
         self.users_general_warehouse_prefix = config.users_general_warehouse_prefix
         self.users_sql_warehouse_prefix = config.users_sql_warehouse_prefix
         self.polaris_service: PolarisService = polaris_service
+        self.namespace_acl_manager: Any = None
 
         # Lazy initialization of dependent managers to avoid circular imports
         self._policy_manager = None
@@ -132,6 +133,11 @@ class UserManager(ResourceManager[UserModel]):
 
     async def _pre_delete_cleanup(self, name: str, force: bool = False) -> None:
         """Clean up user resources before deletion."""
+        if self.namespace_acl_manager is not None:
+            try:
+                await self.namespace_acl_manager.delete_user_cascade(name)
+            except Exception as e:
+                logger.warning(f"Failed to cascade namespace ACLs for {name}: {e}")
         await self.policy_manager.detach_user_policies(name)
         await self.policy_manager.delete_user_policies(name)
 

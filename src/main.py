@@ -15,6 +15,7 @@ from routes import (
     credentials,
     health,
     management,
+    namespace_acls,
     polaris,
     sharing,
     tenants,
@@ -98,6 +99,7 @@ def create_application() -> FastAPI:
     app.include_router(health.router, tags=["health"])
     app.include_router(credentials.router, tags=["credentials"])
     app.include_router(polaris.router, tags=["polaris"])
+    app.include_router(namespace_acls.router, tags=["namespace-acls"])
     app.include_router(tenants.router, tags=["tenants"])
     app.include_router(sharing.router, tags=["sharing"])
     app.include_router(workspaces.router, tags=["workspaces"])

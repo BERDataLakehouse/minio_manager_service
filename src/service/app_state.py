@@ -21,6 +21,8 @@ from minio.managers.tenant_manager import TenantManager
 from minio.managers.user_manager import UserManager
 from polaris.credential_service import PolarisCredentialService
 from polaris.credential_store import PolarisCredentialStore
+from polaris.namespace_acl_manager import NamespaceAclManager
+from polaris.namespace_acl_store import NamespaceAclStore
 from polaris.polaris_service import PolarisService
 from s3.core.distributed_lock import DistributedLockManager
 from s3.core.s3_client import S3Client
@@ -45,6 +47,7 @@ class AppState(NamedTuple):
     sharing_manager: SharingManager
     polaris_service: PolarisService
     polaris_credential_service: PolarisCredentialService
+    namespace_acl_manager: NamespaceAclManager
     credential_service: CredentialService
     tenant_manager: TenantManager
 
@@ -100,6 +103,7 @@ async def build_app(app: FastAPI) -> None:
             os.getenv("MMS_DB_ENCRYPTION_KEY"), "MMS_DB_ENCRYPTION_KEY"
         ),
     )
+    namespace_acl_store = NamespaceAclStore(pool=db_pool.pool)
     user_profile_store = UserProfileStore(pool=db_pool.pool)
     tenant_metadata_store = TenantMetadataStore(pool=db_pool.pool)
     logger.info("Database stores initialized")
@@ -169,6 +173,20 @@ async def build_app(app: FastAPI) -> None:
     )
     logger.info("S3 managers initialized")
 
+    namespace_acl_manager = NamespaceAclManager(
+        store=namespace_acl_store,
+        polaris_service=polaris_service,
+        policy_manager=policy_manager,
+        lock_manager=lock_manager,
+        minio_config=config,
+        max_grants_per_user=int(
+            os.getenv("POLARIS_NAMESPACE_ACL_MAX_GRANTS_PER_USER", "50")
+        ),
+    )
+    user_manager.namespace_acl_manager = namespace_acl_manager
+    group_manager.namespace_acl_manager = namespace_acl_manager
+    logger.info("Namespace ACL manager initialized")
+
     # Initialize credential service (coordinates lock + S3 + DB)
     credential_service = CredentialService(
         user_manager=user_manager,
@@ -185,6 +203,7 @@ async def build_app(app: FastAPI) -> None:
         polaris_service=polaris_service,
         profile_client=profile_client,
         minio_config=config,
+        namespace_acl_manager=namespace_acl_manager,
     )
     logger.info("Tenant manager initialized")
 
@@ -201,6 +220,7 @@ async def build_app(app: FastAPI) -> None:
         sharing_manager=sharing_manager,
         polaris_service=polaris_service,
         polaris_credential_service=polaris_credential_service,
+        namespace_acl_manager=namespace_acl_manager,
         credential_service=credential_service,
         tenant_manager=tenant_manager,
     )

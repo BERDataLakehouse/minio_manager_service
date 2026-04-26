@@ -7,8 +7,14 @@ from polaris.constants import (
     ICEBERG_STORAGE_SUBDIRECTORY,
     normalize_group_name_for_polaris,
 )
+from polaris.namespace_acl_models import (
+    EffectiveAccessGroupTenant,
+    EffectiveAccessNamespaceGrant,
+    EffectiveAccessNamespaceTenant,
+    PolarisEffectiveAccessResponse,
+)
 from service import app_state
-from service.dependencies import auth
+from service.dependencies import auth, require_admin
 from service.kb_auth import AdminPermission
 
 logger = logging.getLogger(__name__)
@@ -85,6 +91,22 @@ async def _ensure_polaris_user_resources(
         # Grant the appropriate principal role for this group
         principal_role = f"{base_group}ro_member" if is_ro else f"{base_group}_member"
         await polaris.grant_principal_role_to_principal(username, principal_role)
+
+    namespace_sync = await app_state_obj.namespace_acl_manager.reconcile_user(username)
+    if not namespace_sync.success:
+        logger.warning(
+            "Namespace ACL reconciliation for %s had %s failures during provisioning",
+            username,
+            len(namespace_sync.failed_grants),
+        )
+    namespace_grants = await app_state_obj.namespace_acl_manager.list_grants_for_user(
+        username
+    )
+    tenant_catalogs.extend(
+        f"tenant_{grant.tenant_name}"
+        for grant in namespace_grants
+        if grant.status == "active"
+    )
 
     # Remove duplicates but preserve order
     return catalog_name, list(dict.fromkeys(tenant_catalogs))
@@ -194,3 +216,87 @@ async def rotate_polaris_credentials(
         "personal_catalog": catalog_name,
         "tenant_catalogs": tenant_catalogs,
     }
+
+
+@router.get(
+    "/effective-access/me",
+    response_model=PolarisEffectiveAccessResponse,
+)
+async def get_my_effective_access(
+    app_state_obj: app_state.AppState = Depends(app_state.get_app_state),
+    authenticated_user=Depends(auth),
+):
+    """Return the authenticated user's effective Polaris access."""
+    return await _effective_access_response(authenticated_user.user, app_state_obj)
+
+
+@router.get(
+    "/effective-access/{username}",
+    response_model=PolarisEffectiveAccessResponse,
+)
+async def get_effective_access_for_user(
+    username: str,
+    app_state_obj: app_state.AppState = Depends(app_state.get_app_state),
+    _authenticated_user=Depends(require_admin),
+):
+    """Return a user's effective Polaris access. Requires admin."""
+    return await _effective_access_response(username, app_state_obj)
+
+
+async def _effective_access_response(
+    username: str,
+    app_state_obj: app_state.AppState,
+) -> PolarisEffectiveAccessResponse:
+    tenant_access: dict[str, str] = {}
+    for group_name in await app_state_obj.group_manager.get_user_groups(username):
+        tenant_name, is_ro = normalize_group_name_for_polaris(group_name)
+        if not tenant_name:
+            continue
+        access_level = "read_only" if is_ro else "read_write"
+        if tenant_access.get(tenant_name) == "read_write":
+            continue
+        tenant_access[tenant_name] = access_level
+
+    group_tenants = [
+        EffectiveAccessGroupTenant(
+            tenant_name=tenant_name,
+            catalog_name=f"tenant_{tenant_name}",
+            access_level=access_level,
+        )
+        for tenant_name, access_level in sorted(tenant_access.items())
+    ]
+
+    namespace_grants_by_tenant: dict[str, list[EffectiveAccessNamespaceGrant]] = {}
+    catalog_by_tenant: dict[str, str] = {}
+    grants = await app_state_obj.namespace_acl_manager.list_grants_for_user(username)
+    for grant in grants:
+        if grant.status != "active":
+            continue
+        catalog_by_tenant[grant.tenant_name] = grant.catalog_name
+        namespace_grants_by_tenant.setdefault(grant.tenant_name, []).append(
+            EffectiveAccessNamespaceGrant(
+                grant_id=grant.id,
+                namespace=list(grant.namespace_parts),
+                namespace_name=grant.namespace_name,
+                access_level=grant.access_level,
+            )
+        )
+
+    namespace_acl_tenants = [
+        EffectiveAccessNamespaceTenant(
+            tenant_name=tenant_name,
+            catalog_name=catalog_by_tenant[tenant_name],
+            namespaces=sorted(
+                namespace_grants,
+                key=lambda grant: (grant.namespace_name, grant.access_level),
+            ),
+        )
+        for tenant_name, namespace_grants in sorted(namespace_grants_by_tenant.items())
+    ]
+
+    return PolarisEffectiveAccessResponse(
+        username=username,
+        personal_catalog=f"user_{username}",
+        group_tenants=group_tenants,
+        namespace_acl_tenants=namespace_acl_tenants,
+    )

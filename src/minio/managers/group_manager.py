@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import List
+from typing import Any, List
 
 from minio.managers.resource_manager import ResourceManager
 from minio.models.command import GroupAction
@@ -30,6 +30,7 @@ class GroupManager(ResourceManager[GroupModel]):
         self.tenant_general_warehouse_prefix = config.tenant_general_warehouse_prefix
         self.tenant_sql_warehouse_prefix = config.tenant_sql_warehouse_prefix
         self.polaris_service: PolarisService = polaris_service
+        self.namespace_acl_manager: Any = None
 
         # Lazy initialization of dependent managers to avoid circular imports
         self._policy_manager = None
@@ -217,6 +218,12 @@ class GroupManager(ResourceManager[GroupModel]):
 
     async def _post_delete_cleanup(self, name: str) -> None:
         """Clean up group resources after deletion."""
+        if self.namespace_acl_manager is not None and not name.endswith("ro"):
+            try:
+                await self.namespace_acl_manager.delete_tenant_cascade(name)
+            except Exception as e:
+                self.logger.warning(f"Failed to cascade namespace ACLs: {e}")
+
         try:
             await self._delete_group_shared_directory(name)
         except Exception as e:

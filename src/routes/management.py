@@ -505,6 +505,12 @@ async def add_group_member(
         username, principal_role_name
     )
 
+    await _reconcile_namespace_acl_membership(
+        app_state,
+        username,
+        base_group_name,
+    )
+
     # Get updated group info
     group_info = await app_state.group_manager.get_group_info(group_name)
 
@@ -550,6 +556,12 @@ async def remove_group_member(
     )
     await app_state.polaris_service.revoke_principal_role_from_principal(
         username, principal_role_name
+    )
+
+    await _reconcile_namespace_acl_membership(
+        app_state,
+        username,
+        base_group_name,
     )
 
     # Get updated group info
@@ -1004,3 +1016,45 @@ async def ensure_all_polaris_resources(
         performed_by=authenticated_user.user,
         timestamp=datetime.now(),
     )
+
+
+async def _reconcile_namespace_acl_membership(
+    state,
+    username: str,
+    tenant_name: str,
+) -> None:
+    try:
+        permission = await _current_tenant_permission(state, username, tenant_name)
+        await state.namespace_acl_manager.reconcile_tenant_membership(
+            username=username,
+            tenant_name=tenant_name,
+            permission=permission,
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to reconcile namespace ACL membership for %s in tenant %s: %s",
+            username,
+            tenant_name,
+            e,
+        )
+
+
+async def _current_tenant_permission(
+    state,
+    username: str,
+    tenant_name: str,
+) -> str | None:
+    try:
+        rw_members = await state.group_manager.get_group_members(tenant_name)
+    except GroupOperationError:
+        rw_members = []
+    if username in set(rw_members):
+        return "read_write"
+
+    try:
+        ro_members = await state.group_manager.get_group_members(f"{tenant_name}ro")
+    except GroupOperationError:
+        ro_members = []
+    if username in set(ro_members):
+        return "read_only"
+    return None

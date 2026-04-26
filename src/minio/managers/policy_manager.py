@@ -799,6 +799,38 @@ class PolicyManager(ResourceManager[PolicyModel]):
 
         return home_attached and system_attached
 
+    async def is_policy_attached_to_user(self, policy_name: str, username: str) -> bool:
+        """Check whether a specific policy is attached to a user."""
+        return await self._is_policy_attached_to_target(
+            policy_name, PolicyTarget.USER, username
+        )
+
+    async def upsert_attached_user_policy(
+        self, policy_model: PolicyModel, username: str
+    ) -> None:
+        """Create or replace a policy and ensure it is attached to a user."""
+        policy_name = self._validate_resource_name(policy_model.policy_name)
+        async with self.operation_context("upsert_attached_user_policy"):
+            if await self.resource_exists(policy_name):
+                if await self.is_policy_attached_to_user(policy_name, username):
+                    await self.detach_policy_from_user(policy_name, username)
+                await self.delete_resource(policy_name)
+
+            await self._create_minio_policy(policy_model)
+            await self.attach_policy_to_user(policy_name, username)
+
+    async def detach_and_delete_user_policy(
+        self, policy_name: str, username: str
+    ) -> None:
+        """Detach a policy from a user if present, then delete the policy if present."""
+        validated_name = self._validate_resource_name(policy_name)
+        async with self.operation_context("detach_and_delete_user_policy"):
+            if not await self.resource_exists(validated_name):
+                return
+            if await self.is_policy_attached_to_user(validated_name, username):
+                await self.detach_policy_from_user(validated_name, username)
+            await self.delete_resource(validated_name)
+
     async def _attach_detach_policy(
         self,
         policy_name: str,
