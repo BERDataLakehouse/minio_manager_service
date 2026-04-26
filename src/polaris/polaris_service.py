@@ -274,6 +274,29 @@ class PolarisService:
                 )
             raise e
 
+    async def list_catalog_roles(self, catalog: str) -> List[Dict[str, Any]]:
+        """List all roles defined within a catalog."""
+        resp = await self._request("GET", f"/catalogs/{catalog}/catalog-roles")
+        return resp.get("roles", [])
+
+    async def delete_catalog_role(self, catalog: str, role_name: str) -> None:
+        """Delete a role from a catalog."""
+        try:
+            await self._request(
+                "DELETE",
+                f"/catalogs/{catalog}/catalog-roles/{role_name}",
+            )
+            logger.info("Deleted catalog role %s from catalog %s", role_name, catalog)
+        except PolarisOperationError as e:
+            if e.status == 404:
+                logger.info(
+                    "Catalog role %s not found in catalog %s, ignoring deletion.",
+                    role_name,
+                    catalog,
+                )
+            else:
+                raise
+
     async def get_grants_for_catalog_role(
         self, catalog: str, role_name: str
     ) -> List[str]:
@@ -579,6 +602,86 @@ class PolarisService:
             else:
                 logger.warning(f"Failed to delete Polaris catalog {name}: {e}")
 
+    async def delete_namespace(
+        self,
+        catalog: str,
+        namespace: Sequence[str],
+    ) -> None:
+        """Delete an empty namespace from a catalog."""
+        namespace_path = _namespace_url(_normalize_namespace(namespace))
+        try:
+            await self._catalog_request(
+                "DELETE",
+                f"/{catalog}/namespaces/{namespace_path}",
+            )
+            logger.info(
+                "Deleted namespace %s from catalog %s",
+                ".".join(namespace),
+                catalog,
+            )
+        except PolarisOperationError as e:
+            if e.status == 404:
+                logger.info(
+                    "Namespace %s not found in catalog %s, ignoring deletion.",
+                    ".".join(namespace),
+                    catalog,
+                )
+            else:
+                raise
+
+    async def delete_all_namespaces(self, catalog: str) -> None:
+        """Best-effort delete all empty namespaces in a catalog, deepest first."""
+        try:
+            namespaces = await self._list_all_namespaces(catalog)
+        except PolarisOperationError as e:
+            if e.status == 404:
+                return
+            raise
+
+        for namespace in sorted(namespaces, key=len, reverse=True):
+            try:
+                await self.delete_namespace(catalog, namespace)
+            except PolarisOperationError as e:
+                logger.warning(
+                    "Failed to delete namespace %s from catalog %s: %s",
+                    ".".join(namespace),
+                    catalog,
+                    e,
+                )
+
+    async def _list_all_namespaces(self, catalog: str) -> list[tuple[str, ...]]:
+        """Return all namespaces in a catalog, including nested namespaces."""
+        discovered: list[tuple[str, ...]] = []
+        pending = list(await self.list_namespaces(catalog))
+        while pending:
+            namespace = pending.pop()
+            discovered.append(namespace)
+            pending.extend(await self.list_namespaces(catalog, parent=namespace))
+        return discovered
+
+    async def delete_all_catalog_roles(self, catalog: str) -> None:
+        """Best-effort delete all catalog roles before dropping a catalog."""
+        try:
+            roles = await self.list_catalog_roles(catalog)
+        except PolarisOperationError as e:
+            if e.status == 404:
+                return
+            raise
+
+        for role in roles:
+            role_name = role.get("name")
+            if not role_name:
+                continue
+            try:
+                await self.delete_catalog_role(catalog, role_name)
+            except PolarisOperationError as e:
+                logger.warning(
+                    "Failed to delete catalog role %s from catalog %s: %s",
+                    role_name,
+                    catalog,
+                    e,
+                )
+
     async def delete_principal_role(self, name: str) -> None:
         """Delete a Polaris principal role."""
         try:
@@ -603,12 +706,22 @@ class PolarisService:
         writer_principal_role = f"{group_name}_member"
         reader_principal_role = f"{group_name}ro_member"
 
-        # Delete the catalog (this drops catalog-roles and their grants internally in Polaris)
-        await self.delete_catalog(tenant_name)
-
-        # Delete the top-level principal roles bound to users
+        # Remove top-level principal roles before catalog roles so any
+        # principal-role -> catalog-role bindings are gone before the catalog
+        # role deletion pass.
         await self.delete_principal_role(writer_principal_role)
         await self.delete_principal_role(reader_principal_role)
+
+        # Delete empty namespaces first; Polaris refuses to drop non-empty catalogs.
+        await self.delete_all_namespaces(tenant_name)
+
+        # Delete catalog roles explicitly; Polaris will not drop a catalog while
+        # catalog roles such as catalog_admin, tenant readers/writers, or
+        # namespace ACL roles remain.
+        await self.delete_all_catalog_roles(tenant_name)
+
+        # Delete the catalog after child resources are gone.
+        await self.delete_catalog(tenant_name)
 
     async def namespace_exists(self, catalog: str, namespace: Sequence[str]) -> bool:
         """Return whether a namespace exists in the Iceberg REST catalog API."""

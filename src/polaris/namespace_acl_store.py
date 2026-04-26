@@ -226,7 +226,7 @@ _LIST_GRANTS_FOR_TENANT = f"""
 SELECT {_GRANT_COLUMNS}
   FROM polaris_namespace_acl_grants
  WHERE tenant_name = %(tenant_name)s
-   AND (%(namespace_name)s IS NULL OR namespace_name = %(namespace_name)s)
+   AND (%(namespace_name)s::text IS NULL OR namespace_name = %(namespace_name)s::text)
  ORDER BY namespace_name, username, granted_at;
 """
 

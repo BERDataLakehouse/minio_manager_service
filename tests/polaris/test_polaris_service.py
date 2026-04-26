@@ -518,6 +518,54 @@ class TestCatalogRoles:
             assert result == {"catalogRole": {"name": "catalog_admin"}}
 
     @pytest.mark.asyncio
+    async def test_list_catalog_roles(self, polaris_service):
+        """Test listing roles defined in a catalog."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = {
+                "roles": [
+                    {"name": "catalog_admin"},
+                    {"name": "tenant_writer"},
+                ]
+            }
+
+            result = await polaris_service.list_catalog_roles("tenant_foo")
+
+            assert result == [{"name": "catalog_admin"}, {"name": "tenant_writer"}]
+            mock_req.assert_called_once_with(
+                "GET", "/catalogs/tenant_foo/catalog-roles"
+            )
+
+    @pytest.mark.asyncio
+    async def test_delete_catalog_role_success(self, polaris_service):
+        """Test deleting a catalog role succeeds via DELETE request."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            await polaris_service.delete_catalog_role("tenant_foo", "tenant_writer")
+
+            mock_req.assert_called_once_with(
+                "DELETE",
+                "/catalogs/tenant_foo/catalog-roles/tenant_writer",
+            )
+
+    @pytest.mark.asyncio
+    async def test_delete_catalog_role_ignores_404(self, polaris_service):
+        """Test deleting a missing catalog role is idempotent."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Not Found", status=404)
+
+            await polaris_service.delete_catalog_role("tenant_foo", "missing_role")
+
+            mock_req.assert_called_once_with(
+                "DELETE",
+                "/catalogs/tenant_foo/catalog-roles/missing_role",
+            )
+
+    @pytest.mark.asyncio
     async def test_get_grants_for_catalog_role(self, polaris_service):
         """Test listing catalog-scoped privilege names for a catalog role."""
         with patch.object(
@@ -1205,22 +1253,59 @@ class TestDeletions:
             mock_req.assert_called_once_with("DELETE", "/principal-roles/foo_member")
 
     @pytest.mark.asyncio
+    async def test_delete_all_catalog_roles(self, polaris_service):
+        """Test deleting all catalog roles returned by Polaris."""
+        with (
+            patch.object(
+                polaris_service,
+                "list_catalog_roles",
+                new_callable=AsyncMock,
+                return_value=[
+                    {"name": "tenant_writer"},
+                    {"name": "tenant_reader"},
+                    {"name": "catalog_admin"},
+                    {},
+                ],
+            ) as mock_list,
+            patch.object(
+                polaris_service,
+                "delete_catalog_role",
+                new_callable=AsyncMock,
+            ) as mock_delete,
+        ):
+            await polaris_service.delete_all_catalog_roles("tenant_foo")
+
+            mock_list.assert_called_once_with("tenant_foo")
+            assert mock_delete.call_count == 3
+            mock_delete.assert_any_call("tenant_foo", "tenant_writer")
+            mock_delete.assert_any_call("tenant_foo", "tenant_reader")
+            mock_delete.assert_any_call("tenant_foo", "catalog_admin")
+
+    @pytest.mark.asyncio
     async def test_drop_tenant_catalog(self, polaris_service):
         """Test drop_tenant_catalog drops the catalog and both bound member roles sequentially."""
         with (
             patch.object(
-                polaris_service, "delete_catalog", new_callable=AsyncMock
-            ) as mock_del_cat,
-            patch.object(
                 polaris_service, "delete_principal_role", new_callable=AsyncMock
             ) as mock_del_role,
+            patch.object(
+                polaris_service, "delete_all_namespaces", new_callable=AsyncMock
+            ) as mock_del_namespaces,
+            patch.object(
+                polaris_service, "delete_all_catalog_roles", new_callable=AsyncMock
+            ) as mock_del_catalog_roles,
+            patch.object(
+                polaris_service, "delete_catalog", new_callable=AsyncMock
+            ) as mock_del_cat,
         ):
             await polaris_service.drop_tenant_catalog("globalusers")
 
-            mock_del_cat.assert_called_once_with("tenant_globalusers")
             assert mock_del_role.call_count == 2
             mock_del_role.assert_any_call("globalusers_member")
             mock_del_role.assert_any_call("globalusersro_member")
+            mock_del_namespaces.assert_called_once_with("tenant_globalusers")
+            mock_del_catalog_roles.assert_called_once_with("tenant_globalusers")
+            mock_del_cat.assert_called_once_with("tenant_globalusers")
 
 
 # === ENSURE TENANT CATALOG TESTS ===
