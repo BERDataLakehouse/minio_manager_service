@@ -182,6 +182,7 @@ async def build_app(app: FastAPI) -> None:
     tenant_manager = TenantManager(
         metadata_store=tenant_metadata_store,
         group_manager=group_manager,
+        polaris_service=polaris_service,
         profile_client=profile_client,
         minio_config=config,
     )
