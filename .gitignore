@@ -8,3 +8,4 @@ deploy.cfg
 .coverage
 test/test_temp/
 /.pytest_cache/
+src/minio_manager_service.egg-info/

@@ -189,6 +189,16 @@ class TestNamespaceAclNormalization:
         with pytest.raises(ValueError, match="dotted values"):
             normalize_namespace_parts(["geo.curated"])
 
+    def test_normalize_namespace_parts_rejects_wildcards_and_path_separators(self):
+        with pytest.raises(ValueError, match="letters, numbers"):
+            normalize_namespace_parts(["shared*"])
+        with pytest.raises(ValueError, match="letters, numbers"):
+            normalize_namespace_parts(["geo/curated"])
+
+    def test_normalize_namespace_parts_rejects_non_ascii(self):
+        with pytest.raises(ValueError, match="ASCII"):
+            normalize_namespace_parts(["café"])
+
     def test_normalize_namespace_parts_rejects_overlong_part(self):
         # Polaris/Iceberg cap individual identifier components at 256 chars; we
         # reject overlong inputs locally to surface a useful error before the
@@ -537,6 +547,41 @@ class TestNamespaceAclStoreGrantMutations:
         assert roles[0].tenant_name == "kbase"
 
     @pytest.mark.asyncio
+    async def test_count_active_grants_for_role_returns_count(self, store, mock_pool):
+        mock_pool._mock_conn.execute.return_value = _cursor(row=(3,))
+
+        count = await store.count_active_grants_for_role("role-id")
+
+        assert count == 3
+        mock_pool._mock_conn.execute.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_count_active_grants_for_role_returns_zero_without_row(
+        self, store, mock_pool
+    ):
+        mock_pool._mock_conn.execute.return_value = _cursor(row=None)
+
+        assert await store.count_active_grants_for_role("role-id") == 0
+
+    @pytest.mark.asyncio
+    async def test_delete_role_returns_rowcount(self, store, mock_pool):
+        cursor = _cursor()
+        cursor.rowcount = 1
+        mock_pool._mock_conn.execute.return_value = cursor
+
+        assert await store.delete_role("role-id") is True
+        mock_pool._mock_conn.commit.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_delete_roles_for_tenant_returns_rowcount(self, store, mock_pool):
+        cursor = _cursor()
+        cursor.rowcount = 2
+        mock_pool._mock_conn.execute.return_value = cursor
+
+        assert await store.delete_roles_for_tenant("kbase") == 2
+        mock_pool._mock_conn.commit.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_list_grants_for_tenant_with_namespace_filter(self, store, mock_pool):
         mock_pool._mock_conn.execute.return_value = _cursor(rows=[_grant_row()])
 
@@ -559,6 +604,22 @@ class TestNamespaceAclStoreGrantMutations:
 
         assert len(grants) == 1
         params = mock_pool._mock_conn.execute.call_args.args[1]
+        assert params["statuses"] == [GRANT_STATUS_ACTIVE, GRANT_STATUS_SYNC_ERROR]
+
+    @pytest.mark.asyncio
+    async def test_list_usernames_for_sync_filters_statuses_and_tenant(
+        self, store, mock_pool
+    ):
+        mock_pool._mock_conn.execute.return_value = _cursor(rows=[("alice",), ("bob",)])
+
+        usernames = await store.list_usernames_for_sync(
+            tenant_name="kbase",
+            statuses=["active", " sync_error "],
+        )
+
+        assert usernames == ["alice", "bob"]
+        params = mock_pool._mock_conn.execute.call_args.args[1]
+        assert params["tenant_name"] == "kbase"
         assert params["statuses"] == [GRANT_STATUS_ACTIVE, GRANT_STATUS_SYNC_ERROR]
 
     @pytest.mark.asyncio

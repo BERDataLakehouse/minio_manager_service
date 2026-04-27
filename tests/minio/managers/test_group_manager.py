@@ -333,6 +333,11 @@ class TestResourceManagerMethods:
         with pytest.raises((GroupOperationError, json.JSONDecodeError)):
             group_manager_instance._parse_list_output("invalid json")
 
+    def test_parse_list_output_missing_groups_key(self, group_manager_instance):
+        """Test missing groups field is wrapped as a group operation error."""
+        with pytest.raises(GroupOperationError, match="Failed to parse"):
+            group_manager_instance._parse_list_output(json.dumps({"status": "success"}))
+
 
 # =============================================================================
 # TEST LAZY MANAGER INITIALIZATION
@@ -1061,6 +1066,26 @@ class TestDeleteCleanup:
         mock_policy_manager.delete_group_policy.assert_called_once_with("testgroup")
 
     @pytest.mark.asyncio
+    async def test_pre_delete_cleanup_ro_group_delete_command_exception(
+        self, group_manager_instance, mock_policy_manager
+    ):
+        """Test read-only group command failures are logged and swallowed."""
+        group_manager_instance._policy_manager = mock_policy_manager
+        group_manager_instance._executor._execute_command.side_effect = Exception(
+            "mc unavailable"
+        )
+
+        with patch.object(
+            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
+        ):
+            await group_manager_instance._pre_delete_cleanup("testgroup")
+
+        mock_policy_manager.delete_group_policy.assert_any_call(
+            "testgroupro",
+            read_only=True,
+        )
+
+    @pytest.mark.asyncio
     async def test_post_delete_cleanup_success(
         self, group_manager_instance, mock_minio_client
     ):
@@ -1107,6 +1132,53 @@ class TestDeleteCleanup:
 
         # Should not raise — error is caught and logged as a warning
         await group_manager_instance._post_delete_cleanup("testgroup")
+
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_namespace_acl_error_does_not_propagate(
+        self, group_manager_instance, mock_minio_client
+    ):
+        """Test namespace ACL cascade errors do not block directory or Polaris cleanup."""
+        namespace_acl_manager = AsyncMock()
+        namespace_acl_manager.delete_tenant_cascade.side_effect = Exception(
+            "cascade failed"
+        )
+        group_manager_instance.namespace_acl_manager = namespace_acl_manager
+        mock_minio_client.list_objects.return_value = []
+
+        await group_manager_instance._post_delete_cleanup("testgroup")
+
+        namespace_acl_manager.delete_tenant_cascade.assert_called_once_with("testgroup")
+        group_manager_instance.polaris_service.drop_tenant_catalog.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_skips_namespace_acl_for_ro_group(
+        self, group_manager_instance, mock_minio_client
+    ):
+        """Test read-only group deletion does not cascade tenant namespace ACLs."""
+        namespace_acl_manager = AsyncMock()
+        group_manager_instance.namespace_acl_manager = namespace_acl_manager
+        mock_minio_client.list_objects.return_value = []
+
+        await group_manager_instance._post_delete_cleanup("testgroupro")
+
+        namespace_acl_manager.delete_tenant_cascade.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_shared_directory_error_does_not_propagate(
+        self, group_manager_instance
+    ):
+        """Test shared directory cleanup failures are logged and swallowed."""
+        with patch.object(
+            group_manager_instance,
+            "_delete_group_shared_directory",
+            new_callable=AsyncMock,
+            side_effect=Exception("storage failed"),
+        ):
+            await group_manager_instance._post_delete_cleanup("testgroup")
+
+        group_manager_instance.polaris_service.drop_tenant_catalog.assert_called_once_with(
+            "testgroup"
+        )
 
 
 # =============================================================================

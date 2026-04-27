@@ -307,6 +307,35 @@ async def test_reconcile_user_enforces_grant_count_cap(
 
 
 @pytest.mark.asyncio
+async def test_reconcile_user_reports_cleanup_failure_for_grant_count_cap(
+    store,
+    polaris_service,
+    policy_manager,
+    s3_config,
+):
+    grant = _grant()
+    store.list_active_grants_for_user.return_value = [grant]
+    policy_manager.detach_and_delete_user_policy.side_effect = Exception(
+        "cleanup failed"
+    )
+    manager = NamespaceAclManager(
+        store=store,
+        polaris_service=polaris_service,
+        policy_manager=policy_manager,
+        lock_manager=MockLockManager(),
+        minio_config=s3_config,
+        max_grants_per_user=0,
+    )
+
+    result = await manager.reconcile_user("alice")
+
+    assert result.success is False
+    assert len(result.failed_grants) == 2
+    assert result.failed_grants[-1].grant_id == ""
+    assert "cleanup failed" in result.failed_grants[-1].message
+
+
+@pytest.mark.asyncio
 async def test_reconcile_user_marks_grant_failed_when_polaris_assignment_fails(
     manager,
     store,
@@ -375,6 +404,195 @@ async def test_reconcile_user_enforces_policy_size_cap(
     store.update_grant_status.assert_called_once()
     assert store.update_grant_status.call_args.kwargs["status"] == (
         GRANT_STATUS_SYNC_ERROR
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconcile_user_reports_cleanup_failure_for_oversized_policy(
+    store,
+    polaris_service,
+    policy_manager,
+    s3_config,
+):
+    grant = _grant()
+    role = _role()
+    store.list_active_grants_for_user.return_value = [grant]
+    store.get_role.return_value = role
+    policy_manager.detach_and_delete_user_policy.side_effect = Exception(
+        "cleanup failed"
+    )
+    manager = NamespaceAclManager(
+        store=store,
+        polaris_service=polaris_service,
+        policy_manager=policy_manager,
+        lock_manager=MockLockManager(),
+        minio_config=s3_config,
+        max_policy_bytes=1,
+    )
+
+    result = await manager.reconcile_user("alice")
+
+    assert result.success is False
+    assert len(result.failed_grants) == 2
+    assert result.failed_grants[-1].grant_id == ""
+    assert "oversized namespace ACL policy" in result.failed_grants[-1].message
+
+
+@pytest.mark.asyncio
+async def test_reconcile_user_marks_grant_failed_when_minio_policy_sync_fails(
+    manager,
+    store,
+    polaris_service,
+    policy_manager,
+):
+    grant = _grant()
+    role = _role()
+    store.list_active_grants_for_user.return_value = [grant]
+    store.get_role.return_value = role
+    policy_manager.upsert_attached_user_policy.side_effect = Exception("minio failed")
+
+    result = await manager.reconcile_user("alice")
+
+    assert result.success is False
+    assert result.synced_grants == ()
+    assert result.failed_grants[0].grant_id == "grant-id"
+    assert "failed to sync MinIO namespace ACL policy: minio failed" == (
+        result.failed_grants[0].message
+    )
+    policy_manager.detach_and_delete_user_policy.assert_called_once_with(
+        "namespace-acl-alice",
+        "alice",
+    )
+    store.update_grant_status.assert_called_once_with(
+        grant_id="grant-id",
+        status=GRANT_STATUS_SYNC_ERROR,
+        actor="system",
+        last_synced_at=None,
+        last_sync_error="failed to sync MinIO namespace ACL policy: minio failed",
+        event_type=EVENT_SYNC_FAILED,
+        message="failed to sync MinIO namespace ACL policy: minio failed",
+    )
+    polaris_service.revoke_principal_role_from_principal.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_user_reports_cleanup_failure_after_minio_sync_failure(
+    manager,
+    store,
+    policy_manager,
+):
+    grant = _grant()
+    role = _role()
+    store.list_active_grants_for_user.return_value = [grant]
+    store.get_role.return_value = role
+    policy_manager.upsert_attached_user_policy.side_effect = Exception("minio failed")
+    policy_manager.detach_and_delete_user_policy.side_effect = Exception(
+        "cleanup failed"
+    )
+
+    result = await manager.reconcile_user("alice")
+
+    assert result.success is False
+    assert len(result.failed_grants) == 2
+    assert result.failed_grants[-1].grant_id == ""
+    assert "after sync failure: cleanup failed" in result.failed_grants[-1].message
+
+
+@pytest.mark.asyncio
+async def test_reconcile_user_reports_cleanup_failure_for_empty_policy(
+    manager,
+    store,
+    policy_manager,
+):
+    store.list_active_grants_for_user.return_value = []
+    policy_manager.detach_and_delete_user_policy.side_effect = Exception(
+        "cleanup failed"
+    )
+
+    result = await manager.reconcile_user("alice")
+
+    assert result.success is False
+    assert result.failed_grants[0].grant_id == ""
+    assert "empty namespace ACL policy" in result.failed_grants[0].message
+
+
+@pytest.mark.asyncio
+async def test_reconcile_user_marks_candidates_failed_when_stale_role_revoke_fails(
+    manager,
+    store,
+    polaris_service,
+    policy_manager,
+):
+    grant = _grant()
+    role = _role()
+    store.list_active_grants_for_user.return_value = [grant]
+    store.get_role.return_value = role
+    polaris_service.get_principal_roles_for_principal.side_effect = Exception(
+        "stale cleanup failed"
+    )
+
+    result = await manager.reconcile_user("alice")
+
+    assert result.success is False
+    assert any(
+        "failed to revoke stale Polaris namespace ACL roles" in failure.message
+        for failure in result.failed_grants
+    )
+    policy_manager.detach_and_delete_user_policy.assert_called_once_with(
+        "namespace-acl-alice",
+        "alice",
+    )
+    assert store.update_grant_status.call_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_reconcile_user_reports_cleanup_failure_after_stale_role_failure(
+    manager,
+    store,
+    polaris_service,
+    policy_manager,
+):
+    grant = _grant()
+    role = _role()
+    store.list_active_grants_for_user.return_value = [grant]
+    store.get_role.return_value = role
+    polaris_service.get_principal_roles_for_principal.side_effect = Exception(
+        "stale cleanup failed"
+    )
+    policy_manager.detach_and_delete_user_policy.side_effect = Exception(
+        "policy cleanup failed"
+    )
+
+    result = await manager.reconcile_user("alice")
+
+    assert result.success is False
+    assert result.failed_grants[-1].grant_id == ""
+    assert "after stale role cleanup failure" in result.failed_grants[-1].message
+
+
+@pytest.mark.asyncio
+async def test_reconcile_user_reports_stale_role_failure_without_candidates(
+    manager,
+    store,
+    polaris_service,
+    policy_manager,
+):
+    store.list_active_grants_for_user.return_value = []
+    polaris_service.get_principal_roles_for_principal.side_effect = Exception(
+        "stale cleanup failed"
+    )
+
+    result = await manager.reconcile_user("alice")
+
+    assert result.success is False
+    assert result.failed_grants[0].grant_id == ""
+    assert "failed to revoke stale Polaris namespace ACL roles" in (
+        result.failed_grants[0].message
+    )
+    assert policy_manager.detach_and_delete_user_policy.call_count == 2
+    policy_manager.detach_and_delete_user_policy.assert_any_call(
+        "namespace-acl-alice",
+        "alice",
     )
 
 
@@ -592,6 +810,16 @@ async def test_list_grants_delegate_to_store(manager, store):
 
 
 @pytest.mark.asyncio
+async def test_list_usernames_for_sync_delegates_to_store(manager, store):
+    store.list_usernames_for_sync = AsyncMock(return_value=["alice", "bob"])
+
+    result = await manager.list_usernames_for_sync(tenant_name="kbase")
+
+    assert result == ["alice", "bob"]
+    store.list_usernames_for_sync.assert_called_once_with(tenant_name="kbase")
+
+
+@pytest.mark.asyncio
 async def test_record_validation_failure_appends_audit_event(manager, store):
     await manager.record_validation_failure(
         tenant_name="kbase",
@@ -750,6 +978,49 @@ async def test_revoke_namespace_access_drops_role_when_no_active_grants_remain(
         role.catalog_role_name,
     )
     store.delete_role.assert_called_once_with(role.id)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_orphan_role_stops_when_principal_role_delete_fails(
+    manager,
+    store,
+    polaris_service,
+):
+    role = _role()
+    store.count_active_grants_for_role.return_value = 0
+    store.get_role.return_value = role
+    polaris_service.delete_principal_role.side_effect = Exception("delete failed")
+
+    await manager._cleanup_orphan_role("role-id")
+
+    polaris_service.delete_principal_role.assert_called_once_with(
+        role.principal_role_name
+    )
+    polaris_service.delete_catalog_role.assert_not_called()
+    store.delete_role.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_orphan_role_stops_when_catalog_role_delete_fails(
+    manager,
+    store,
+    polaris_service,
+):
+    role = _role()
+    store.count_active_grants_for_role.return_value = 0
+    store.get_role.return_value = role
+    polaris_service.delete_catalog_role.side_effect = Exception("delete failed")
+
+    await manager._cleanup_orphan_role("role-id")
+
+    polaris_service.delete_principal_role.assert_called_once_with(
+        role.principal_role_name
+    )
+    polaris_service.delete_catalog_role.assert_called_once_with(
+        role.catalog_name,
+        role.catalog_role_name,
+    )
+    store.delete_role.assert_not_called()
 
 
 @pytest.mark.asyncio

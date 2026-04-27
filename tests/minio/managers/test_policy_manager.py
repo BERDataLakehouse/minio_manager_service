@@ -436,6 +436,56 @@ class TestGetUserPolicies:
             await policy_manager.get_user_system_policy("testuser")
 
 
+class TestLoadPolicyForTarget:
+    """Tests for _load_policy_for_target."""
+
+    @pytest.mark.asyncio
+    async def test_loads_user_home_policy(
+        self, policy_manager, sample_user_home_policy
+    ):
+        policy_manager.get_user_home_policy = AsyncMock(
+            return_value=sample_user_home_policy
+        )
+
+        result = await policy_manager._load_policy_for_target(
+            PolicyTarget.USER,
+            "testuser",
+        )
+
+        assert result == sample_user_home_policy
+        policy_manager.get_user_home_policy.assert_called_once_with("testuser")
+
+    @pytest.mark.asyncio
+    async def test_loads_group_policy(self, policy_manager, sample_group_policy):
+        policy_manager.get_group_policy = AsyncMock(return_value=sample_group_policy)
+
+        result = await policy_manager._load_policy_for_target(
+            PolicyTarget.GROUP,
+            "testgroup",
+        )
+
+        assert result == sample_group_policy
+        policy_manager.get_group_policy.assert_called_once_with("testgroup")
+
+
+class TestAttachUserPoliciesHelper:
+    """Tests for _attach_user_policies."""
+
+    @pytest.mark.asyncio
+    async def test_attach_user_policies_wraps_attachment_errors(self, policy_manager):
+        policy_manager.attach_policy_to_user = AsyncMock(
+            side_effect=Exception("attach failed")
+        )
+
+        with pytest.raises(PolicyOperationError, match="Failed to attach"):
+            await policy_manager._attach_user_policies(
+                "testuser",
+                "user-home-policy-testuser",
+                "user-system-policy-testuser",
+                {"home_attached": False, "system_attached": False},
+            )
+
+
 class TestDeleteUserPolicies:
     """Tests for delete_user_policies method."""
 
@@ -1054,6 +1104,194 @@ class TestRemovePathAccessFromPolicy:
 # =============================================================================
 
 
+class TestUpsertAttachedUserPolicy:
+    """Tests for upsert_attached_user_policy."""
+
+    @pytest.mark.asyncio
+    async def test_creates_missing_policy_and_attaches(
+        self, policy_manager, sample_policy_model
+    ):
+        policy_manager.resource_exists = AsyncMock(return_value=False)
+        policy_manager._create_minio_policy = AsyncMock()
+        policy_manager.attach_policy_to_user = AsyncMock()
+
+        await policy_manager.upsert_attached_user_policy(
+            sample_policy_model,
+            "testuser",
+        )
+
+        policy_manager._create_minio_policy.assert_called_once_with(sample_policy_model)
+        policy_manager.attach_policy_to_user.assert_called_once_with(
+            "user-home-policy-testuser",
+            "testuser",
+        )
+
+    @pytest.mark.asyncio
+    async def test_replaces_existing_policy_with_shadow_policy(
+        self, policy_manager, sample_policy_model
+    ):
+        policy_manager.resource_exists = AsyncMock(return_value=True)
+        policy_manager._generate_shadow_policy_name = MagicMock(
+            return_value="user-home-policy-testuser-shadow-12345678"
+        )
+        policy_manager._create_minio_policy = AsyncMock()
+        policy_manager.attach_policy_to_user = AsyncMock()
+        policy_manager.is_policy_attached_to_user = AsyncMock(return_value=True)
+        policy_manager.detach_policy_from_user = AsyncMock()
+        policy_manager.delete_resource = AsyncMock()
+
+        await policy_manager.upsert_attached_user_policy(
+            sample_policy_model,
+            "testuser",
+        )
+
+        assert policy_manager._create_minio_policy.call_count == 2
+        shadow_policy = policy_manager._create_minio_policy.call_args_list[0].args[0]
+        assert shadow_policy.policy_name == (
+            "user-home-policy-testuser-shadow-12345678"
+        )
+        policy_manager.attach_policy_to_user.assert_any_call(
+            "user-home-policy-testuser-shadow-12345678",
+            "testuser",
+        )
+        policy_manager.detach_policy_from_user.assert_any_call(
+            "user-home-policy-testuser",
+            "testuser",
+        )
+        policy_manager.detach_policy_from_user.assert_any_call(
+            "user-home-policy-testuser-shadow-12345678",
+            "testuser",
+        )
+        policy_manager.delete_resource.assert_any_call("user-home-policy-testuser")
+        policy_manager.delete_resource.assert_any_call(
+            "user-home-policy-testuser-shadow-12345678"
+        )
+
+    @pytest.mark.asyncio
+    async def test_deletes_unattached_shadow_when_shadow_create_fails(
+        self, policy_manager, sample_policy_model
+    ):
+        policy_manager.resource_exists = AsyncMock(return_value=True)
+        policy_manager._generate_shadow_policy_name = MagicMock(
+            return_value="user-home-policy-testuser-shadow-12345678"
+        )
+        policy_manager._create_minio_policy = AsyncMock(
+            side_effect=Exception("create failed")
+        )
+        policy_manager.delete_resource = AsyncMock()
+
+        with pytest.raises(Exception, match="create failed"):
+            await policy_manager.upsert_attached_user_policy(
+                sample_policy_model,
+                "testuser",
+            )
+
+        policy_manager.delete_resource.assert_called_once_with(
+            "user-home-policy-testuser-shadow-12345678"
+        )
+
+    @pytest.mark.asyncio
+    async def test_logs_when_unattached_shadow_cleanup_fails(
+        self, policy_manager, sample_policy_model
+    ):
+        policy_manager.resource_exists = AsyncMock(return_value=True)
+        policy_manager._generate_shadow_policy_name = MagicMock(
+            return_value="user-home-policy-testuser-shadow-12345678"
+        )
+        policy_manager._create_minio_policy = AsyncMock(
+            side_effect=Exception("create failed")
+        )
+        policy_manager.delete_resource = AsyncMock(
+            side_effect=Exception("delete shadow failed")
+        )
+
+        with pytest.raises(Exception, match="create failed"):
+            await policy_manager.upsert_attached_user_policy(
+                sample_policy_model,
+                "testuser",
+            )
+
+        policy_manager.delete_resource.assert_called_once_with(
+            "user-home-policy-testuser-shadow-12345678"
+        )
+
+    @pytest.mark.asyncio
+    async def test_shadow_cleanup_errors_do_not_mask_success(
+        self, policy_manager, sample_policy_model
+    ):
+        policy_manager.resource_exists = AsyncMock(return_value=True)
+        policy_manager._generate_shadow_policy_name = MagicMock(
+            return_value="user-home-policy-testuser-shadow-12345678"
+        )
+        policy_manager._create_minio_policy = AsyncMock()
+        policy_manager.attach_policy_to_user = AsyncMock()
+        policy_manager.is_policy_attached_to_user = AsyncMock(return_value=True)
+        policy_manager.detach_policy_from_user = AsyncMock(
+            side_effect=[None, Exception("detach shadow failed")]
+        )
+        policy_manager.delete_resource = AsyncMock(
+            side_effect=[None, Exception("delete shadow failed")]
+        )
+
+        await policy_manager.upsert_attached_user_policy(
+            sample_policy_model,
+            "testuser",
+        )
+
+        assert policy_manager.delete_resource.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_detach_and_delete_returns_when_policy_missing(self, policy_manager):
+        policy_manager.resource_exists = AsyncMock(return_value=False)
+        policy_manager.delete_resource = AsyncMock()
+
+        await policy_manager.detach_and_delete_user_policy(
+            "user-home-policy-testuser",
+            "testuser",
+        )
+
+        policy_manager.delete_resource.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_detach_and_delete_detaches_attached_policy(self, policy_manager):
+        policy_manager.resource_exists = AsyncMock(return_value=True)
+        policy_manager.is_policy_attached_to_user = AsyncMock(return_value=True)
+        policy_manager.detach_policy_from_user = AsyncMock()
+        policy_manager.delete_resource = AsyncMock()
+
+        await policy_manager.detach_and_delete_user_policy(
+            "user-home-policy-testuser",
+            "testuser",
+        )
+
+        policy_manager.detach_policy_from_user.assert_called_once_with(
+            "user-home-policy-testuser",
+            "testuser",
+        )
+        policy_manager.delete_resource.assert_called_once_with(
+            "user-home-policy-testuser"
+        )
+
+    @pytest.mark.asyncio
+    async def test_is_policy_attached_to_user_delegates_to_target_lookup(
+        self, policy_manager
+    ):
+        policy_manager._is_policy_attached_to_target = AsyncMock(return_value=True)
+
+        assert (
+            await policy_manager.is_policy_attached_to_user(
+                "user-home-policy-testuser",
+                "testuser",
+            )
+            is True
+        )
+        policy_manager._is_policy_attached_to_target.assert_called_once_with(
+            "user-home-policy-testuser",
+            PolicyTarget.USER,
+            "testuser",
+        )
+
+
 class TestShadowPolicyPattern:
     """Tests for shadow policy update pattern."""
 
@@ -1149,6 +1387,31 @@ class TestUpdateMiniOPolicy:
         with pytest.raises(PolicyOperationError, match="Failed to update policy"):
             await policy_manager._update_minio_policy(sample_user_home_policy)
 
+    @pytest.mark.asyncio
+    async def test_update_cleans_up_when_post_update_logging_fails(
+        self, policy_manager, sample_user_home_policy
+    ):
+        """Test cleanup runs if a failure happens after the shadow name is known."""
+        policy_manager._execute_shadow_policy_update = AsyncMock(
+            return_value="user-home-policy-testuser-shadow-12345678"
+        )
+        policy_manager._cleanup_shadow_policy = AsyncMock()
+
+        with (
+            patch(
+                "minio.managers.policy_manager.logger.info",
+                side_effect=[None, Exception("log failed")],
+            ),
+            pytest.raises(PolicyOperationError, match="Failed to update policy"),
+        ):
+            await policy_manager._update_minio_policy(sample_user_home_policy)
+
+        policy_manager._cleanup_shadow_policy.assert_called_once_with(
+            "user-home-policy-testuser-shadow-12345678",
+            "testuser",
+            PolicyType.USER_HOME,
+        )
+
 
 class TestParsePolicyInfo:
     """Tests for _parse_policy_info method."""
@@ -1229,6 +1492,23 @@ class TestCreateMinIOPolicy:
         )
 
         with pytest.raises(PolicyOperationError, match="Failed to create"):
+            await policy_manager._create_minio_policy(sample_policy_model)
+
+    @pytest.mark.asyncio
+    async def test_cleanup_failure_is_logged(
+        self, policy_manager, sample_policy_model, mock_executor
+    ):
+        """Test temp-file cleanup failures are swallowed after command success."""
+        mock_executor._execute_command = AsyncMock(
+            return_value=CommandResult(
+                success=True, stdout="", stderr="", return_code=0, command=""
+            )
+        )
+
+        with patch(
+            "minio.managers.policy_manager.Path.unlink",
+            side_effect=OSError("Permission denied"),
+        ):
             await policy_manager._create_minio_policy(sample_policy_model)
 
 
@@ -1650,6 +1930,27 @@ class TestUnsupportedTargetTypes:
             )
 
 
+class TestPolicyEntityLookupErrors:
+    """Tests for policy attachment entity lookup errors."""
+
+    @pytest.mark.asyncio
+    async def test_get_policy_attached_entities_raises_on_command_failure(
+        self, policy_manager, mock_executor
+    ):
+        mock_executor._execute_command.return_value = CommandResult(
+            success=False,
+            stdout="",
+            stderr="entities failed",
+            return_code=1,
+            command="mc admin policy entities",
+        )
+
+        with pytest.raises(PolicyOperationError, match="entities failed"):
+            await policy_manager._get_policy_attached_entities(
+                "user-home-policy-testuser"
+            )
+
+
 class TestPolicyCreationExceptions:
     """Tests for policy creation error handling."""
 
@@ -1661,6 +1962,15 @@ class TestPolicyCreationExceptions:
 
             with pytest.raises(PolicyOperationError, match="Failed to create"):
                 policy_manager._create_policy_model(PolicyType.USER_HOME, "testuser")
+
+    def test_get_policy_name_wraps_creator_exception(self, policy_manager):
+        """Test get_policy_name wraps PolicyCreator failures."""
+        with patch(
+            "minio.managers.policy_manager.PolicyCreator",
+            side_effect=ValueError("bad config"),
+        ):
+            with pytest.raises(PolicyOperationError, match="Failed to generate"):
+                policy_manager.get_policy_name(PolicyType.USER_HOME, "testuser")
 
 
 class TestPolicyDeletionErrors:

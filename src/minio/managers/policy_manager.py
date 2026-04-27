@@ -811,13 +811,58 @@ class PolicyManager(ResourceManager[PolicyModel]):
         """Create or replace a policy and ensure it is attached to a user."""
         policy_name = self._validate_resource_name(policy_model.policy_name)
         async with self.operation_context("upsert_attached_user_policy"):
-            if await self.resource_exists(policy_name):
+            if not await self.resource_exists(policy_name):
+                await self._create_minio_policy(policy_model)
+                await self.attach_policy_to_user(policy_name, username)
+                return
+
+            shadow_name = self._generate_shadow_policy_name(policy_name)
+            shadow_policy = PolicyModel(
+                policy_name=shadow_name,
+                policy_document=policy_model.policy_document,
+            )
+            shadow_attached = False
+            new_policy_attached = False
+
+            try:
+                await self._create_minio_policy(shadow_policy)
+                await self.attach_policy_to_user(shadow_name, username)
+                shadow_attached = True
+
                 if await self.is_policy_attached_to_user(policy_name, username):
                     await self.detach_policy_from_user(policy_name, username)
                 await self.delete_resource(policy_name)
 
-            await self._create_minio_policy(policy_model)
-            await self.attach_policy_to_user(policy_name, username)
+                await self._create_minio_policy(policy_model)
+                await self.attach_policy_to_user(policy_name, username)
+                new_policy_attached = True
+            except Exception:
+                if not shadow_attached:
+                    try:
+                        await self.delete_resource(shadow_name)
+                    except Exception:
+                        logger.warning(
+                            "Failed to delete unattached shadow policy %s",
+                            shadow_name,
+                        )
+                raise
+            finally:
+                if shadow_attached and new_policy_attached:
+                    try:
+                        await self.detach_policy_from_user(shadow_name, username)
+                    except Exception:
+                        logger.warning(
+                            "Failed to detach shadow policy %s from user %s",
+                            shadow_name,
+                            username,
+                        )
+                    try:
+                        await self.delete_resource(shadow_name)
+                    except Exception:
+                        logger.warning(
+                            "Failed to delete shadow policy %s",
+                            shadow_name,
+                        )
 
     async def detach_and_delete_user_policy(
         self, policy_name: str, username: str

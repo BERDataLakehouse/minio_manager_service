@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Sequence
@@ -51,6 +52,7 @@ NAMESPACE_ACL_ROLE_PREFIX = "namespace_acl_"
 TENANT_CATALOG_PREFIX = "tenant_"
 # Polaris/Iceberg cap individual identifier components at 256 characters.
 MAX_NAMESPACE_PART_LENGTH = 256
+NAMESPACE_PART_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 _ACCESS_LEVELS = {ACCESS_LEVEL_READ, ACCESS_LEVEL_WRITE}
 _GRANT_STATUSES = {
@@ -258,6 +260,15 @@ SELECT {_GRANT_COLUMNS}
  ORDER BY tenant_name, namespace_name, access_level;
 """
 
+_LIST_USERNAMES_FOR_SYNC = """
+SELECT DISTINCT username
+  FROM polaris_namespace_acl_grants
+ WHERE revoked_at IS NULL
+   AND status = ANY(%(statuses)s)
+   AND (%(tenant_name)s::text IS NULL OR tenant_name = %(tenant_name)s::text)
+ ORDER BY username;
+"""
+
 _UPDATE_GRANT_STATUS = f"""
 UPDATE polaris_namespace_acl_grants
    SET status = %(status)s,
@@ -409,6 +420,12 @@ def normalize_namespace_parts(namespace_parts: Sequence[str]) -> tuple[str, ...]
         raise ValueError("namespace_parts must not contain empty values")
     if any("." in part for part in normalized):
         raise ValueError("namespace_parts must not contain dotted values")
+    if any(not part.isascii() for part in normalized):
+        raise ValueError("namespace parts must use ASCII identifier characters")
+    if any(NAMESPACE_PART_PATTERN.fullmatch(part) is None for part in normalized):
+        raise ValueError(
+            "namespace parts can only contain letters, numbers, underscores, and hyphens"
+        )
     if any(len(part) > MAX_NAMESPACE_PART_LENGTH for part in normalized):
         raise ValueError(
             f"namespace parts must each be at most {MAX_NAMESPACE_PART_LENGTH} characters"
@@ -793,6 +810,29 @@ class NamespaceAclStore:
             cur = await conn.execute(_LIST_ACTIVE_GRANTS_FOR_USER, params)
             rows = await cur.fetchall()
         return [_grant_record_from_row(row) for row in rows]
+
+    async def list_usernames_for_sync(
+        self,
+        tenant_name: str | None = None,
+        statuses: Sequence[str] = (
+            GRANT_STATUS_PENDING,
+            GRANT_STATUS_ACTIVE,
+            GRANT_STATUS_SHADOWED,
+            GRANT_STATUS_SYNC_ERROR,
+        ),
+    ) -> list[str]:
+        """List users with non-revoked namespace ACL state that can be reconciled."""
+        normalized_statuses = [normalize_grant_status(status) for status in statuses]
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                _LIST_USERNAMES_FOR_SYNC,
+                {
+                    "tenant_name": tenant_name,
+                    "statuses": normalized_statuses,
+                },
+            )
+            rows = await cur.fetchall()
+        return [str(row[0]) for row in rows]
 
     async def update_grant_status(
         self,

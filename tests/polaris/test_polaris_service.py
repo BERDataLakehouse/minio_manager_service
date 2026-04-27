@@ -255,6 +255,29 @@ class TestRequest:
         assert result == {}
 
     @pytest.mark.asyncio
+    async def test_catalog_request_uses_catalog_base_url(self, polaris_service):
+        """Test catalog requests delegate through the Iceberg catalog base URL."""
+        with patch.object(
+            polaris_service,
+            "_request",
+            new_callable=AsyncMock,
+            return_value={"ok": True},
+        ) as mock_request:
+            result = await polaris_service._catalog_request(
+                "GET",
+                "/tenant_kbase/namespaces",
+                params={"parent": "shared"},
+            )
+
+            assert result == {"ok": True}
+            mock_request.assert_called_once_with(
+                "GET",
+                "/tenant_kbase/namespaces",
+                base_url=polaris_service.catalog_base_url,
+                params={"parent": "shared"},
+            )
+
+    @pytest.mark.asyncio
     async def test_request_401_clears_token_cache(self, polaris_service):
         """Test 401 response clears the cached token."""
         polaris_service._token = "stale-token"
@@ -828,6 +851,31 @@ class TestCatalogRoles:
             mock_req.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_revoke_namespace_acl_role_privileges_revokes_bundle(
+        self, polaris_service
+    ):
+        """Test revoking an ACL role removes each privilege for the access level."""
+        with patch.object(
+            polaris_service,
+            "revoke_namespace_privilege",
+            new_callable=AsyncMock,
+        ) as mock_revoke:
+            await polaris_service.revoke_namespace_acl_role_privileges(
+                "tenant_kbase",
+                "namespace_acl_hash_read",
+                ["shared_data"],
+                "read",
+            )
+
+            assert mock_revoke.call_count == 5
+            mock_revoke.assert_any_call(
+                "tenant_kbase",
+                "namespace_acl_hash_read",
+                ("shared_data",),
+                "TABLE_READ_DATA",
+            )
+
+    @pytest.mark.asyncio
     async def test_ensure_namespace_acl_role_bindings(self, polaris_service):
         """Test namespace ACL role orchestration."""
         with (
@@ -900,6 +948,54 @@ class TestCatalogRoles:
                 "GET",
                 "/tenant_kbase/namespaces",
                 params={"parent": "geo\x1fcurated"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_list_namespaces_accepts_string_and_name_payloads(
+        self, polaris_service
+    ):
+        """Test namespace payload parsing handles Polaris response variants."""
+        with patch.object(
+            polaris_service,
+            "_catalog_request",
+            new_callable=AsyncMock,
+            return_value={
+                "namespaces": [
+                    "geo.curated",
+                    {"name": "shared.raw"},
+                    {"namespace": ["shared", "trusted"]},
+                    {"ignored": True},
+                ]
+            },
+        ):
+            result = await polaris_service.list_namespaces("tenant_kbase")
+
+            assert result == [
+                ("geo", "curated"),
+                ("shared", "raw"),
+                ("shared", "trusted"),
+            ]
+
+    @pytest.mark.asyncio
+    async def test_list_namespaces_returns_empty_for_malformed_response(
+        self, polaris_service
+    ):
+        """Test malformed namespace lists fail closed to an empty list."""
+        with patch.object(
+            polaris_service,
+            "_catalog_request",
+            new_callable=AsyncMock,
+            return_value={"namespaces": {"name": "not-a-list"}},
+        ):
+            assert await polaris_service.list_namespaces("tenant_kbase") == []
+
+    @pytest.mark.asyncio
+    async def test_list_namespaces_rejects_dotted_parent_string(self, polaris_service):
+        """Test callers cannot pass dotted namespace strings."""
+        with pytest.raises(ValueError, match="not a dotted string"):
+            await polaris_service.list_namespaces(
+                "tenant_kbase",
+                parent="geo.curated",
             )
 
     @pytest.mark.asyncio
@@ -1185,6 +1281,25 @@ class TestListAndGet:
             assert result is False
 
     @pytest.mark.asyncio
+    async def test_namespace_exists_reraises_non_404(self, polaris_service):
+        """Test namespace_exists only converts 404s to false."""
+        with patch.object(
+            polaris_service, "_catalog_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Forbidden", status=403)
+
+            with pytest.raises(PolarisOperationError):
+                await polaris_service.namespace_exists("tenant_kbase", ["shared_data"])
+
+    @pytest.mark.asyncio
+    async def test_namespace_helpers_reject_empty_namespaces(self, polaris_service):
+        """Test public namespace methods reject empty namespace inputs."""
+        with pytest.raises(ValueError, match="must not be empty"):
+            await polaris_service.namespace_exists("tenant_kbase", [])
+        with pytest.raises(ValueError, match="empty values"):
+            await polaris_service.load_table("tenant_kbase", [" "], "table")
+
+    @pytest.mark.asyncio
     async def test_list_tables_in_namespace(self, polaris_service):
         """Test table listing extracts names from Iceberg identifiers."""
         with patch.object(
@@ -1206,6 +1321,22 @@ class TestListAndGet:
             mock_req.assert_called_once_with(
                 "GET", "/tenant_kbase/namespaces/shared_data/tables"
             )
+
+    @pytest.mark.asyncio
+    async def test_list_tables_in_namespace_falls_back_to_tables(self, polaris_service):
+        """Test legacy table-list response parsing."""
+        with patch.object(
+            polaris_service,
+            "_catalog_request",
+            new_callable=AsyncMock,
+            return_value={"tables": [{"name": "measurements"}, "samples"]},
+        ):
+            result = await polaris_service.list_tables_in_namespace(
+                "tenant_kbase",
+                ["shared_data"],
+            )
+
+            assert result == ["measurements", "samples"]
 
 
 # === DELETION TESTS ===
@@ -1253,6 +1384,54 @@ class TestDeletions:
             mock_req.assert_called_once_with("DELETE", "/principal-roles/foo_member")
 
     @pytest.mark.asyncio
+    async def test_delete_catalog_role_reraises_non_404(self, polaris_service):
+        """Test catalog role deletion ignores only not-found responses."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Forbidden", status=403)
+
+            with pytest.raises(PolarisOperationError):
+                await polaris_service.delete_catalog_role("tenant_foo", "reader")
+
+    @pytest.mark.asyncio
+    async def test_delete_namespace_success(self, polaris_service):
+        """Test deleting a namespace uses the catalog API namespace path."""
+        with patch.object(
+            polaris_service, "_catalog_request", new_callable=AsyncMock
+        ) as mock_req:
+            await polaris_service.delete_namespace(
+                "tenant_kbase",
+                ["geo", "curated"],
+            )
+
+            mock_req.assert_called_once_with(
+                "DELETE",
+                "/tenant_kbase/namespaces/geo%1Fcurated",
+            )
+
+    @pytest.mark.asyncio
+    async def test_delete_namespace_ignores_404(self, polaris_service):
+        """Test namespace deletion is idempotent for missing namespaces."""
+        with patch.object(
+            polaris_service, "_catalog_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Not Found", status=404)
+
+            await polaris_service.delete_namespace("tenant_kbase", ["missing"])
+
+    @pytest.mark.asyncio
+    async def test_delete_namespace_reraises_non_404(self, polaris_service):
+        """Test namespace deletion surfaces unexpected Polaris failures."""
+        with patch.object(
+            polaris_service, "_catalog_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = PolarisOperationError("Conflict", status=409)
+
+            with pytest.raises(PolarisOperationError):
+                await polaris_service.delete_namespace("tenant_kbase", ["shared"])
+
+    @pytest.mark.asyncio
     async def test_delete_all_catalog_roles(self, polaris_service):
         """Test deleting all catalog roles returned by Polaris."""
         with (
@@ -1280,6 +1459,128 @@ class TestDeletions:
             mock_delete.assert_any_call("tenant_foo", "tenant_writer")
             mock_delete.assert_any_call("tenant_foo", "tenant_reader")
             mock_delete.assert_any_call("tenant_foo", "catalog_admin")
+
+    @pytest.mark.asyncio
+    async def test_delete_all_catalog_roles_ignores_missing_catalog(
+        self, polaris_service
+    ):
+        """Test catalog-role cleanup treats a missing catalog as already clean."""
+        with patch.object(
+            polaris_service,
+            "list_catalog_roles",
+            new_callable=AsyncMock,
+            side_effect=PolarisOperationError("Not Found", status=404),
+        ):
+            await polaris_service.delete_all_catalog_roles("tenant_missing")
+
+    @pytest.mark.asyncio
+    async def test_delete_all_catalog_roles_reraises_list_failure(
+        self, polaris_service
+    ):
+        """Test catalog-role cleanup surfaces unexpected list failures."""
+        with patch.object(
+            polaris_service,
+            "list_catalog_roles",
+            new_callable=AsyncMock,
+            side_effect=PolarisOperationError("Forbidden", status=403),
+        ):
+            with pytest.raises(PolarisOperationError):
+                await polaris_service.delete_all_catalog_roles("tenant_foo")
+
+    @pytest.mark.asyncio
+    async def test_delete_all_catalog_roles_continues_after_role_failure(
+        self, polaris_service
+    ):
+        """Test one role deletion failure does not block later role deletion."""
+        with (
+            patch.object(
+                polaris_service,
+                "list_catalog_roles",
+                new_callable=AsyncMock,
+                return_value=[{"name": "reader"}, {"name": "writer"}],
+            ),
+            patch.object(
+                polaris_service,
+                "delete_catalog_role",
+                new_callable=AsyncMock,
+                side_effect=[PolarisOperationError("Conflict", status=409), None],
+            ) as mock_delete,
+        ):
+            await polaris_service.delete_all_catalog_roles("tenant_foo")
+
+            assert mock_delete.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_delete_all_namespaces_ignores_missing_catalog(self, polaris_service):
+        """Test namespace cleanup treats a missing catalog as already clean."""
+        with patch.object(
+            polaris_service,
+            "_list_all_namespaces",
+            new_callable=AsyncMock,
+            side_effect=PolarisOperationError("Not Found", status=404),
+        ):
+            await polaris_service.delete_all_namespaces("tenant_missing")
+
+    @pytest.mark.asyncio
+    async def test_delete_all_namespaces_reraises_list_failure(self, polaris_service):
+        """Test namespace cleanup surfaces unexpected list failures."""
+        with patch.object(
+            polaris_service,
+            "_list_all_namespaces",
+            new_callable=AsyncMock,
+            side_effect=PolarisOperationError("Forbidden", status=403),
+        ):
+            with pytest.raises(PolarisOperationError):
+                await polaris_service.delete_all_namespaces("tenant_foo")
+
+    @pytest.mark.asyncio
+    async def test_delete_all_namespaces_deepest_first_and_continues(
+        self, polaris_service
+    ):
+        """Test namespace cleanup deletes children first and logs per-item failures."""
+        with (
+            patch.object(
+                polaris_service,
+                "_list_all_namespaces",
+                new_callable=AsyncMock,
+                return_value=[("shared",), ("shared", "raw"), ("analytics",)],
+            ),
+            patch.object(
+                polaris_service,
+                "delete_namespace",
+                new_callable=AsyncMock,
+                side_effect=[
+                    PolarisOperationError("Not empty", status=409),
+                    None,
+                    None,
+                ],
+            ) as mock_delete,
+        ):
+            await polaris_service.delete_all_namespaces("tenant_foo")
+
+            assert mock_delete.call_args_list[0].args == (
+                "tenant_foo",
+                ("shared", "raw"),
+            )
+            assert mock_delete.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_list_all_namespaces_recurses_children(self, polaris_service):
+        """Test namespace discovery walks nested namespaces."""
+        with patch.object(
+            polaris_service,
+            "list_namespaces",
+            new_callable=AsyncMock,
+            side_effect=[
+                [("shared",), ("analytics",)],
+                [],
+                [("shared", "raw")],
+                [],
+            ],
+        ):
+            result = await polaris_service._list_all_namespaces("tenant_foo")
+
+            assert result == [("analytics",), ("shared",), ("shared", "raw")]
 
     @pytest.mark.asyncio
     async def test_drop_tenant_catalog(self, polaris_service):

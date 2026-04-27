@@ -217,26 +217,71 @@ class NamespaceAclManager:
                     )
                     synced_grant_ids = []
                     expected_principal_roles.clear()
-                    await self._policy_manager.detach_and_delete_user_policy(
-                        policy_name,
+                    cleanup_failure = await self._detach_policy_for_failure(
                         username,
+                        policy_name,
+                        "failed to remove oversized namespace ACL policy",
+                    )
+                    if cleanup_failure is not None:
+                        failures.append(cleanup_failure)
+                else:
+                    try:
+                        await self._policy_manager.upsert_attached_user_policy(
+                            policy,
+                            username,
+                        )
+                    except Exception as e:
+                        message = f"failed to sync MinIO namespace ACL policy: {e}"
+                        failures.extend(
+                            await self._mark_grants_failed(candidate_grants, message)
+                        )
+                        synced_grant_ids = []
+                        expected_principal_roles.clear()
+                        cleanup_failure = await self._detach_policy_for_failure(
+                            username,
+                            policy_name,
+                            "failed to remove namespace ACL policy after sync failure",
+                        )
+                        if cleanup_failure is not None:
+                            failures.append(cleanup_failure)
+                    else:
+                        await self._mark_grants_active(synced_grant_ids)
+            else:
+                cleanup_failure = await self._detach_policy_for_failure(
+                    username,
+                    policy_name,
+                    "failed to remove empty namespace ACL policy",
+                )
+                if cleanup_failure is not None:
+                    failures.append(cleanup_failure)
+
+            revoked_stale_roles: list[str] = []
+            try:
+                revoked_stale_roles = await self._revoke_stale_namespace_roles(
+                    username,
+                    expected_principal_roles,
+                )
+            except Exception as e:
+                message = f"failed to revoke stale Polaris namespace ACL roles: {e}"
+                if candidate_grants:
+                    failures.extend(
+                        await self._mark_grants_failed(candidate_grants, message)
                     )
                 else:
-                    await self._policy_manager.upsert_attached_user_policy(
-                        policy,
-                        username,
+                    failures.append(
+                        NamespaceAclGrantSyncFailure(
+                            grant_id="",
+                            username=username,
+                            message=message,
+                        )
                     )
-                    await self._mark_grants_active(synced_grant_ids)
-            else:
-                await self._policy_manager.detach_and_delete_user_policy(
-                    policy_name,
+                cleanup_failure = await self._detach_policy_for_failure(
                     username,
+                    policy_name,
+                    "failed to remove namespace ACL policy after stale role cleanup failure",
                 )
-
-            revoked_stale_roles = await self._revoke_stale_namespace_roles(
-                username,
-                expected_principal_roles,
-            )
+                if cleanup_failure is not None:
+                    failures.append(cleanup_failure)
 
         return NamespaceAclUserSyncResult(
             username=username,
@@ -340,6 +385,13 @@ class NamespaceAclManager:
                 GRANT_STATUS_SYNC_ERROR,
             ),
         )
+
+    async def list_usernames_for_sync(
+        self,
+        tenant_name: str | None = None,
+    ) -> list[str]:
+        """List users with namespace ACL state eligible for reconciliation."""
+        return await self._store.list_usernames_for_sync(tenant_name=tenant_name)
 
     async def validate_namespace_for_grant(
         self,
@@ -670,6 +722,41 @@ class NamespaceAclManager:
             failures.append(await self._mark_grant_failed(grant, message))
         return failures
 
+    async def _mark_grants_failed(
+        self,
+        grants: Sequence[NamespaceAclGrantRecord],
+        message: str,
+    ) -> list[NamespaceAclGrantSyncFailure]:
+        failures = []
+        for grant in grants:
+            failures.append(await self._mark_grant_failed(grant, message))
+        return failures
+
+    async def _detach_policy_for_failure(
+        self,
+        username: str,
+        policy_name: str,
+        context: str,
+    ) -> NamespaceAclGrantSyncFailure | None:
+        try:
+            await self._policy_manager.detach_and_delete_user_policy(
+                policy_name,
+                username,
+            )
+        except Exception as e:
+            message = f"{context}: {e}"
+            logger.warning(
+                "Namespace ACL policy cleanup for user %s failed: %s",
+                username,
+                message,
+            )
+            return NamespaceAclGrantSyncFailure(
+                grant_id="",
+                username=username,
+                message=message,
+            )
+        return None
+
     async def _fail_all_grants(
         self,
         username: str,
@@ -680,7 +767,13 @@ class NamespaceAclManager:
         failures = []
         for grant in grants:
             failures.append(await self._mark_grant_failed(grant, message))
-        await self._policy_manager.detach_and_delete_user_policy(policy_name, username)
+        cleanup_failure = await self._detach_policy_for_failure(
+            username,
+            policy_name,
+            "failed to remove namespace ACL policy after sync failure",
+        )
+        if cleanup_failure is not None:
+            failures.append(cleanup_failure)
         return NamespaceAclUserSyncResult(
             username=username,
             policy_name=policy_name,

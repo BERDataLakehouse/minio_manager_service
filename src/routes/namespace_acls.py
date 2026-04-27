@@ -20,11 +20,13 @@ from polaris.namespace_acl_manager import (
     NamespaceAclValidationError,
 )
 from polaris.namespace_acl_models import (
+    NamespaceAclBulkSyncResponse,
     NamespaceAclGrantRequest,
     NamespaceAclGrantResponse,
     NamespaceAclRevokeRequest,
     NamespaceAclSyncResponse,
 )
+from polaris.namespace_acl_store import normalize_namespace_parts
 from service.app_state import get_app_state
 from service.dependencies import auth, require_admin, require_steward_or_admin
 from service.kb_auth import KBaseUser
@@ -160,7 +162,15 @@ async def list_namespace_acls(
     await require_steward_or_admin(tenant_name, request, authenticated_user)
     app_state = get_app_state(request)
     tenant_name = await _require_tenant_exists(app_state, tenant_name)
-    namespace_parts = namespace.split(".") if namespace else None
+    try:
+        namespace_parts = (
+            list(normalize_namespace_parts(namespace.split("."))) if namespace else None
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        ) from e
     grants = await app_state.namespace_acl_manager.list_grants_for_tenant(
         tenant_name,
         namespace_parts,
@@ -232,18 +242,52 @@ async def list_my_namespace_acls(
 
 @router.post(
     "/management/migrate/sync-namespace-acls",
-    response_model=NamespaceAclSyncResponse,
+    response_model=NamespaceAclSyncResponse | NamespaceAclBulkSyncResponse,
     summary="Reconcile namespace ACLs for a user",
     description="Admin drift-repair endpoint for Polaris and MinIO namespace ACL state.",
 )
 async def sync_namespace_acls(
-    username: Annotated[str, Query(min_length=1)],
     request: Request,
     authenticated_user: Annotated[KBaseUser, Depends(require_admin)],
+    username: Annotated[str | None, Query(min_length=1)] = None,
+    tenant: Annotated[str | None, Query(min_length=1)] = None,
 ):
-    """Admin-callable namespace ACL drift repair for one user."""
+    """Admin-callable namespace ACL drift repair."""
+    if username and tenant:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Specify either username or tenant, not both",
+        )
+
     app_state = get_app_state(request)
-    result = await app_state.namespace_acl_manager.reconcile_user(username)
+    if username:
+        result = await app_state.namespace_acl_manager.reconcile_user(username)
+        return _sync_response_from_result(result)
+
+    tenant_name = None
+    scope = "all"
+    if tenant:
+        tenant_name = await _require_tenant_exists(app_state, tenant)
+        scope = "tenant"
+
+    usernames = await app_state.namespace_acl_manager.list_usernames_for_sync(
+        tenant_name=tenant_name,
+    )
+    results = [
+        _sync_response_from_result(
+            await app_state.namespace_acl_manager.reconcile_user(sync_username)
+        )
+        for sync_username in usernames
+    ]
+    return NamespaceAclBulkSyncResponse(
+        scope=scope,
+        tenant_name=tenant_name,
+        reconciled_users=usernames,
+        results=results,
+    )
+
+
+def _sync_response_from_result(result) -> NamespaceAclSyncResponse:
     return NamespaceAclSyncResponse(
         username=result.username,
         policy_name=result.policy_name,

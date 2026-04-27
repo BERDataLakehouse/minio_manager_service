@@ -5,7 +5,10 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from polaris.namespace_acl_store import NamespaceAclGrantRecord
+from polaris.namespace_acl_store import (
+    NamespaceAclGrantRecord,
+    normalize_namespace_parts,
+)
 
 NamespaceAccessLevel = Literal["read", "write"]
 NamespaceGrantStatus = Literal["pending", "active", "shadowed", "sync_error", "revoked"]
@@ -30,9 +33,7 @@ class NamespaceAclGrantRequest(BaseModel):
     @classmethod
     def validate_namespace(cls, value: list[str]) -> list[str]:
         """Reject empty namespace parts."""
-        if any(not part.strip() for part in value):
-            raise ValueError("namespace parts must not be empty")
-        return [part.strip() for part in value]
+        return list(normalize_namespace_parts(value))
 
 
 class NamespaceAclRevokeRequest(BaseModel):
@@ -50,9 +51,7 @@ class NamespaceAclRevokeRequest(BaseModel):
     @classmethod
     def validate_namespace(cls, value: list[str]) -> list[str]:
         """Reject empty namespace parts."""
-        if any(not part.strip() for part in value):
-            raise ValueError("namespace parts must not be empty")
-        return [part.strip() for part in value]
+        return list(normalize_namespace_parts(value))
 
 
 class NamespaceAclGrantResponse(BaseModel):
@@ -112,6 +111,17 @@ class NamespaceAclSyncResponse(BaseModel):
     failed_grants: list[dict[str, str]]
     revoked_stale_roles: list[str]
     policy_size_bytes: int
+
+
+class NamespaceAclBulkSyncResponse(BaseModel):
+    """Admin namespace ACL reconciliation response for a tenant or all users."""
+
+    model_config = ConfigDict(frozen=True)
+
+    scope: Literal["all", "tenant"]
+    tenant_name: str | None = None
+    reconciled_users: list[str]
+    results: list[NamespaceAclSyncResponse]
 
 
 class EffectiveAccessGroupTenant(BaseModel):

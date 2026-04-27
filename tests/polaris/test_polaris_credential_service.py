@@ -106,6 +106,25 @@ class TestPolarisCredentialServiceGetOrCreate:
             personal_catalog="user_testuser",
         )
 
+    @pytest.mark.asyncio
+    async def test_post_lock_cache_hit_returns_without_reset(
+        self, service, mock_store, mock_polaris_service
+    ):
+        """Test a concurrent creator can populate the cache while we wait."""
+        cached = PolarisCredentialRecord(
+            client_id="cached-id",
+            client_secret="cached-secret",
+            personal_catalog="user_testuser",
+        )
+        mock_store.get_credentials.side_effect = [None, cached]
+
+        result = await service.get_or_create("testuser", "user_testuser")
+
+        assert result == cached
+        assert mock_store.get_credentials.call_count == 2
+        mock_polaris_service.reset_principal_credentials.assert_not_called()
+        mock_store.store_credentials.assert_not_called()
+
 
 class TestPolarisCredentialServiceRotate:
     """Tests for rotate."""
@@ -133,3 +152,14 @@ class TestPolarisCredentialServiceRotate:
 
         with pytest.raises(RuntimeError, match="Polaris did not return"):
             await service.rotate("testuser", "user_testuser")
+
+
+class TestPolarisCredentialServiceDelete:
+    """Tests for delete_credentials."""
+
+    @pytest.mark.asyncio
+    async def test_delete_credentials_uses_lock(self, service, mock_store):
+        """Test cached credentials are deleted under the per-user lock."""
+        await service.delete_credentials("testuser")
+
+        mock_store.delete_credentials.assert_called_once_with("testuser")

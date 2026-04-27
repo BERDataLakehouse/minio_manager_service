@@ -10,6 +10,10 @@ from fastapi.testclient import TestClient
 
 from routes.polaris import router
 from polaris.credential_store import PolarisCredentialRecord
+from polaris.namespace_acl_manager import (
+    NamespaceAclNamespaceNotFoundError,
+    NamespaceAclValidationError,
+)
 from service import app_state
 from service.dependencies import auth
 from service.exception_handlers import universal_error_handler
@@ -354,6 +358,40 @@ class TestProvisionPolarisUser:
         assert "tenant_catalogs" in response.json()
         assert "had 1 failures" in caplog.text
 
+    def test_provision_returns_404_for_namespace_acl_missing_namespace(
+        self,
+        mock_app_state_obj,
+        regular_user,
+    ):
+        """Test namespace ACL not-found validation failures map to 404."""
+        mock_app_state_obj.namespace_acl_manager.reconcile_user.side_effect = (
+            NamespaceAclNamespaceNotFoundError("namespace missing")
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post("/polaris/user_provision/testuser")
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "namespace missing"
+
+    def test_provision_returns_409_for_namespace_acl_validation_error(
+        self,
+        mock_app_state_obj,
+        regular_user,
+    ):
+        """Test namespace ACL validation failures map to conflict."""
+        mock_app_state_obj.namespace_acl_manager.reconcile_user.side_effect = (
+            NamespaceAclValidationError("namespace is not shareable")
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post("/polaris/user_provision/testuser")
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == "namespace is not shareable"
+
 
 class TestRotatePolarisCredentials:
     """Tests for POST /polaris/credentials/rotate/{username}."""
@@ -413,6 +451,40 @@ class TestRotatePolarisCredentials:
             "Failed to rotate Polaris credentials for testuser"
         )
 
+    def test_rotate_returns_404_for_namespace_acl_missing_namespace(
+        self,
+        mock_app_state_obj,
+        regular_user,
+    ):
+        """Test rotate maps namespace not-found validation failures to 404."""
+        mock_app_state_obj.namespace_acl_manager.reconcile_user.side_effect = (
+            NamespaceAclNamespaceNotFoundError("namespace missing")
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post("/polaris/credentials/rotate/testuser")
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "namespace missing"
+
+    def test_rotate_returns_409_for_namespace_acl_validation_error(
+        self,
+        mock_app_state_obj,
+        regular_user,
+    ):
+        """Test rotate maps namespace ACL validation failures to conflict."""
+        mock_app_state_obj.namespace_acl_manager.reconcile_user.side_effect = (
+            NamespaceAclValidationError("namespace is not shareable")
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post("/polaris/credentials/rotate/testuser")
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == "namespace is not shareable"
+
 
 class TestEffectiveAccess:
     """Tests for GET /polaris/effective-access endpoints."""
@@ -471,6 +543,9 @@ class TestEffectiveAccess:
                 ],
             }
         ]
+        mock_app_state_obj.namespace_acl_manager.reconcile_user.assert_called_with(
+            "testuser"
+        )
 
     def test_admin_gets_effective_access_for_user(
         self,
@@ -485,6 +560,9 @@ class TestEffectiveAccess:
         assert response.status_code == 200
         assert response.json()["username"] == "alice"
         mock_app_state_obj.group_manager.get_user_groups.assert_called_with("alice")
+        mock_app_state_obj.namespace_acl_manager.reconcile_user.assert_called_with(
+            "alice"
+        )
 
     def test_effective_access_skips_empty_group_and_prefers_read_write(
         self,
@@ -525,3 +603,23 @@ class TestEffectiveAccess:
 
         assert response.status_code == 200
         assert response.json()["namespace_acl_tenants"] == []
+
+    def test_effective_access_logs_namespace_acl_reconciliation_failure(
+        self,
+        mock_app_state_obj,
+        regular_user,
+        caplog,
+    ):
+        """Test effective-access logs namespace ACL reconciliation failures."""
+        namespace_sync = MagicMock(success=False, failed_grants=["grant-id"])
+        mock_app_state_obj.namespace_acl_manager.reconcile_user = AsyncMock(
+            return_value=namespace_sync
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        caplog.set_level(logging.WARNING, logger="routes.polaris")
+        response = client.get("/polaris/effective-access/me")
+
+        assert response.status_code == 200
+        assert "effective-access lookup" in caplog.text

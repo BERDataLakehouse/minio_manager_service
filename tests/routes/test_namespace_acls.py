@@ -124,6 +124,9 @@ def mock_state(grant_record):
         return_value=[grant_record]
     )
     state.namespace_acl_manager.reconcile_user = AsyncMock(return_value=sync_result)
+    state.namespace_acl_manager.list_usernames_for_sync = AsyncMock(
+        return_value=["alice"]
+    )
     return state
 
 
@@ -561,3 +564,31 @@ def test_sync_namespace_acls_admin(mock_state, admin_user):
     assert response.status_code == 200
     assert response.json()["policy_name"] == "namespace-acl-alice"
     mock_state.namespace_acl_manager.reconcile_user.assert_called_once_with("alice")
+
+
+def test_sync_namespace_acls_for_tenant(mock_state, admin_user):
+    app = _create_test_app(mock_state, admin_user)
+    client = TestClient(app)
+
+    response = client.post("/management/migrate/sync-namespace-acls?tenant=kbase")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["scope"] == "tenant"
+    assert body["tenant_name"] == "kbase"
+    assert body["reconciled_users"] == ["alice"]
+    mock_state.namespace_acl_manager.list_usernames_for_sync.assert_called_once_with(
+        tenant_name="kbase"
+    )
+    mock_state.namespace_acl_manager.reconcile_user.assert_called_once_with("alice")
+
+
+def test_sync_namespace_acls_rejects_username_and_tenant(mock_state, admin_user):
+    app = _create_test_app(mock_state, admin_user)
+    client = TestClient(app)
+
+    response = client.post(
+        "/management/migrate/sync-namespace-acls?username=alice&tenant=kbase"
+    )
+
+    assert response.status_code == 400

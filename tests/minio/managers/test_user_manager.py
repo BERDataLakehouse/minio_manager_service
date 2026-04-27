@@ -838,6 +838,30 @@ class TestGetUserAccessiblePaths:
         assert "s3a://test-bucket/users-sql-warehouse/testuser/" in result
 
     @pytest.mark.asyncio
+    async def test_gets_accessible_paths_from_group_policies(
+        self,
+        user_manager,
+        mock_policy_manager,
+        mock_group_manager,
+        sample_user_home_policy,
+        sample_user_system_policy,
+        sample_group_policy,
+    ):
+        """Test group policy paths are included with direct user policy paths."""
+        user_manager.resource_exists = AsyncMock(return_value=True)
+        mock_policy_manager.get_user_home_policy.return_value = sample_user_home_policy
+        mock_policy_manager.get_user_system_policy.return_value = (
+            sample_user_system_policy
+        )
+        mock_policy_manager.get_group_policy.return_value = sample_group_policy
+        mock_group_manager.get_user_groups.return_value = ["testgroup"]
+
+        result = await user_manager.get_user_accessible_paths("testuser")
+
+        assert "s3a://test-bucket/shared/" in result
+        mock_policy_manager.get_group_policy.assert_called_once_with("testgroup")
+
+    @pytest.mark.asyncio
     async def test_accessible_paths_user_not_found(self, user_manager):
         """Test get_user_accessible_paths raises error for non-existent user."""
         user_manager.resource_exists = AsyncMock(return_value=False)
@@ -861,6 +885,25 @@ class TestDeleteCleanup:
         """Test pre-delete cleanup detaches and deletes policies."""
         await user_manager._pre_delete_cleanup("testuser")
 
+        mock_policy_manager.detach_user_policies.assert_called_once_with("testuser")
+        mock_policy_manager.delete_user_policies.assert_called_once_with("testuser")
+
+    @pytest.mark.asyncio
+    async def test_pre_delete_cleanup_namespace_acl_error_does_not_block_policy_cleanup(
+        self,
+        user_manager,
+        mock_policy_manager,
+    ):
+        """Test namespace ACL cascade failures are logged and cleanup continues."""
+        namespace_acl_manager = AsyncMock()
+        namespace_acl_manager.delete_user_cascade.side_effect = Exception(
+            "cascade failed"
+        )
+        user_manager.namespace_acl_manager = namespace_acl_manager
+
+        await user_manager._pre_delete_cleanup("testuser")
+
+        namespace_acl_manager.delete_user_cascade.assert_called_once_with("testuser")
         mock_policy_manager.detach_user_policies.assert_called_once_with("testuser")
         mock_policy_manager.delete_user_policies.assert_called_once_with("testuser")
 
@@ -922,6 +965,33 @@ class TestDeleteCleanup:
         await user_manager._post_delete_cleanup("testuser")
 
         # The other two should still be called despite the first failing
+        user_manager.polaris_service.delete_principal.assert_called_once_with(
+            "testuser"
+        )
+        user_manager.polaris_service.delete_catalog.assert_called_once_with(
+            "user_testuser"
+        )
+
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_principal_and_catalog_errors_do_not_raise(
+        self,
+        user_manager,
+        mock_minio_client,
+    ):
+        """Test later Polaris cleanup failures are independent and non-fatal."""
+        mock_minio_client.list_objects.return_value = []
+        user_manager.polaris_service.delete_principal.side_effect = Exception(
+            "principal delete failed"
+        )
+        user_manager.polaris_service.delete_catalog.side_effect = Exception(
+            "catalog delete failed"
+        )
+
+        await user_manager._post_delete_cleanup("testuser")
+
+        user_manager.polaris_service.delete_principal_role.assert_called_once_with(
+            "testuser_role"
+        )
         user_manager.polaris_service.delete_principal.assert_called_once_with(
             "testuser"
         )
@@ -1044,6 +1114,10 @@ class TestPrivateHelperMethods:
             "s3a://test-bucket/tenant-general-warehouse/data/", "testuser"
         )
         assert result is False
+
+    def test_is_path_without_bucket_separator_not_in_user_home(self, user_manager):
+        """Test malformed S3-ish paths are rejected."""
+        assert user_manager._is_path_in_user_home("test-bucket", "testuser") is False
 
     def test_get_user_home_paths(self, user_manager):
         """Test getting user home paths."""
@@ -1180,3 +1254,41 @@ class TestEdgeCases:
         """Test getting only user-scoped system paths."""
         paths = user_manager._get_user_system_paths("testuser", user_scoped_only=True)
         assert isinstance(paths, dict)
+
+    @pytest.mark.asyncio
+    async def test_create_user_system_directory_creates_missing_bucket(
+        self,
+        user_manager,
+        mock_minio_client,
+    ):
+        """Test system directory setup creates buckets that do not exist yet."""
+        mock_minio_client.bucket_exists.return_value = False
+        user_manager._get_user_system_paths = MagicMock(
+            return_value={"spark-logs": ["jobs/testuser"]}
+        )
+
+        await user_manager._create_user_system_directory("testuser")
+
+        mock_minio_client.create_bucket.assert_called_once_with("spark-logs")
+        mock_minio_client.put_object.assert_called_once_with(
+            "spark-logs",
+            "jobs/testuser/.s3keep",
+            b"User system directory marker",
+        )
+
+    @pytest.mark.asyncio
+    async def test_delete_user_system_directory_skips_missing_bucket(
+        self,
+        user_manager,
+        mock_minio_client,
+    ):
+        """Test system directory deletion skips buckets that are already gone."""
+        mock_minio_client.bucket_exists.return_value = False
+        user_manager._get_user_system_paths = MagicMock(
+            return_value={"spark-logs": ["jobs/testuser"]}
+        )
+
+        await user_manager._delete_user_system_directory("testuser")
+
+        mock_minio_client.list_objects.assert_not_called()
+        mock_minio_client.delete_object.assert_not_called()

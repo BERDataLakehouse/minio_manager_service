@@ -262,6 +262,14 @@ async def _effective_access_response(
     username: str,
     app_state_obj: app_state.AppState,
 ) -> PolarisEffectiveAccessResponse:
+    namespace_sync = await app_state_obj.namespace_acl_manager.reconcile_user(username)
+    if not namespace_sync.success:
+        logger.warning(
+            "Namespace ACL reconciliation for %s had %s failures during effective-access lookup",
+            username,
+            len(namespace_sync.failed_grants),
+        )
+
     tenant_access: dict[str, str] = {}
     for group_name in await app_state_obj.group_manager.get_user_groups(username):
         tenant_name, is_ro = normalize_group_name_for_polaris(group_name)
