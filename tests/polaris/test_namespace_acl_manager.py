@@ -941,9 +941,7 @@ async def test_delete_tenant_cascade_revokes_grants_and_namespace_roles(
     polaris_service.delete_principal_role.assert_called_once_with(
         "namespace_acl_hash_read_member"
     )
-    # Role rows must be dropped so a tenant recreated with the same namespace
-    # can be granted again without unique-constraint conflicts.
-    store.delete_roles_for_tenant.assert_called_once_with("kbase")
+    store.delete_roles_for_tenant.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -953,8 +951,8 @@ async def test_revoke_namespace_access_drops_role_when_no_active_grants_remain(
     polaris_service,
 ):
     """The last revocation on a (tenant, namespace, access_level) tuple should
-    drop the now-unused Polaris catalog/principal roles and the role row so
-    they don't accumulate over time."""
+    drop the now-unused Polaris catalog/principal roles while preserving the
+    DB role metadata referenced by historical grant rows."""
     grant = _grant(status="active")
     role = _role()
     store.revoke_grant.return_value = grant
@@ -977,7 +975,7 @@ async def test_revoke_namespace_access_drops_role_when_no_active_grants_remain(
         role.catalog_name,
         role.catalog_role_name,
     )
-    store.delete_role.assert_called_once_with(role.id)
+    store.delete_role.assert_not_called()
 
 
 @pytest.mark.asyncio

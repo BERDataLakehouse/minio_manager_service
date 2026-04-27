@@ -562,11 +562,6 @@ class NamespaceAclManager:
             await self._polaris_service.delete_principal_role(role.principal_role_name)
             deleted_roles.append(role.principal_role_name)
 
-        # Drop the role rows so the (tenant, namespace_name, access_level) unique
-        # constraint can be satisfied if a same-named tenant is recreated later.
-        # Polaris-side, the catalog roles disappear with drop_tenant_catalog().
-        await self._store.delete_roles_for_tenant(tenant_name)
-
         return NamespaceAclCascadeResult(
             revoked_grants=revoked_count,
             reconciled_users=tuple(affected_users),
@@ -618,7 +613,7 @@ class NamespaceAclManager:
         )
 
     async def _cleanup_orphan_role(self, role_id: str) -> None:
-        """Drop the Polaris and DB role state when the last grant on a role is revoked."""
+        """Drop external Polaris roles when no active grants use the role metadata."""
         active = await self._store.count_active_grants_for_role(role_id)
         if active > 0:
             return
@@ -647,7 +642,6 @@ class NamespaceAclManager:
                 e,
             )
             return
-        await self._store.delete_role(role.id)
 
     async def _revoke_stale_namespace_roles(
         self,
