@@ -22,6 +22,7 @@ NAMESPACE_WRITE_PRIVILEGES = (
     "TABLE_WRITE_PROPERTIES",
     "TABLE_WRITE_DATA",
 )
+NAMESPACE_ACL_CATALOG_PRIVILEGES = ("NAMESPACE_LIST",)
 
 
 class PolarisService:
@@ -415,6 +416,8 @@ class PolarisService:
         """Ensure Polaris roles and grants for one namespace ACL role record."""
         namespace_parts = _normalize_namespace(namespace)
         await self.create_catalog_role(catalog, catalog_role)
+        for privilege in NAMESPACE_ACL_CATALOG_PRIVILEGES:
+            await self.grant_catalog_privilege(catalog, catalog_role, privilege)
         for privilege in namespace_privileges_for_access_level(access_level):
             await self.grant_namespace_privilege(
                 catalog,

@@ -883,6 +883,9 @@ class TestCatalogRoles:
                 polaris_service, "create_catalog_role", new_callable=AsyncMock
             ) as mock_create_catalog_role,
             patch.object(
+                polaris_service, "grant_catalog_privilege", new_callable=AsyncMock
+            ) as mock_grant_catalog_privilege,
+            patch.object(
                 polaris_service, "grant_namespace_privilege", new_callable=AsyncMock
             ) as mock_grant_namespace_privilege,
             patch.object(
@@ -904,6 +907,11 @@ class TestCatalogRoles:
 
             mock_create_catalog_role.assert_called_once_with(
                 "tenant_kbase", "namespace_acl_hash_read"
+            )
+            mock_grant_catalog_privilege.assert_called_once_with(
+                "tenant_kbase",
+                "namespace_acl_hash_read",
+                "NAMESPACE_LIST",
             )
             assert mock_grant_namespace_privilege.call_count == 5
             mock_grant_namespace_privilege.assert_any_call(
