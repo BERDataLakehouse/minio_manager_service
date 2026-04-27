@@ -11,7 +11,16 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security.utils import get_authorization_scheme_param
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from routes import credentials, health, management, sharing, tenants, workspaces
+from routes import (
+    credentials,
+    health,
+    management,
+    namespace_acls,
+    polaris,
+    sharing,
+    tenants,
+    workspaces,
+)
 from service import app_state
 from service.config import configure_logging, get_settings
 from service.exception_handlers import universal_error_handler
@@ -89,6 +98,8 @@ def create_application() -> FastAPI:
     # Include routers
     app.include_router(health.router, tags=["health"])
     app.include_router(credentials.router, tags=["credentials"])
+    app.include_router(polaris.router, tags=["polaris"])
+    app.include_router(namespace_acls.router, tags=["namespace-acls"])
     app.include_router(tenants.router, tags=["tenants"])
     app.include_router(sharing.router, tags=["sharing"])
     app.include_router(workspaces.router, tags=["workspaces"])

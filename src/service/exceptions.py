@@ -78,6 +78,14 @@ class DataGovernanceError(S3ManagerError):
     """Raised when data governance validation fails."""
 
 
+class PolarisOperationError(S3ManagerError):
+    """Raised when an Apache Polaris catalog operation fails."""
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+
 class ValidationError(S3ManagerError):
     """Raised when general validation fails."""
 

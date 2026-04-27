@@ -7,6 +7,7 @@ from service.errors import ErrorType
 from service.exceptions import (
     S3Error,
     MissingTokenError,
+    PolarisOperationError,
     ValidationError,
 )
 
@@ -32,6 +33,14 @@ def test_map_validation_error():
     mapping = map_error(err)
     assert mapping.err_type == ErrorType.VALIDATION_ERROR
     assert mapping.http_code == status.HTTP_400_BAD_REQUEST
+
+
+def test_map_polaris_error():
+    """Test map_error for PolarisOperationError."""
+    err = PolarisOperationError("catalog fail", status=500)
+    mapping = map_error(err)
+    assert mapping.err_type == ErrorType.POLARIS_OPERATION_ERROR
+    assert mapping.http_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
 def test_map_base_minio_error():

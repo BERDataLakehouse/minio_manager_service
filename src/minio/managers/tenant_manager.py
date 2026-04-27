@@ -5,8 +5,11 @@ and KBaseUserProfileClient (KBase Auth + local profiles).
 """
 
 import logging
+from typing import Any
 
 from minio.managers.group_manager import GroupManager
+from polaris.constants import ICEBERG_STORAGE_SUBDIRECTORY
+from polaris.polaris_service import PolarisService
 from s3.models.s3_config import S3Config
 from s3.models.tenant import (
     TenantDetailResponse,
@@ -47,13 +50,17 @@ class TenantManager:
         self,
         metadata_store: TenantMetadataStore,
         group_manager: GroupManager,
+        polaris_service: PolarisService,
         profile_client: KBaseUserProfileClient,
         minio_config: S3Config,
+        namespace_acl_manager: Any = None,
     ) -> None:
         self.metadata_store = metadata_store
         self._group_manager = group_manager
+        self._polaris_service = polaris_service
         self._profile_client = profile_client
         self._config = minio_config
+        self._namespace_acl_manager = namespace_acl_manager
 
     # ── Tenant listing ───────────────────────────────────────────────────
 
@@ -253,14 +260,12 @@ class TenantManager:
         """
         tenant_name = await self._require_group_exists(tenant_name)
 
-        target_group = tenant_name if permission == "read_write" else f"{tenant_name}ro"
-        opposite_group = (
-            f"{tenant_name}ro" if permission == "read_write" else tenant_name
+        await self._add_member_access(tenant_name, username, permission)
+        await self._reconcile_namespace_acl_membership(
+            username,
+            tenant_name,
+            permission,
         )
-
-        await self._group_manager.remove_user_from_group(username, opposite_group)
-
-        await self._group_manager.add_user_to_group(username, target_group)
 
         profiles = await self._profile_client.get_user_profiles([username], token)
         profile = profiles.get(username, UserProfile(username=username))
@@ -311,6 +316,8 @@ class TenantManager:
                 username,
                 tenant_name,
             )
+        await self._revoke_polaris_tenant_role(username, tenant_name, read_only=False)
+
         try:
             await self._group_manager.remove_user_from_group(
                 username, f"{tenant_name}ro"
@@ -321,6 +328,7 @@ class TenantManager:
                 username,
                 tenant_name,
             )
+        await self._revoke_polaris_tenant_role(username, tenant_name, read_only=True)
 
         # Cascade: remove steward assignment if user was a steward
         if is_target_steward:
@@ -328,6 +336,8 @@ class TenantManager:
             logger.info(
                 "Cascaded steward removal for %s from tenant %s", username, tenant_name
             )
+
+        await self._reconcile_namespace_acl_membership(username, tenant_name, None)
 
         logger.info("Removed %s from tenant %s", username, tenant_name)
 
@@ -453,8 +463,13 @@ class TenantManager:
         await self.ensure_metadata(tenant_name, created_by=assigned_by)
 
         # Ensure user is in the RW group (stewards need read-write access).
-        # add_user_to_group is idempotent — safe to call unconditionally.
         await self._group_manager.add_user_to_group(username, tenant_name)
+        await self._grant_polaris_tenant_role(username, tenant_name, read_only=False)
+        await self._reconcile_namespace_acl_membership(
+            username,
+            tenant_name,
+            "read_write",
+        )
 
         row = await self.metadata_store.add_steward(tenant_name, username, assigned_by)
         profiles = await self._profile_client.get_user_profiles([username], token)
@@ -494,6 +509,74 @@ class TenantManager:
         if not await self._group_manager.resource_exists(tenant_name):
             raise TenantNotFoundError(f"Tenant '{tenant_name}' not found")
         return tenant_name
+
+    async def _add_member_access(
+        self, tenant_name: str, username: str, permission: str
+    ) -> None:
+        read_only = permission == "read_only"
+        target_group = f"{tenant_name}ro" if read_only else tenant_name
+        opposite_group = tenant_name if read_only else f"{tenant_name}ro"
+
+        await self._group_manager.remove_user_from_group(username, opposite_group)
+        await self._revoke_polaris_tenant_role(
+            username, tenant_name, read_only=not read_only
+        )
+
+        await self._group_manager.add_user_to_group(username, target_group)
+        await self._grant_polaris_tenant_role(
+            username, tenant_name, read_only=read_only
+        )
+
+    def _tenant_storage_location(self, tenant_name: str) -> str:
+        return (
+            f"s3a://{self._config.default_bucket}/"
+            f"{self._config.tenant_sql_warehouse_prefix}/"
+            f"{tenant_name}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
+        )
+
+    @staticmethod
+    def _polaris_principal_role(tenant_name: str, read_only: bool) -> str:
+        return f"{tenant_name}ro_member" if read_only else f"{tenant_name}_member"
+
+    async def _grant_polaris_tenant_role(
+        self, username: str, tenant_name: str, read_only: bool
+    ) -> None:
+        await self._polaris_service.ensure_tenant_catalog(
+            tenant_name, self._tenant_storage_location(tenant_name)
+        )
+        await self._polaris_service.create_principal(name=username)
+        await self._polaris_service.grant_principal_role_to_principal(
+            username, self._polaris_principal_role(tenant_name, read_only)
+        )
+
+    async def _revoke_polaris_tenant_role(
+        self, username: str, tenant_name: str, read_only: bool
+    ) -> None:
+        await self._polaris_service.revoke_principal_role_from_principal(
+            username, self._polaris_principal_role(tenant_name, read_only)
+        )
+
+    async def _reconcile_namespace_acl_membership(
+        self,
+        username: str,
+        tenant_name: str,
+        permission: str | None,
+    ) -> None:
+        if self._namespace_acl_manager is None:
+            return
+        try:
+            await self._namespace_acl_manager.reconcile_tenant_membership(
+                username=username,
+                tenant_name=tenant_name,
+                permission=permission,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to reconcile namespace ACL membership for %s in tenant %s: %s",
+                username,
+                tenant_name,
+                e,
+            )
 
     def _build_member_list(
         self,

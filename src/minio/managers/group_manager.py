@@ -1,15 +1,16 @@
 import json
 import logging
-from typing import List
+from typing import Any, List
 
-from service.exceptions import GroupNotFoundError, GroupOperationError
-from s3.core.s3_client import S3Client
-from minio.models.command import GroupAction
-from s3.models.group import GroupModel
-from s3.models.s3_config import S3Config
-from s3.models.policy import PolicyModel, PolicyType
-from s3.utils.validators import validate_group_name
 from minio.managers.resource_manager import ResourceManager
+from minio.models.command import GroupAction
+from polaris.polaris_service import PolarisService
+from s3.core.s3_client import S3Client
+from s3.models.group import GroupModel
+from s3.models.policy import PolicyModel, PolicyType
+from s3.models.s3_config import S3Config
+from s3.utils.validators import validate_group_name
+from service.exceptions import GroupNotFoundError, GroupOperationError
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +20,17 @@ RESOURCE_TYPE = "group"
 class GroupManager(ResourceManager[GroupModel]):
     """GroupManager for basic group operations with patterns and generic CRUD."""
 
-    def __init__(self, client: S3Client, config: S3Config):
+    def __init__(
+        self,
+        client: S3Client,
+        config: S3Config,
+        polaris_service: PolarisService,
+    ):
         super().__init__(client, config)
         self.tenant_general_warehouse_prefix = config.tenant_general_warehouse_prefix
         self.tenant_sql_warehouse_prefix = config.tenant_sql_warehouse_prefix
+        self.polaris_service: PolarisService = polaris_service
+        self.namespace_acl_manager: Any = None
 
         # Lazy initialization of dependent managers to avoid circular imports
         self._policy_manager = None
@@ -43,7 +51,9 @@ class GroupManager(ResourceManager[GroupModel]):
         if self._user_manager is None:
             from minio.managers.user_manager import UserManager
 
-            self._user_manager = UserManager(self.client, self.config)
+            self._user_manager = UserManager(
+                self.client, self.config, polaris_service=self.polaris_service
+            )
         return self._user_manager
 
     @property
@@ -208,10 +218,21 @@ class GroupManager(ResourceManager[GroupModel]):
 
     async def _post_delete_cleanup(self, name: str) -> None:
         """Clean up group resources after deletion."""
+        if self.namespace_acl_manager is not None and not name.endswith("ro"):
+            try:
+                await self.namespace_acl_manager.delete_tenant_cascade(name)
+            except Exception as e:
+                self.logger.warning(f"Failed to cascade namespace ACLs: {e}")
+
         try:
             await self._delete_group_shared_directory(name)
         except Exception as e:
             self.logger.warning(f"Failed to delete group shared directory: {e}")
+
+        try:
+            await self.polaris_service.drop_tenant_catalog(name)
+        except Exception as e:
+            self.logger.warning(f"Failed to drop tenant catalog: {e}")
 
     # === Group-Specific Operations ===
 
