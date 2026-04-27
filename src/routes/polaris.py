@@ -7,6 +7,10 @@ from polaris.constants import (
     ICEBERG_STORAGE_SUBDIRECTORY,
     normalize_group_name_for_polaris,
 )
+from polaris.namespace_acl_manager import (
+    NamespaceAclNamespaceNotFoundError,
+    NamespaceAclValidationError,
+)
 from polaris.namespace_acl_models import (
     EffectiveAccessGroupTenant,
     EffectiveAccessNamespaceGrant,
@@ -164,7 +168,12 @@ async def provision_polaris_user(
             username=username,
             personal_catalog=catalog_name,
         )
-
+    except NamespaceAclNamespaceNotFoundError as e:
+        logger.warning("Namespace validation failed during provisioning: %s", e)
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except NamespaceAclValidationError as e:
+        logger.warning("Namespace ACL validation failed during provisioning: %s", e)
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except Exception:
         logger.exception(f"Failed to provision Polaris environment for {username}")
         raise HTTPException(
@@ -203,6 +212,12 @@ async def rotate_polaris_credentials(
             username=username,
             personal_catalog=catalog_name,
         )
+    except NamespaceAclNamespaceNotFoundError as e:
+        logger.warning("Namespace validation failed during rotate: %s", e)
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except NamespaceAclValidationError as e:
+        logger.warning("Namespace ACL validation failed during rotate: %s", e)
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except Exception:
         logger.exception("Failed to rotate Polaris credentials for %s", username)
         raise HTTPException(

@@ -38,12 +38,14 @@ class TestAppStateNamedTuple:
             namespace_acl_manager=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
+            profile_client=MagicMock(),
         )
         assert state.auth is not None
         assert state.polaris_service is not None
         assert state.polaris_credential_service is not None
         assert state.credential_service is not None
         assert state.tenant_manager is not None
+        assert state.profile_client is not None
 
     def test_app_state_with_polaris(self):
         """Test AppState with PolarisService."""
@@ -59,6 +61,7 @@ class TestAppStateNamedTuple:
             namespace_acl_manager=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
+            profile_client=MagicMock(),
         )
         assert state.polaris_service is polaris
 
@@ -295,6 +298,7 @@ class TestDestroyAppState:
             namespace_acl_manager=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
+            profile_client=MagicMock(),
         )
 
         await destroy_app_state(app)
@@ -338,6 +342,7 @@ class TestDestroyAppState:
             namespace_acl_manager=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
+            profile_client=MagicMock(),
         )
 
         # Should not raise

@@ -80,6 +80,12 @@ def mock_state(grant_record):
     state.polaris_service = MagicMock()
     state.polaris_service.namespace_exists = AsyncMock(return_value=True)
 
+    profile = MagicMock()
+    profile.display_name = "Alice"
+    profile.email = "alice@example.com"
+    state.profile_client = MagicMock()
+    state.profile_client.get_user_profiles = AsyncMock(return_value={"alice": profile})
+
     sync_result = NamespaceAclUserSyncResult(
         username="alice",
         policy_name="namespace-acl-alice",
@@ -89,6 +95,12 @@ def mock_state(grant_record):
         policy_size_bytes=512,
     )
     state.namespace_acl_manager = MagicMock()
+    state.namespace_acl_manager.validate_namespace_for_grant = AsyncMock(
+        return_value=None
+    )
+    state.namespace_acl_manager.is_shadowed_by_tenant_membership = AsyncMock(
+        return_value=False
+    )
     state.namespace_acl_manager.grant_namespace_access = AsyncMock(
         return_value=NamespaceAclGrantOperationResult(
             grant=grant_record,
@@ -223,7 +235,7 @@ def test_grant_namespace_acl_returns_500_when_grant_cannot_be_loaded(
     assert response.json()["detail"] == "Grant was recorded but could not be loaded"
 
 
-def test_grant_namespace_acl_returns_503_when_sync_fails(
+def test_grant_namespace_acl_returns_207_when_sync_fails(
     mock_state,
     steward_user,
     grant_record,
@@ -261,12 +273,13 @@ def test_grant_namespace_acl_returns_503_when_sync_fails(
         },
     )
 
-    assert response.status_code == 503
-    assert response.json()["detail"] == {
-        "grant_id": "grant-id",
-        "status": "active",
-        "failures": [{"grant_id": "grant-id", "message": "policy too large"}],
-    }
+    # 207 Multi-Status: grant intent is recorded; partial-sync failures are
+    # surfaced via the grant payload (status, last_sync_error) rather than via
+    # an HTTP error code.
+    assert response.status_code == 207
+    body = response.json()
+    assert body["id"] == "grant-id"
+    assert body["status"] == "active"
 
 
 def test_grant_namespace_acl_provisions_missing_minio_user(mock_state, steward_user):
@@ -288,7 +301,9 @@ def test_grant_namespace_acl_provisions_missing_minio_user(mock_state, steward_u
 
 
 def test_grant_namespace_acl_marks_shadowed_for_rw_member(mock_state, steward_user):
-    mock_state.group_manager.get_group_members.return_value = ["alice"]
+    mock_state.namespace_acl_manager.is_shadowed_by_tenant_membership.return_value = (
+        True
+    )
     app = _create_test_app(mock_state, steward_user)
     client = TestClient(app)
 
@@ -310,37 +325,42 @@ def test_grant_namespace_acl_marks_shadowed_for_rw_member(mock_state, steward_us
     )
 
 
-def test_grant_namespace_acl_marks_shadowed_for_ro_member_read_grant(
+def test_grant_namespace_acl_returns_404_when_kbase_user_unknown(
     mock_state,
     steward_user,
 ):
-    mock_state.group_manager.get_group_members.side_effect = [[], ["alice"]]
+    """The grant route must reject typo'd usernames before MinIO/Polaris fan-out."""
+    mock_state.profile_client.get_user_profiles.return_value = {}
     app = _create_test_app(mock_state, steward_user)
     client = TestClient(app)
 
     response = client.post(
         "/tenants/kbase/namespace-acls",
         json={
-            "username": "alice",
+            "username": "bogus_user",
             "namespace": ["shared_data"],
             "access_level": "read",
         },
     )
 
-    assert response.status_code == 201
-    assert (
-        mock_state.namespace_acl_manager.grant_namespace_access.call_args.kwargs[
-            "shadowed"
-        ]
-        is True
-    )
+    assert response.status_code == 404
+    assert "bogus_user" in response.json()["detail"]
+    # No fan-out: namespace validation must precede user provisioning, but the
+    # KBase profile lookup must precede _ensure_minio_user.
+    mock_state.user_manager.create_user.assert_not_called()
+    mock_state.namespace_acl_manager.grant_namespace_access.assert_not_called()
 
 
-def test_grant_namespace_acl_write_grant_does_not_check_ro_membership(
+def test_grant_namespace_acl_validates_namespace_before_user_provisioning(
     mock_state,
     steward_user,
 ):
-    mock_state.group_manager.get_group_members.side_effect = [[]]
+    """A typo'd namespace must short-circuit the route before creating a MinIO user."""
+    mock_state.user_manager.resource_exists.return_value = False
+    mock_state.namespace_acl_manager.validate_namespace_for_grant.side_effect = (
+        NamespaceAclNamespaceNotFoundError("Namespace not found")
+    )
+
     app = _create_test_app(mock_state, steward_user)
     client = TestClient(app)
 
@@ -348,25 +368,22 @@ def test_grant_namespace_acl_write_grant_does_not_check_ro_membership(
         "/tenants/kbase/namespace-acls",
         json={
             "username": "alice",
-            "namespace": ["shared_data"],
-            "access_level": "write",
+            "namespace": ["typo_namespace"],
+            "access_level": "read",
         },
     )
 
-    assert response.status_code == 201
-    assert mock_state.group_manager.get_group_members.call_count == 1
-    assert (
-        mock_state.namespace_acl_manager.grant_namespace_access.call_args.kwargs[
-            "shadowed"
-        ]
-        is False
-    )
+    assert response.status_code == 404
+    mock_state.user_manager.create_user.assert_not_called()
+    mock_state.profile_client.get_user_profiles.assert_not_called()
+    mock_state.namespace_acl_manager.grant_namespace_access.assert_not_called()
 
 
-def test_grant_namespace_acl_returns_404_for_missing_namespace(
+def test_grant_namespace_acl_returns_404_for_missing_namespace_in_manager(
     mock_state,
     steward_user,
 ):
+    """Validation may also fail inside the manager (race conditions)."""
     mock_state.namespace_acl_manager.grant_namespace_access.side_effect = (
         NamespaceAclNamespaceNotFoundError("namespace not found")
     )
@@ -481,7 +498,7 @@ def test_revoke_namespace_acl_returns_404_for_missing_grant(mock_state, steward_
     assert response.json()["detail"] == "No active namespace ACL grant found"
 
 
-def test_revoke_namespace_acl_returns_503_when_sync_fails(
+def test_revoke_namespace_acl_returns_207_when_sync_fails(
     mock_state,
     steward_user,
     grant_record,
@@ -516,12 +533,10 @@ def test_revoke_namespace_acl_returns_503_when_sync_fails(
         json={"username": "alice", "namespace": ["shared_data"]},
     )
 
-    assert response.status_code == 503
-    assert response.json()["detail"] == {
-        "grant_id": "grant-id",
-        "status": "active",
-        "failures": [{"grant_id": "grant-id", "message": "failed to detach policy"}],
-    }
+    # 207 Multi-Status: revocation is recorded in MMS; cleanup of Polaris/MinIO
+    # is partially failed and surfaced via the grant payload.
+    assert response.status_code == 207
+    assert response.json()["id"] == "grant-id"
 
 
 def test_list_my_namespace_acls(mock_state, steward_user):

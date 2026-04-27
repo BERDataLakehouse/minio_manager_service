@@ -50,6 +50,7 @@ class AppState(NamedTuple):
     namespace_acl_manager: NamespaceAclManager
     credential_service: CredentialService
     tenant_manager: TenantManager
+    profile_client: KBaseUserProfileClient
 
 
 class RequestState(NamedTuple):
@@ -179,6 +180,7 @@ async def build_app(app: FastAPI) -> None:
         policy_manager=policy_manager,
         lock_manager=lock_manager,
         minio_config=config,
+        group_manager=group_manager,
         max_grants_per_user=int(
             os.getenv("POLARIS_NAMESPACE_ACL_MAX_GRANTS_PER_USER", "50")
         ),
@@ -223,6 +225,7 @@ async def build_app(app: FastAPI) -> None:
         namespace_acl_manager=namespace_acl_manager,
         credential_service=credential_service,
         tenant_manager=tenant_manager,
+        profile_client=profile_client,
     )
     logger.info("Application state initialized")
 

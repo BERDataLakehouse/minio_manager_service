@@ -3,10 +3,13 @@
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 from minio.managers.policy_manager import PolicyManager
 from polaris.constants import ICEBERG_STORAGE_SUBDIRECTORY
+
+if TYPE_CHECKING:
+    from minio.managers.group_manager import GroupManager
 from polaris.namespace_acl_policy import (
     MAX_NAMESPACE_ACL_POLICY_BYTES,
     NamespaceAclPolicyGrant,
@@ -103,6 +106,7 @@ class NamespaceAclManager:
         policy_manager: PolicyManager,
         lock_manager: DistributedLockManager,
         minio_config: S3Config,
+        group_manager: "GroupManager | None" = None,
         max_grants_per_user: int = DEFAULT_MAX_GRANTS_PER_USER,
         max_policy_bytes: int = MAX_NAMESPACE_ACL_POLICY_BYTES,
     ) -> None:
@@ -111,12 +115,28 @@ class NamespaceAclManager:
         self._policy_manager = policy_manager
         self._lock_manager = lock_manager
         self._minio_config = minio_config
+        self._group_manager = group_manager
         self._max_grants_per_user = max_grants_per_user
         self._max_policy_bytes = max_policy_bytes
 
-    async def reconcile_user(self, username: str) -> NamespaceAclUserSyncResult:
-        """Rebuild Polaris principal roles and the MinIO namespace ACL policy."""
+    def set_group_manager(self, group_manager: "GroupManager") -> None:
+        """Inject the GroupManager after construction (breaks the circular dep)."""
+        self._group_manager = group_manager
+
+    async def reconcile_user(
+        self,
+        username: str,
+        skip_validation_grant_ids: Sequence[str] | None = None,
+    ) -> NamespaceAclUserSyncResult:
+        """Rebuild Polaris principal roles and the MinIO namespace ACL policy.
+
+        ``skip_validation_grant_ids`` lets callers (e.g. the grant flow that
+        already validated the new namespace) avoid a second round-trip to the
+        Iceberg REST namespace and table-listing endpoints. Other grants on the
+        user are still validated as a drift-repair safety net.
+        """
         policy_name = namespace_acl_policy_name(username)
+        skip_set = frozenset(skip_validation_grant_ids or ())
         async with self._lock_manager.namespace_acl_lock(username):
             grants = await self._store.list_active_grants_for_user(username)
             if len(grants) > self._max_grants_per_user:
@@ -158,10 +178,11 @@ class NamespaceAclManager:
                     continue
 
                 try:
-                    await self.validate_namespace_for_grant(
-                        grant.tenant_name,
-                        grant.namespace_parts,
-                    )
+                    if grant.id not in skip_set:
+                        await self.validate_namespace_for_grant(
+                            grant.tenant_name,
+                            grant.namespace_parts,
+                        )
                     await self._ensure_polaris_assignment(username, grant, role)
                 except Exception as e:
                     failure = await self._mark_grant_failed(grant, str(e))
@@ -258,7 +279,10 @@ class NamespaceAclManager:
             actor=actor,
             status=status,
         )
-        sync_result = await self.reconcile_user(username)
+        sync_result = await self.reconcile_user(
+            username,
+            skip_validation_grant_ids=(mutation.grant.id,),
+        )
         grant = await self._store.get_active_grant(
             tenant_name,
             namespace_parts,
@@ -287,6 +311,7 @@ class NamespaceAclManager:
         if grant is None:
             return None
         sync_result = await self.reconcile_user(username)
+        await self._cleanup_orphan_role(grant.role_id)
         return NamespaceAclGrantOperationResult(
             grant=grant,
             created=False,
@@ -385,6 +410,28 @@ class NamespaceAclManager:
             message=message,
         )
 
+    async def is_shadowed_by_tenant_membership(
+        self,
+        tenant_name: str,
+        username: str,
+        access_level: str,
+    ) -> bool:
+        """Return true when the user's existing tenant membership covers the grant."""
+        if self._group_manager is None:
+            return False
+        rw_members = set(await self._group_manager.get_group_members(tenant_name))
+        if _tenant_permission_shadows_grant("read_write", access_level) and (
+            username in rw_members
+        ):
+            return True
+        ro_members = set(
+            await self._group_manager.get_group_members(f"{tenant_name}ro")
+        )
+        return (
+            _tenant_permission_shadows_grant("read_only", access_level)
+            and username in ro_members
+        )
+
     async def reconcile_tenant_membership(
         self,
         username: str,
@@ -463,6 +510,11 @@ class NamespaceAclManager:
             await self._polaris_service.delete_principal_role(role.principal_role_name)
             deleted_roles.append(role.principal_role_name)
 
+        # Drop the role rows so the (tenant, namespace_name, access_level) unique
+        # constraint can be satisfied if a same-named tenant is recreated later.
+        # Polaris-side, the catalog roles disappear with drop_tenant_catalog().
+        await self._store.delete_roles_for_tenant(tenant_name)
+
         return NamespaceAclCascadeResult(
             revoked_grants=revoked_count,
             reconciled_users=tuple(affected_users),
@@ -512,6 +564,38 @@ class NamespaceAclManager:
             username,
             role.principal_role_name,
         )
+
+    async def _cleanup_orphan_role(self, role_id: str) -> None:
+        """Drop the Polaris and DB role state when the last grant on a role is revoked."""
+        active = await self._store.count_active_grants_for_role(role_id)
+        if active > 0:
+            return
+        role = await self._store.get_role(role_id)
+        if role is None:
+            return
+        try:
+            await self._polaris_service.delete_principal_role(role.principal_role_name)
+        except Exception as e:
+            logger.warning(
+                "Failed to delete Polaris principal role %s: %s",
+                role.principal_role_name,
+                e,
+            )
+            return
+        try:
+            await self._polaris_service.delete_catalog_role(
+                role.catalog_name,
+                role.catalog_role_name,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to delete Polaris catalog role %s on catalog %s: %s",
+                role.catalog_role_name,
+                role.catalog_name,
+                e,
+            )
+            return
+        await self._store.delete_role(role.id)
 
     async def _revoke_stale_namespace_roles(
         self,

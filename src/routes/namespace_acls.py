@@ -13,6 +13,7 @@ from fastapi import (
     Response,
     status,
 )
+from fastapi.security.utils import get_authorization_scheme_param
 
 from polaris.namespace_acl_manager import (
     NamespaceAclNamespaceNotFoundError,
@@ -43,6 +44,15 @@ router = APIRouter(tags=["namespace-acls"])
             "model": NamespaceAclGrantResponse,
             "description": "Existing active grant returned for an idempotent request.",
         },
+        status.HTTP_207_MULTI_STATUS: {
+            "model": NamespaceAclGrantResponse,
+            "description": (
+                "Grant intent is recorded in the source of truth, but external "
+                "side effects (Polaris role / MinIO policy) are not yet in sync. "
+                "Inspect the response 'status' and 'last_sync_error' fields, then "
+                "call POST /management/migrate/sync-namespace-acls to retry."
+            ),
+        },
     },
     summary="Grant namespace access",
     description="Grant read or write access to an existing namespace in a tenant catalog.",
@@ -58,13 +68,41 @@ async def grant_namespace_acl(
     await require_steward_or_admin(tenant_name, request, authenticated_user)
     app_state = get_app_state(request)
     tenant_name = await _require_tenant_exists(app_state, tenant_name)
+
+    # 1. Validate the namespace BEFORE provisioning the user. This avoids
+    #    creating a stray MinIO/Polaris user when the steward typos the
+    #    namespace name.
+    try:
+        await app_state.namespace_acl_manager.validate_namespace_for_grant(
+            tenant_name,
+            body.namespace,
+        )
+    except NamespaceAclNamespaceNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+    except NamespaceAclValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        ) from e
+
+    # 2. Verify the target is a real KBase user before MMS provisioning. The
+    #    grant flow eventually creates MinIO and Polaris principals for the
+    #    target, and we don't want to fan out those side effects for typo'd
+    #    usernames.
+    token = _extract_token(request)
+    await _require_kbase_user(app_state, body.username, token)
+
+    # 3. Idempotently provision the MinIO user; create_user is a no-op when the
+    #    user already exists.
     await _ensure_minio_user(app_state, body.username)
 
-    shadowed = await _is_shadowed_by_tenant_membership(
-        app_state,
-        tenant_name,
-        body.username,
-        body.access_level,
+    shadowed = await app_state.namespace_acl_manager.is_shadowed_by_tenant_membership(
+        tenant_name=tenant_name,
+        username=body.username,
+        access_level=body.access_level,
     )
     try:
         result = await app_state.namespace_acl_manager.grant_namespace_access(
@@ -90,19 +128,15 @@ async def grant_namespace_acl(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Grant was recorded but could not be loaded",
         )
+
+    # The grant intent is durable in PostgreSQL even when external sync fails.
+    # Surface partial-sync failures via 207 Multi-Status with the grant payload
+    # so clients can distinguish "request rejected" (4xx) from "intent recorded
+    # but Polaris/MinIO side effects partially failed" (207). The grant 'status'
+    # field is sync_error and a follow-up reconcile will heal it.
     if not result.sync_result.success:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "grant_id": result.grant.id,
-                "status": result.grant.status,
-                "failures": [
-                    {"grant_id": failure.grant_id, "message": failure.message}
-                    for failure in result.sync_result.failed_grants
-                ],
-            },
-        )
-    if not result.created:
+        response.status_code = status.HTTP_207_MULTI_STATUS
+    elif not result.created:
         response.status_code = status.HTTP_200_OK
     return NamespaceAclGrantResponse.from_record(result.grant)
 
@@ -137,6 +171,17 @@ async def list_namespace_acls(
 @router.delete(
     "/tenants/{tenant_name}/namespace-acls",
     response_model=NamespaceAclGrantResponse,
+    responses={
+        status.HTTP_207_MULTI_STATUS: {
+            "model": NamespaceAclGrantResponse,
+            "description": (
+                "Revocation is recorded in the source of truth, but cleanup of "
+                "Polaris role assignments or the MinIO policy is partially "
+                "failed. Call POST /management/migrate/sync-namespace-acls to "
+                "retry."
+            ),
+        },
+    },
     summary="Revoke namespace access",
     description="Revoke the current grant for a user and namespace.",
 )
@@ -144,6 +189,7 @@ async def revoke_namespace_acl(
     tenant_name: Annotated[str, Path(min_length=1)],
     body: NamespaceAclRevokeRequest,
     request: Request,
+    response: Response,
     authenticated_user: Annotated[KBaseUser, Depends(auth)],
 ):
     """Revoke namespace access from a user."""
@@ -162,17 +208,7 @@ async def revoke_namespace_acl(
             detail="No active namespace ACL grant found",
         )
     if not result.sync_result.success:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "grant_id": result.grant.id,
-                "status": result.grant.status,
-                "failures": [
-                    {"grant_id": failure.grant_id, "message": failure.message}
-                    for failure in result.sync_result.failed_grants
-                ],
-            },
-        )
+        response.status_code = status.HTTP_207_MULTI_STATUS
     return NamespaceAclGrantResponse.from_record(result.grant)
 
 
@@ -236,24 +272,31 @@ async def _require_tenant_exists(app_state, tenant_name: str) -> str:
     return tenant_name
 
 
+def _extract_token(request: Request) -> str:
+    """Extract the bearer token from the Authorization header (case-insensitive)."""
+    header = request.headers.get("Authorization", "")
+    _, credentials = get_authorization_scheme_param(header)
+    return credentials
+
+
+async def _require_kbase_user(app_state, username: str, token: str) -> None:
+    """Reject grant requests for usernames that KBase Auth doesn't recognize.
+
+    Calls the same KBase Auth batch profile endpoint already used by tenant
+    membership flows. A KBase profile lookup that returns no display name is
+    treated as "user does not exist", so we fail closed rather than fan out
+    Polaris/MinIO provisioning side effects for typo'd usernames.
+    """
+    profiles = await app_state.profile_client.get_user_profiles([username], token)
+    profile = profiles.get(username)
+    if profile is None or profile.display_name is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"KBase user '{username}' not found",
+        )
+
+
 async def _ensure_minio_user(app_state, username: str) -> None:
     if await app_state.user_manager.resource_exists(username):
         return
     await app_state.user_manager.create_user(username)
-
-
-async def _is_shadowed_by_tenant_membership(
-    app_state,
-    tenant_name: str,
-    username: str,
-    access_level: str,
-) -> bool:
-    rw_members = set(await app_state.group_manager.get_group_members(tenant_name))
-    if username in rw_members:
-        return True
-    if access_level == "write":
-        return False
-    ro_members = set(
-        await app_state.group_manager.get_group_members(f"{tenant_name}ro")
-    )
-    return username in ro_members

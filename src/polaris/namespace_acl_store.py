@@ -49,6 +49,8 @@ MAX_POLARIS_ROLE_NAME_LENGTH = 256
 NAMESPACE_ACL_ROLE_HASH_LENGTHS = (24, 32, 40)
 NAMESPACE_ACL_ROLE_PREFIX = "namespace_acl_"
 TENANT_CATALOG_PREFIX = "tenant_"
+# Polaris/Iceberg cap individual identifier components at 256 characters.
+MAX_NAMESPACE_PART_LENGTH = 256
 
 _ACCESS_LEVELS = {ACCESS_LEVEL_READ, ACCESS_LEVEL_WRITE}
 _GRANT_STATUSES = {
@@ -124,6 +126,23 @@ SELECT {_ROLE_COLUMNS}
   FROM polaris_namespace_acl_roles
  WHERE tenant_name = %(tenant_name)s
  ORDER BY namespace_name, access_level;
+"""
+
+_COUNT_ACTIVE_GRANTS_FOR_ROLE = """
+SELECT COUNT(1)
+  FROM polaris_namespace_acl_grants
+ WHERE role_id = %(role_id)s
+   AND revoked_at IS NULL;
+"""
+
+_DELETE_ROLE = """
+DELETE FROM polaris_namespace_acl_roles
+ WHERE id = %(role_id)s;
+"""
+
+_DELETE_ROLES_FOR_TENANT = """
+DELETE FROM polaris_namespace_acl_roles
+ WHERE tenant_name = %(tenant_name)s;
 """
 
 _INSERT_ROLE = f"""
@@ -390,6 +409,10 @@ def normalize_namespace_parts(namespace_parts: Sequence[str]) -> tuple[str, ...]
         raise ValueError("namespace_parts must not contain empty values")
     if any("." in part for part in normalized):
         raise ValueError("namespace_parts must not contain dotted values")
+    if any(len(part) > MAX_NAMESPACE_PART_LENGTH for part in normalized):
+        raise ValueError(
+            f"namespace parts must each be at most {MAX_NAMESPACE_PART_LENGTH} characters"
+        )
     return normalized
 
 
@@ -535,6 +558,33 @@ class NamespaceAclStore:
             )
             rows = await cur.fetchall()
         return [_role_record_from_row(row) for row in rows]
+
+    async def count_active_grants_for_role(self, role_id: str) -> int:
+        """Return the number of non-revoked grants attached to a role."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                _COUNT_ACTIVE_GRANTS_FOR_ROLE,
+                {"role_id": role_id},
+            )
+            row = await cur.fetchone()
+        return int(row[0]) if row is not None else 0
+
+    async def delete_role(self, role_id: str) -> bool:
+        """Delete a namespace ACL role row by id. Returns true when a row was removed."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(_DELETE_ROLE, {"role_id": role_id})
+            await conn.commit()
+            return cur.rowcount > 0
+
+    async def delete_roles_for_tenant(self, tenant_name: str) -> int:
+        """Delete every namespace ACL role row for a tenant. Returns the row count."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                _DELETE_ROLES_FOR_TENANT,
+                {"tenant_name": tenant_name},
+            )
+            await conn.commit()
+            return cur.rowcount or 0
 
     async def create_or_update_grant(
         self,

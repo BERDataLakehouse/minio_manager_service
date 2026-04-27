@@ -189,6 +189,14 @@ class TestNamespaceAclNormalization:
         with pytest.raises(ValueError, match="dotted values"):
             normalize_namespace_parts(["geo.curated"])
 
+    def test_normalize_namespace_parts_rejects_overlong_part(self):
+        # Polaris/Iceberg cap individual identifier components at 256 chars; we
+        # reject overlong inputs locally to surface a useful error before the
+        # round-trip to Polaris.
+        too_long = "a" * 257
+        with pytest.raises(ValueError, match="at most 256 characters"):
+            normalize_namespace_parts([too_long])
+
     def test_role_names_are_deterministic_sha256_hashes(self):
         role_names = build_namespace_acl_role_names(
             "kbase",

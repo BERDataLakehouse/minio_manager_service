@@ -61,6 +61,9 @@ def store():
     mock_store.revoke_grant = AsyncMock(return_value=None)
     mock_store.update_grant_status = AsyncMock(return_value=None)
     mock_store.append_event = AsyncMock(return_value=None)
+    mock_store.count_active_grants_for_role = AsyncMock(return_value=0)
+    mock_store.delete_role = AsyncMock(return_value=False)
+    mock_store.delete_roles_for_tenant = AsyncMock(return_value=0)
     return mock_store
 
 
@@ -78,6 +81,7 @@ def polaris_service():
     service.get_principal_roles_for_principal = AsyncMock(return_value=[])
     service.revoke_principal_role_from_principal = AsyncMock(return_value=None)
     service.delete_principal_role = AsyncMock(return_value=None)
+    service.delete_catalog_role = AsyncMock(return_value=None)
     return service
 
 
@@ -708,6 +712,140 @@ async def test_delete_tenant_cascade_revokes_grants_and_namespace_roles(
     )
     polaris_service.delete_principal_role.assert_called_once_with(
         "namespace_acl_hash_read_member"
+    )
+    # Role rows must be dropped so a tenant recreated with the same namespace
+    # can be granted again without unique-constraint conflicts.
+    store.delete_roles_for_tenant.assert_called_once_with("kbase")
+
+
+@pytest.mark.asyncio
+async def test_revoke_namespace_access_drops_role_when_no_active_grants_remain(
+    manager,
+    store,
+    polaris_service,
+):
+    """The last revocation on a (tenant, namespace, access_level) tuple should
+    drop the now-unused Polaris catalog/principal roles and the role row so
+    they don't accumulate over time."""
+    grant = _grant(status="active")
+    role = _role()
+    store.revoke_grant.return_value = grant
+    store.list_active_grants_for_user.return_value = []
+    store.count_active_grants_for_role.return_value = 0
+    store.get_role.return_value = role
+
+    await manager.revoke_namespace_access(
+        tenant_name="kbase",
+        namespace_parts=["shared_data"],
+        username="alice",
+        actor="steward",
+    )
+
+    store.count_active_grants_for_role.assert_called_once_with("role-id")
+    polaris_service.delete_principal_role.assert_called_once_with(
+        role.principal_role_name
+    )
+    polaris_service.delete_catalog_role.assert_called_once_with(
+        role.catalog_name,
+        role.catalog_role_name,
+    )
+    store.delete_role.assert_called_once_with(role.id)
+
+
+@pytest.mark.asyncio
+async def test_revoke_namespace_access_keeps_role_when_other_grants_remain(
+    manager,
+    store,
+    polaris_service,
+):
+    """A revoke must NOT drop the Polaris/DB role when other users still have
+    a grant on the same (tenant, namespace, access_level) tuple."""
+    grant = _grant(status="active")
+    store.revoke_grant.return_value = grant
+    store.list_active_grants_for_user.return_value = []
+    store.count_active_grants_for_role.return_value = 2
+
+    await manager.revoke_namespace_access(
+        tenant_name="kbase",
+        namespace_parts=["shared_data"],
+        username="alice",
+        actor="steward",
+    )
+
+    polaris_service.delete_principal_role.assert_not_called()
+    polaris_service.delete_catalog_role.assert_not_called()
+    store.delete_role.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_is_shadowed_by_tenant_membership_returns_true_for_rw_member(
+    manager,
+):
+    """RW tenant membership shadows both read and write namespace ACL grants."""
+    group_manager = MagicMock()
+    group_manager.get_group_members = AsyncMock(return_value=["alice"])
+    manager.set_group_manager(group_manager)
+
+    assert (
+        await manager.is_shadowed_by_tenant_membership(
+            tenant_name="kbase",
+            username="alice",
+            access_level="write",
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_is_shadowed_by_tenant_membership_does_not_shadow_write_for_ro_member(
+    manager,
+):
+    """RO tenant membership shadows read grants but not write grants."""
+    group_manager = MagicMock()
+    group_manager.get_group_members = AsyncMock(side_effect=[[], ["alice"]])
+    manager.set_group_manager(group_manager)
+
+    assert (
+        await manager.is_shadowed_by_tenant_membership(
+            tenant_name="kbase",
+            username="alice",
+            access_level="write",
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_is_shadowed_by_tenant_membership_shadows_read_for_ro_member(
+    manager,
+):
+    group_manager = MagicMock()
+    group_manager.get_group_members = AsyncMock(side_effect=[[], ["alice"]])
+    manager.set_group_manager(group_manager)
+
+    assert (
+        await manager.is_shadowed_by_tenant_membership(
+            tenant_name="kbase",
+            username="alice",
+            access_level="read",
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_is_shadowed_by_tenant_membership_returns_false_when_no_group_manager(
+    manager,
+):
+    """Without a GroupManager wired in, the manager must default to no-shadow
+    rather than crash. App startup wires it; this is a safety belt."""
+    assert (
+        await manager.is_shadowed_by_tenant_membership(
+            tenant_name="kbase",
+            username="alice",
+            access_level="read",
+        )
+        is False
     )
 
 
