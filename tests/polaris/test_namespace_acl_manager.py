@@ -64,6 +64,9 @@ def store():
     mock_store.count_active_grants_for_role = AsyncMock(return_value=0)
     mock_store.delete_role = AsyncMock(return_value=False)
     mock_store.delete_roles_for_tenant = AsyncMock(return_value=0)
+    mock_store.purge_tenant_history = AsyncMock(
+        return_value={"events": 0, "grants": 0, "roles": 0}
+    )
     return mock_store
 
 
@@ -169,6 +172,7 @@ async def test_reconcile_user_with_no_grants_removes_policy_and_stale_roles(
         "namespace-acl-alice",
         "alice",
     )
+    store.purge_tenant_history.assert_not_called()
     polaris_service.revoke_principal_role_from_principal.assert_called_once_with(
         "alice",
         "namespace_acl_old_read_member",
@@ -787,6 +791,7 @@ async def test_revoke_namespace_access_reconciles_user_after_revoke(
         "namespace-acl-alice",
         "alice",
     )
+    store.purge_tenant_history.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -914,7 +919,7 @@ async def test_reconcile_tenant_membership_skips_other_tenant_grants(
 
 
 @pytest.mark.asyncio
-async def test_delete_tenant_cascade_revokes_grants_and_namespace_roles(
+async def test_delete_tenant_cascade_revokes_grants_and_purges_db_history(
     manager,
     store,
     polaris_service,
@@ -941,7 +946,7 @@ async def test_delete_tenant_cascade_revokes_grants_and_namespace_roles(
     polaris_service.delete_principal_role.assert_called_once_with(
         "namespace_acl_hash_read_member"
     )
-    store.delete_roles_for_tenant.assert_not_called()
+    store.purge_tenant_history.assert_called_once_with("kbase")
 
 
 @pytest.mark.asyncio
@@ -1144,6 +1149,7 @@ async def test_delete_user_cascade_revokes_user_grants(
         "namespace-acl-alice",
         "alice",
     )
+    store.purge_tenant_history.assert_not_called()
 
 
 @pytest.mark.asyncio

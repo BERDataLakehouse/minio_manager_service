@@ -562,6 +562,8 @@ class NamespaceAclManager:
             await self._polaris_service.delete_principal_role(role.principal_role_name)
             deleted_roles.append(role.principal_role_name)
 
+        await self._store.purge_tenant_history(tenant_name)
+
         return NamespaceAclCascadeResult(
             revoked_grants=revoked_count,
             reconciled_users=tuple(affected_users),

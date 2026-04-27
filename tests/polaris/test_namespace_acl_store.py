@@ -582,6 +582,33 @@ class TestNamespaceAclStoreGrantMutations:
         mock_pool._mock_conn.commit.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_purge_tenant_history_deletes_events_grants_then_roles(
+        self, store, mock_pool
+    ):
+        events_cursor = _cursor()
+        events_cursor.rowcount = 3
+        grants_cursor = _cursor()
+        grants_cursor.rowcount = 2
+        roles_cursor = _cursor()
+        roles_cursor.rowcount = 1
+        mock_pool._mock_conn.execute.side_effect = [
+            events_cursor,
+            grants_cursor,
+            roles_cursor,
+        ]
+
+        result = await store.purge_tenant_history("kbase")
+
+        assert result == {"events": 3, "grants": 2, "roles": 1}
+        executed_sql = [
+            call.args[0] for call in mock_pool._mock_conn.execute.call_args_list
+        ]
+        assert "polaris_namespace_acl_events" in executed_sql[0]
+        assert "polaris_namespace_acl_grants" in executed_sql[1]
+        assert "polaris_namespace_acl_roles" in executed_sql[2]
+        mock_pool._mock_conn.commit.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_list_grants_for_tenant_with_namespace_filter(self, store, mock_pool):
         mock_pool._mock_conn.execute.return_value = _cursor(rows=[_grant_row()])
 

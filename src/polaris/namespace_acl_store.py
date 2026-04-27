@@ -147,6 +147,16 @@ DELETE FROM polaris_namespace_acl_roles
  WHERE tenant_name = %(tenant_name)s;
 """
 
+_DELETE_GRANTS_FOR_TENANT = """
+DELETE FROM polaris_namespace_acl_grants
+ WHERE tenant_name = %(tenant_name)s;
+"""
+
+_DELETE_EVENTS_FOR_TENANT = """
+DELETE FROM polaris_namespace_acl_events
+ WHERE tenant_name = %(tenant_name)s;
+"""
+
 _INSERT_ROLE = f"""
 INSERT INTO polaris_namespace_acl_roles (
     tenant_name,
@@ -602,6 +612,20 @@ class NamespaceAclStore:
             )
             await conn.commit()
             return cur.rowcount or 0
+
+    async def purge_tenant_history(self, tenant_name: str) -> dict[str, int]:
+        """Delete all namespace ACL DB history for a deleted tenant."""
+        params = {"tenant_name": tenant_name}
+        async with self._pool.connection() as conn:
+            events_cur = await conn.execute(_DELETE_EVENTS_FOR_TENANT, params)
+            grants_cur = await conn.execute(_DELETE_GRANTS_FOR_TENANT, params)
+            roles_cur = await conn.execute(_DELETE_ROLES_FOR_TENANT, params)
+            await conn.commit()
+        return {
+            "events": events_cur.rowcount or 0,
+            "grants": grants_cur.rowcount or 0,
+            "roles": roles_cur.rowcount or 0,
+        }
 
     async def create_or_update_grant(
         self,
