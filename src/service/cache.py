@@ -162,6 +162,4 @@ class SingleFlightTTLCache(Generic[T]):
         return self._cache.size()
 
     def __repr__(self) -> str:
-        return (
-            f"SingleFlightTTLCache(name={self._name!r}, size={self.size()})"
-        )
+        return f"SingleFlightTTLCache(name={self._name!r}, size={self.size()})"

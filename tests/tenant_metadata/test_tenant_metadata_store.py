@@ -607,9 +607,7 @@ class TestMetadataMutationInvalidation:
         baseline = mock_pool._mock_conn.execute.call_count
 
         # add_steward returns the upserted row.
-        primed.fetchone = AsyncMock(
-            return_value=("t1", "alice", "admin", "2024-01-01")
-        )
+        primed.fetchone = AsyncMock(return_value=("t1", "alice", "admin", "2024-01-01"))
         await store.add_steward("t1", "alice", "admin")
 
         # All three must re-query.
@@ -657,9 +655,7 @@ class TestMetadataMutationInvalidation:
         """Adding alice as steward must not invalidate bob's get_steward_tenants."""
         primed = AsyncMock()
         primed.fetchall = AsyncMock(return_value=[("t1",)])
-        primed.fetchone = AsyncMock(
-            return_value=("t1", "alice", "admin", "2024-01-01")
-        )
+        primed.fetchone = AsyncMock(return_value=("t1", "alice", "admin", "2024-01-01"))
         mock_pool._mock_conn.execute.return_value = primed
 
         await store.get_steward_tenants("bob")

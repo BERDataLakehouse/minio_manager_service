@@ -1515,9 +1515,7 @@ class TestGroupMembersCache:
 
             assert first == second == ["user1", "user2", "user3"]
             # Exactly one underlying MC subprocess call across two reads.
-            assert (
-                group_manager_instance._executor._execute_command.call_count == 1
-            )
+            assert group_manager_instance._executor._execute_command.call_count == 1
 
     @pytest.mark.asyncio
     async def test_get_group_members_distinct_keys_independent(
@@ -1540,9 +1538,7 @@ class TestGroupMembersCache:
             await group_manager_instance.get_group_members("g1")
             await group_manager_instance.get_group_members("g2")
             # Two distinct keys -> two MC calls.
-            assert (
-                group_manager_instance._executor._execute_command.call_count == 2
-            )
+            assert group_manager_instance._executor._execute_command.call_count == 2
 
     @pytest.mark.asyncio
     async def test_get_group_members_concurrent_misses_dedup(
@@ -1605,10 +1601,11 @@ class TestGroupMembersCache:
                     command="mc admin group info",
                 )
             )
-            assert (
-                await group_manager_instance.get_group_members("testgroup")
-                == ["user1", "user2", "user3"]
-            )
+            assert await group_manager_instance.get_group_members("testgroup") == [
+                "user1",
+                "user2",
+                "user3",
+            ]
 
             # Mutation: this should invalidate testgroup's membership entry.
             group_manager_instance._executor._execute_command.return_value = (
@@ -1674,9 +1671,7 @@ class TestGroupMembersCache:
                     command="mc admin group rm",
                 )
             )
-            await group_manager_instance.remove_user_from_group(
-                "user1", "testgroup"
-            )
+            await group_manager_instance.remove_user_from_group("user1", "testgroup")
 
             # Next read re-fetches.
             new_payload = json.dumps(
@@ -1722,18 +1717,14 @@ class TestGroupMembersCache:
             # Prime caches for two groups.
             await group_manager_instance.get_group_members("alphagroup")
             await group_manager_instance.get_group_members("betagroup")
-            base_calls = (
-                group_manager_instance._executor._execute_command.call_count
-            )
+            base_calls = group_manager_instance._executor._execute_command.call_count
 
             # Mutate alphagroup.
             await group_manager_instance.add_user_to_group("alice", "alphagroup")
 
             # Read betagroup: must still hit cache (no extra MC call).
             await group_manager_instance.get_group_members("betagroup")
-            new_calls = (
-                group_manager_instance._executor._execute_command.call_count
-            )
+            new_calls = group_manager_instance._executor._execute_command.call_count
             # Only the add_user_to_group call (1) was added.
             assert new_calls == base_calls + 1
 
@@ -1746,14 +1737,12 @@ class TestListResourcesCache:
         self, group_manager_instance, sample_group_list_json
     ):
         """A second list_resources call does not invoke MC again."""
-        group_manager_instance._executor._execute_command.return_value = (
-            CommandResult(
-                success=True,
-                stdout=sample_group_list_json,
-                stderr="",
-                return_code=0,
-                command="mc admin group ls",
-            )
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=sample_group_list_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group ls",
         )
 
         first = await group_manager_instance.list_resources()
@@ -1767,14 +1756,12 @@ class TestListResourcesCache:
         self, group_manager_instance, sample_group_list_json
     ):
         """name_filter is applied client-side; cache is keyed only on the unfiltered list."""
-        group_manager_instance._executor._execute_command.return_value = (
-            CommandResult(
-                success=True,
-                stdout=sample_group_list_json,
-                stderr="",
-                return_code=0,
-                command="mc admin group ls",
-            )
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=sample_group_list_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group ls",
         )
 
         all_groups = await group_manager_instance.list_resources()

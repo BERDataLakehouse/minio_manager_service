@@ -124,19 +124,15 @@ class TenantMetadataStore:
                 ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
             )
         )
-        self._metadata_cache: SingleFlightTTLCache[dict | None] = (
-            SingleFlightTTLCache(
-                name="metadata",
-                maxsize=1024,
-                ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
-            )
+        self._metadata_cache: SingleFlightTTLCache[dict | None] = SingleFlightTTLCache(
+            name="metadata",
+            maxsize=1024,
+            ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
         )
-        self._stewards_cache: SingleFlightTTLCache[list[dict]] = (
-            SingleFlightTTLCache(
-                name="stewards",
-                maxsize=1024,
-                ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
-            )
+        self._stewards_cache: SingleFlightTTLCache[list[dict]] = SingleFlightTTLCache(
+            name="stewards",
+            maxsize=1024,
+            ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
         )
         self._steward_tenants_cache: SingleFlightTTLCache[list[str]] = (
             SingleFlightTTLCache(
@@ -223,9 +219,7 @@ class TenantMetadataStore:
 
         async def _load() -> dict | None:
             async with self._pool.connection() as conn:
-                cur = await conn.execute(
-                    _SELECT_METADATA, {"tenant_name": tenant_name}
-                )
+                cur = await conn.execute(_SELECT_METADATA, {"tenant_name": tenant_name})
                 row = await cur.fetchone()
             if row is None:
                 return None
@@ -352,9 +346,7 @@ class TenantMetadataStore:
 
         async def _load() -> list[dict]:
             async with self._pool.connection() as conn:
-                cur = await conn.execute(
-                    _SELECT_STEWARDS, {"tenant_name": tenant_name}
-                )
+                cur = await conn.execute(_SELECT_STEWARDS, {"tenant_name": tenant_name})
                 rows = await cur.fetchall()
             return [_row_to_steward(row) for row in rows]
 
@@ -371,9 +363,7 @@ class TenantMetadataStore:
                 )
                 return await cur.fetchone() is not None
 
-        return await self._is_steward_cache.get_or_load(
-            (tenant_name, username), _load
-        )
+        return await self._is_steward_cache.get_or_load((tenant_name, username), _load)
 
     async def get_steward_tenants(self, username: str) -> list[str]:
         """Return tenant names where the user is a steward."""
