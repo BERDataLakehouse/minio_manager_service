@@ -21,6 +21,7 @@ from service.exceptions import (  # MinIO specific exceptions
     InvalidTokenError,
     MissingRoleError,
     MissingTokenError,
+    PolarisOperationError,
     PolicyOperationError,
     PolicyValidationError,
     S3Error,
@@ -70,6 +71,7 @@ _ERR_MAP = {
     GroupOperationError: ErrorMapping(ErrorType.GROUP_OPERATION_ERROR, _H400),
     CredentialOperationError: ErrorMapping(ErrorType.CREDENTIAL_OPERATION_ERROR, _H409),
     DataGovernanceError: ErrorMapping(ErrorType.DATA_GOVERNANCE_ERROR, _H403),
+    PolarisOperationError: ErrorMapping(ErrorType.POLARIS_OPERATION_ERROR, _H500),
     ValidationError: ErrorMapping(ErrorType.VALIDATION_ERROR, _H400),
     ConnectionError: ErrorMapping(ErrorType.CONNECTION_ERROR, _H503),
     # Tenant errors
