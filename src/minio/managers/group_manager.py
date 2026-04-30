@@ -4,11 +4,11 @@ from typing import List
 
 from service.exceptions import GroupNotFoundError, GroupOperationError
 from s3.core.s3_client import S3Client
-from minio.models.command import GroupAction
+from minio.models.command import GroupAction, UserAction
 from s3.models.group import GroupModel
 from s3.models.s3_config import S3Config
 from s3.models.policy import PolicyModel, PolicyType
-from s3.utils.validators import validate_group_name
+from s3.utils.validators import validate_group_name, validate_username
 from minio.managers.resource_manager import ResourceManager
 
 logger = logging.getLogger(__name__)
@@ -465,21 +465,48 @@ class GroupManager(ResourceManager[GroupModel]):
         """
         Retrieve all group names that a specific user is a member of.
 
-        This method iterates through all groups in the system and checks
-        membership for the specified user. The returned list represents
-        all groups where the user has inherited group permissions and
-        access to shared workspaces.
+        Implementation note: this issues a single ``mc admin user info <user> --json``
+        call and reads the ``memberOf`` field from the response. Older versions
+        of this method iterated every group in the system and called
+        ``get_group_members`` per group, which made the call cost grow as
+        ``O(num_groups * mc_subprocesses)``. The rewrite is O(1) MC calls.
 
         Args:
             username: The username to get group memberships for
+
+        Raises:
+            GroupNotFoundError: if the user does not exist in MinIO.
+            GroupOperationError: if the MC command fails for any other reason
+                or the response cannot be parsed.
         """
         async with self.operation_context("get_user_groups"):
-            all_groups = await self.list_resources()
-            user_groups = []
-            for group_name in all_groups:
-                if await self.is_user_in_group(username, group_name):
-                    user_groups.append(group_name)
-            user_groups.sort()
+            validate_username(username)
+
+            cmd_args = self._command_builder.build_user_command(
+                UserAction.INFO, username, json_format=True
+            )
+            result = await self._executor._execute_command(cmd_args)
+
+            if not result.success:
+                # mc returns a non-zero exit when the user does not exist; we
+                # surface that as GroupNotFoundError to mirror the prior
+                # behavior of resource_exists() returning False.
+                stderr_lower = result.stderr.lower()
+                if "does not exist" in stderr_lower or "not found" in stderr_lower:
+                    raise GroupNotFoundError(f"User {username} not found")
+                raise GroupOperationError(
+                    f"Failed to get user info for {username}: {result.stderr}"
+                )
+
+            try:
+                user_info = json.loads(result.stdout)
+            except json.JSONDecodeError as e:
+                raise GroupOperationError(
+                    f"Failed to parse user info for {username}: {result.stdout}"
+                ) from e
+
+            # `memberOf` is an array (or absent for users with no groups).
+            user_groups = sorted(user_info.get("memberOf", []) or [])
             logger.info(f"User {username} is a member of {len(user_groups)} groups")
             return user_groups
 

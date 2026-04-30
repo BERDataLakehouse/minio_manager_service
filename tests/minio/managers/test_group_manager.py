@@ -907,54 +907,126 @@ class TestIsUserInGroup:
 
 
 class TestGetUserGroups:
-    """Tests for get_user_groups method."""
+    """Tests for get_user_groups method.
+
+    The implementation issues a single ``mc admin user info <user> --json``
+    call and reads the ``memberOf`` field. These tests mock the executor
+    response directly rather than the deprecated per-group iteration.
+    """
+
+    @staticmethod
+    def _user_info_json(member_of: list[str] | None, user: str = "testuser") -> str:
+        """Build a sample 'mc admin user info --json' response."""
+        payload: dict = {
+            "status": "success",
+            "accessKey": user,
+            "userStatus": "enabled",
+            "policyName": "consoleAdmin",
+        }
+        if member_of is not None:
+            payload["memberOf"] = member_of
+        return json.dumps(payload)
 
     @pytest.mark.asyncio
     async def test_get_user_groups_success(self, group_manager_instance):
-        """Test successfully getting user's groups."""
-        with patch.object(
-            group_manager_instance,
-            "list_resources",
-            AsyncMock(return_value=["group1", "group2", "group3"]),
-        ):
-            with patch.object(
-                group_manager_instance,
-                "is_user_in_group",
-                AsyncMock(
-                    side_effect=[True, False, True]
-                ),  # user is in group1 and group3
-            ):
-                result = await group_manager_instance.get_user_groups("testuser")
+        """Test successfully getting user's groups, returned sorted."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=self._user_info_json(["group3", "group1"]),
+            stderr="",
+            return_code=0,
+            command="mc admin user info",
+        )
 
-                # Results should be sorted
-                assert result == ["group1", "group3"]
+        result = await group_manager_instance.get_user_groups("testuser")
+
+        # Results should be sorted alphabetically.
+        assert result == ["group1", "group3"]
+        # Exactly one MC subprocess call (vs the old O(num_groups) fan-out).
+        assert group_manager_instance._executor._execute_command.call_count == 1
+        called_args = group_manager_instance._executor._execute_command.call_args[0][0]
+        assert called_args[:3] == ["admin", "user", "info"]
+        assert "--json" in called_args
 
     @pytest.mark.asyncio
     async def test_get_user_groups_no_groups(self, group_manager_instance):
-        """Test get_user_groups when user is not in any group."""
-        with patch.object(
-            group_manager_instance,
-            "list_resources",
-            AsyncMock(return_value=["group1", "group2"]),
-        ):
-            with patch.object(
-                group_manager_instance,
-                "is_user_in_group",
-                AsyncMock(return_value=False),
-            ):
-                result = await group_manager_instance.get_user_groups("testuser")
+        """Test get_user_groups when user is not in any group (memberOf empty)."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=self._user_info_json([]),
+            stderr="",
+            return_code=0,
+            command="mc admin user info",
+        )
 
-                assert result == []
+        result = await group_manager_instance.get_user_groups("testuser")
+
+        assert result == []
 
     @pytest.mark.asyncio
-    async def test_get_user_groups_empty_system(self, group_manager_instance):
-        """Test get_user_groups when no groups exist."""
-        with patch.object(
-            group_manager_instance, "list_resources", AsyncMock(return_value=[])
-        ):
-            result = await group_manager_instance.get_user_groups("testuser")
+    async def test_get_user_groups_member_of_absent(self, group_manager_instance):
+        """Test get_user_groups when memberOf field is omitted from the response."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=self._user_info_json(member_of=None),
+            stderr="",
+            return_code=0,
+            command="mc admin user info",
+        )
 
-            assert result == []
+        result = await group_manager_instance.get_user_groups("testuser")
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_get_user_groups_user_not_found(self, group_manager_instance):
+        """Test get_user_groups raises GroupNotFoundError when user does not exist."""
+        from service.exceptions import GroupNotFoundError
+
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=False,
+            stdout="",
+            stderr="mc: <ERROR> The specified user does not exist.",
+            return_code=1,
+            command="mc admin user info",
+        )
+
+        with pytest.raises(GroupNotFoundError) as exc_info:
+            await group_manager_instance.get_user_groups("ghost")
+
+        assert "not found" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_get_user_groups_command_fails_other(self, group_manager_instance):
+        """Test get_user_groups raises GroupOperationError on transient failures."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=False,
+            stdout="",
+            stderr="connection refused",
+            return_code=1,
+            command="mc admin user info",
+        )
+
+        with pytest.raises(GroupOperationError) as exc_info:
+            await group_manager_instance.get_user_groups("testuser")
+
+        assert "Failed to get user info" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_get_user_groups_invalid_json(self, group_manager_instance):
+        """Test get_user_groups raises GroupOperationError on unparseable output."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout="not json",
+            stderr="",
+            return_code=0,
+            command="mc admin user info",
+        )
+
+        with pytest.raises(GroupOperationError) as exc_info:
+            await group_manager_instance.get_user_groups("testuser")
+
+        assert "Failed to parse user info" in str(exc_info.value)
 
 
 # =============================================================================
@@ -1280,18 +1352,26 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_get_user_groups_sorted(self, group_manager_instance):
-        """Test get_user_groups returns sorted list."""
-        with patch.object(
-            group_manager_instance,
-            "list_resources",
-            AsyncMock(return_value=["zebra", "alpha", "middle"]),
-        ):
-            with patch.object(
-                group_manager_instance, "is_user_in_group", AsyncMock(return_value=True)
-            ):
-                result = await group_manager_instance.get_user_groups("testuser")
+        """Test get_user_groups returns the memberOf array sorted alphabetically."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=json.dumps(
+                {
+                    "status": "success",
+                    "accessKey": "testuser",
+                    "userStatus": "enabled",
+                    "policyName": "consoleAdmin",
+                    "memberOf": ["zebra", "alpha", "middle"],
+                }
+            ),
+            stderr="",
+            return_code=0,
+            command="mc admin user info",
+        )
 
-                assert result == ["alpha", "middle", "zebra"]
+        result = await group_manager_instance.get_user_groups("testuser")
+
+        assert result == ["alpha", "middle", "zebra"]
 
     def test_group_model_properties(self):
         """Test GroupModel computed properties."""

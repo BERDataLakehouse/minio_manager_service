@@ -119,6 +119,22 @@ class TestUserCommands:
 
         assert cmd == ["admin", "user", "info", "minio_api", "testuser"]
 
+    def test_build_user_info_command_json(self, command_builder):
+        """Test building user info command with --json appended."""
+        cmd = command_builder.build_user_command(
+            action=UserAction.INFO, username="testuser", json_format=True
+        )
+
+        assert cmd == ["admin", "user", "info", "minio_api", "testuser", "--json"]
+
+    def test_build_user_command_json_only_for_info(self, command_builder):
+        """Test json_format is silently ignored for non-INFO actions."""
+        cmd = command_builder.build_user_command(
+            action=UserAction.REMOVE, username="testuser", json_format=True
+        )
+        # No --json appended for REMOVE.
+        assert cmd == ["admin", "user", "remove", "minio_api", "testuser"]
+
     def test_build_user_command_validates_username(self, command_builder):
         """Test user command validates username."""
         # Invalid username should raise error
