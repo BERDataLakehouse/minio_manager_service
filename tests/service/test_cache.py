@@ -54,6 +54,60 @@ async def test_distinct_keys_call_loader_independently():
     assert cache.size() == 2
 
 
+# ── Falsy / None values ──────────────────────────────────────────────────
+
+
+class _AssertNotCalled:
+    """Async loader that fails the test if invoked. Used to prove cache hits."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self):
+        self.calls += 1
+        raise AssertionError("Loader was invoked when it should have been a cache hit")
+
+
+@pytest.mark.asyncio
+async def test_get_or_load_caches_none_value():
+    """A loader returning None must be cached as a hit, not re-invoked.
+
+    Critical for queries like get_metadata(tenant) which legitimately
+    returns None when the tenant has no metadata row.
+    """
+    cache: SingleFlightTTLCache[int | None] = SingleFlightTTLCache(
+        name="t", maxsize=8, ttl_seconds=60
+    )
+    calls = 0
+
+    async def loader():
+        nonlocal calls
+        calls += 1
+        return None
+
+    assert await cache.get_or_load("k", loader) is None
+    assert await cache.get_or_load("k", loader) is None
+    assert calls == 1, "None must be cached just like any other value"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [False, 0, "", [], {}])
+async def test_get_or_load_caches_falsy_values(value):
+    """Falsy values (False, 0, '', [], {}) are cached as hits."""
+    cache: SingleFlightTTLCache = SingleFlightTTLCache(
+        name="t", maxsize=8, ttl_seconds=60
+    )
+
+    async def loader():
+        return value
+
+    assert await cache.get_or_load("k", loader) == value
+    # Second call must be a hit; loader.calls would raise AssertionError.
+    sentinel = _AssertNotCalled()
+    assert await cache.get_or_load("k", sentinel) == value
+    assert sentinel.calls == 0
+
+
 # ── TTL ───────────────────────────────────────────────────────────────────
 
 

@@ -5,7 +5,18 @@ from datetime import datetime, timezone
 
 from psycopg_pool import AsyncConnectionPool
 
+from service.cache import SingleFlightTTLCache
+
 logger = logging.getLogger(__name__)
+
+# Per-replica TTL for read-side metadata caches. Aligned with the
+# GroupManager caches so the whole list_tenants path collapses to
+# ~zero work on a hot pod between mutations. Mutations explicitly
+# invalidate the affected keys for in-pod read-after-write.
+_METADATA_CACHE_TTL_SECONDS = 60.0
+
+# Sentinel key for "all metadata"; list_metadata() takes no args.
+_LIST_METADATA_CACHE_KEY = "__all__"
 
 # ── tenant_metadata queries ──────────────────────────────────────────────────
 
@@ -89,10 +100,85 @@ def _row_to_steward(row: tuple) -> dict:
 
 
 class TenantMetadataStore:
-    """Async PostgreSQL store for tenant metadata and steward assignments."""
+    """Async PostgreSQL store for tenant metadata and steward assignments.
+
+    Reads are served from per-process TTL caches (one per logical query)
+    with single-flight protection. Mutations invalidate the affected
+    keys immediately so an operator who just ran ``add_steward`` sees
+    the new state on the next read in the same pod regardless of TTL.
+    """
 
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool = pool
+
+        # ── Read-side caches ──
+        # Each cache is keyed by the natural identity of the query.
+        # Caches are intentionally per-instance (so pytest gives every
+        # test a fresh cache) and per-process (so each MMS replica
+        # maintains its own — cross-replica sharing is a future
+        # optimization).
+        self._list_metadata_cache: SingleFlightTTLCache[list[dict]] = (
+            SingleFlightTTLCache(
+                name="list_metadata",
+                maxsize=1,
+                ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
+            )
+        )
+        self._metadata_cache: SingleFlightTTLCache[dict | None] = (
+            SingleFlightTTLCache(
+                name="metadata",
+                maxsize=1024,
+                ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
+            )
+        )
+        self._stewards_cache: SingleFlightTTLCache[list[dict]] = (
+            SingleFlightTTLCache(
+                name="stewards",
+                maxsize=1024,
+                ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
+            )
+        )
+        self._steward_tenants_cache: SingleFlightTTLCache[list[str]] = (
+            SingleFlightTTLCache(
+                name="steward_tenants",
+                maxsize=4096,
+                ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
+            )
+        )
+        self._is_steward_cache: SingleFlightTTLCache[bool] = SingleFlightTTLCache(
+            name="is_steward",
+            maxsize=8192,
+            ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
+        )
+
+    # ── Cache invalidation helpers ───────────────────────────────────────
+
+    def _invalidate_metadata(self, tenant_name: str) -> None:
+        """Bust caches affected by metadata create/update/delete for a tenant.
+
+        ``list_metadata`` is also dropped because it includes this tenant.
+        """
+        self._metadata_cache.invalidate(tenant_name)
+        self._list_metadata_cache.invalidate(_LIST_METADATA_CACHE_KEY)
+
+    def _invalidate_stewardship(self, tenant_name: str, username: str) -> None:
+        """Bust caches affected by add/remove_steward(tenant, user)."""
+        self._stewards_cache.invalidate(tenant_name)
+        self._steward_tenants_cache.invalidate(username)
+        self._is_steward_cache.invalidate((tenant_name, username))
+
+    def _invalidate_all_stewardship(self) -> None:
+        """Bust ALL stewardship caches (used on delete_metadata cascade).
+
+        delete_metadata cascades to tenant_stewards via FK. We don't
+        know which users had stewardship rows for the deleted tenant
+        without an extra query, so we drop the per-user / per-(tenant,
+        user) caches wholesale. This is rare (only on tenant deletion)
+        and keeps the invariant simple.
+        """
+        self._stewards_cache.invalidate_all()
+        self._steward_tenants_cache.invalidate_all()
+        self._is_steward_cache.invalidate_all()
 
     # ── tenant_metadata ──────────────────────────────────────────────────
 
@@ -124,18 +210,28 @@ class TenantMetadataStore:
             )
             row = await cur.fetchone()
             await conn.commit()
+        # Invalidate even on the conflict (None) path: a concurrent
+        # writer may have just inserted and we want subsequent reads
+        # to refetch rather than return our stale cached miss.
+        self._invalidate_metadata(tenant_name)
         if row is None:
             return None
         return _row_to_metadata(row)
 
     async def get_metadata(self, tenant_name: str) -> dict | None:
         """Return metadata for a single tenant, or None if not found."""
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(_SELECT_METADATA, {"tenant_name": tenant_name})
-            row = await cur.fetchone()
-        if row is None:
-            return None
-        return _row_to_metadata(row)
+
+        async def _load() -> dict | None:
+            async with self._pool.connection() as conn:
+                cur = await conn.execute(
+                    _SELECT_METADATA, {"tenant_name": tenant_name}
+                )
+                row = await cur.fetchone()
+            if row is None:
+                return None
+            return _row_to_metadata(row)
+
+        return await self._metadata_cache.get_or_load(tenant_name, _load)
 
     async def update_metadata(
         self,
@@ -176,6 +272,9 @@ class TenantMetadataStore:
             cur = await conn.execute(sql, params)
             row = await cur.fetchone()
             await conn.commit()
+        # Bust before returning so any in-flight reader behind us
+        # picks up the new value rather than our pre-update cached row.
+        self._invalidate_metadata(tenant_name)
         if row is None:
             return None
         return _row_to_metadata(row)
@@ -185,14 +284,29 @@ class TenantMetadataStore:
         async with self._pool.connection() as conn:
             cur = await conn.execute(_DELETE_METADATA, {"tenant_name": tenant_name})
             await conn.commit()
-        return cur.rowcount > 0
+        deleted = cur.rowcount > 0
+        if deleted:
+            # Metadata row gone; cascade also drops every steward row
+            # for this tenant, so we wipe ALL stewardship caches (we
+            # don't know which usernames were affected without an
+            # extra query). delete_metadata is rare, so the wholesale
+            # invalidation is acceptable.
+            self._invalidate_metadata(tenant_name)
+            self._invalidate_all_stewardship()
+        return deleted
 
     async def list_metadata(self) -> list[dict]:
         """Return metadata for all tenants."""
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(_SELECT_ALL_METADATA)
-            rows = await cur.fetchall()
-        return [_row_to_metadata(row) for row in rows]
+
+        async def _load() -> list[dict]:
+            async with self._pool.connection() as conn:
+                cur = await conn.execute(_SELECT_ALL_METADATA)
+                rows = await cur.fetchall()
+            return [_row_to_metadata(row) for row in rows]
+
+        return await self._list_metadata_cache.get_or_load(
+            _LIST_METADATA_CACHE_KEY, _load
+        )
 
     # ── tenant_stewards ──────────────────────────────────────────────────
 
@@ -213,6 +327,10 @@ class TenantMetadataStore:
             )
             row = await cur.fetchone()
             await conn.commit()
+        # Membership of (tenant -> stewards) and (user -> tenants) just
+        # changed; bust both per-key caches plus the (tenant, user)
+        # is_steward entry.
+        self._invalidate_stewardship(tenant_name, username)
         return _row_to_steward(row)
 
     async def remove_steward(self, tenant_name: str, username: str) -> bool:
@@ -223,27 +341,49 @@ class TenantMetadataStore:
                 {"tenant_name": tenant_name, "username": username},
             )
             await conn.commit()
-        return cur.rowcount > 0
+        removed = cur.rowcount > 0
+        # Invalidate even on the "not removed" path (the cached entries
+        # may already be stale relative to a concurrent writer).
+        self._invalidate_stewardship(tenant_name, username)
+        return removed
 
     async def get_stewards(self, tenant_name: str) -> list[dict]:
         """Return all stewards for a tenant."""
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(_SELECT_STEWARDS, {"tenant_name": tenant_name})
-            rows = await cur.fetchall()
-        return [_row_to_steward(row) for row in rows]
+
+        async def _load() -> list[dict]:
+            async with self._pool.connection() as conn:
+                cur = await conn.execute(
+                    _SELECT_STEWARDS, {"tenant_name": tenant_name}
+                )
+                rows = await cur.fetchall()
+            return [_row_to_steward(row) for row in rows]
+
+        return await self._stewards_cache.get_or_load(tenant_name, _load)
 
     async def is_steward(self, tenant_name: str, username: str) -> bool:
         """Check if a user is a steward for the given tenant."""
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                _IS_STEWARD,
-                {"tenant_name": tenant_name, "username": username},
-            )
-            return await cur.fetchone() is not None
+
+        async def _load() -> bool:
+            async with self._pool.connection() as conn:
+                cur = await conn.execute(
+                    _IS_STEWARD,
+                    {"tenant_name": tenant_name, "username": username},
+                )
+                return await cur.fetchone() is not None
+
+        return await self._is_steward_cache.get_or_load(
+            (tenant_name, username), _load
+        )
 
     async def get_steward_tenants(self, username: str) -> list[str]:
         """Return tenant names where the user is a steward."""
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(_SELECT_STEWARD_TENANTS, {"username": username})
-            rows = await cur.fetchall()
-        return [row[0] for row in rows]
+
+        async def _load() -> list[str]:
+            async with self._pool.connection() as conn:
+                cur = await conn.execute(
+                    _SELECT_STEWARD_TENANTS, {"username": username}
+                )
+                rows = await cur.fetchall()
+            return [row[0] for row in rows]
+
+        return await self._steward_tenants_cache.get_or_load(username, _load)

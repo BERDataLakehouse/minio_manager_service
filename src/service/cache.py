@@ -37,6 +37,10 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+# Sentinel returned by LRUCache.get(key, default=...) on miss. Allows
+# callers to distinguish a cached ``None`` value from "no entry".
+_MISSING: object = object()
+
 
 class SingleFlightTTLCache(Generic[T]):
     """An LRU+TTL cache with per-key request coalescing.
@@ -87,17 +91,19 @@ class SingleFlightTTLCache(Generic[T]):
         Raises:
             Whatever ``loader`` raises. The exception is *not* cached.
         """
-        # Fast path: cache hit, no lock acquisition.
-        cached = self._cache.get(key)
-        if cached is not None:
-            return cached
+        # Fast path: cache hit, no lock acquisition. We use a private
+        # sentinel as the default so a legitimately-cached ``None``
+        # value is treated as a hit, not a miss.
+        cached = self._cache.get(key, default=_MISSING)
+        if cached is not _MISSING:
+            return cached  # type: ignore[return-value]
 
         async with self._lock:
             # Re-check under the lock: another coroutine may have just
             # populated the cache while we were waiting.
-            cached = self._cache.get(key)
-            if cached is not None:
-                return cached
+            cached = self._cache.get(key, default=_MISSING)
+            if cached is not _MISSING:
+                return cached  # type: ignore[return-value]
 
             inflight = self._inflight.get(key)
             if inflight is not None:
