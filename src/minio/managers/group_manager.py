@@ -486,18 +486,31 @@ class GroupManager(ResourceManager[GroupModel]):
         Kept private so the cache layer is the only entry point for
         callers; tests can still target this directly to exercise the
         underlying MC call without cache interference.
+
+        Implementation note: this used to issue *two* MC subprocess
+        calls per invocation — first ``resource_exists()`` (which
+        itself runs ``mc admin group info <group>``) and then
+        ``mc admin group info <group> --json``. Both ran the same MC
+        sub-command; the first throwaway call was used purely to
+        distinguish "group not found" from "transient error". We now
+        make a single ``--json`` call and infer the not-found case
+        from the MC error string in stderr. Halves the underlying MC
+        call volume on every cache miss.
         """
         async with self.operation_context("get_group_members"):
-            # Check if group exists
-            if not await self.resource_exists(group_name):
-                raise GroupNotFoundError(f"Group {group_name} not found")
-
-            # Get group info and parse members
             cmd_args = self._command_builder.build_group_command(
                 GroupAction.INFO, group_name, json_format=True
             )
             result = await self._executor._execute_command(cmd_args)
             if not result.success:
+                # mc returns a non-zero exit when the group does not
+                # exist; surface that as GroupNotFoundError to mirror
+                # the prior behavior of the resource_exists()-based
+                # pre-check. Other failures stay as GroupOperationError
+                # so callers can distinguish transient/network issues.
+                stderr_lower = result.stderr.lower()
+                if "does not exist" in stderr_lower or "not found" in stderr_lower:
+                    raise GroupNotFoundError(f"Group {group_name} not found")
                 raise GroupOperationError(f"Failed to get group info: {result.stderr}")
 
             members = await self._parse_group_members(result.stdout)

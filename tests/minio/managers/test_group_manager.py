@@ -17,7 +17,7 @@ from s3.models.policy import (
     PolicyModel,
     PolicyStatement,
 )
-from service.exceptions import GroupOperationError
+from service.exceptions import GroupNotFoundError, GroupOperationError
 
 
 # =============================================================================
@@ -731,83 +731,87 @@ class TestRemoveUserFromGroup:
 
 
 class TestGetGroupMembers:
-    """Tests for get_group_members method."""
+    """Tests for get_group_members method.
+
+    The implementation now issues a single ``mc admin group info --json``
+    call (no separate ``resource_exists`` pre-check) and infers
+    'group not found' from the MC error string in stderr.
+    """
 
     @pytest.mark.asyncio
     async def test_get_group_members_success(
         self, group_manager_instance, sample_group_info_json
     ):
         """Test successfully getting group members."""
-        with patch.object(
-            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
-        ):
-            group_manager_instance._executor._execute_command.return_value = (
-                CommandResult(
-                    success=True,
-                    stdout=sample_group_info_json,
-                    stderr="",
-                    return_code=0,
-                    command="mc admin group info",
-                )
-            )
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=sample_group_info_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group info",
+        )
 
-            members = await group_manager_instance.get_group_members("testgroup")
+        members = await group_manager_instance.get_group_members("testgroup")
 
-            assert members == ["user1", "user2", "user3"]
+        assert members == ["user1", "user2", "user3"]
+        # Exactly one MC subprocess call — the redundant
+        # resource_exists pre-check has been dropped.
+        assert group_manager_instance._executor._execute_command.call_count == 1
 
     @pytest.mark.asyncio
     async def test_get_group_members_empty_group(
         self, group_manager_instance, sample_empty_group_info_json
     ):
         """Test get_group_members returns empty list for empty group."""
-        with patch.object(
-            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
-        ):
-            group_manager_instance._executor._execute_command.return_value = (
-                CommandResult(
-                    success=True,
-                    stdout=sample_empty_group_info_json,
-                    stderr="",
-                    return_code=0,
-                    command="mc admin group info",
-                )
-            )
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=sample_empty_group_info_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group info",
+        )
 
-            members = await group_manager_instance.get_group_members("emptygroup")
+        members = await group_manager_instance.get_group_members("emptygroup")
 
-            assert members == []
+        assert members == []
 
     @pytest.mark.asyncio
     async def test_get_group_members_group_not_exists(self, group_manager_instance):
-        """Test get_group_members fails when group doesn't exist."""
-        with patch.object(
-            group_manager_instance, "resource_exists", AsyncMock(return_value=False)
-        ):
-            with pytest.raises(GroupOperationError) as exc_info:
-                await group_manager_instance.get_group_members("nonexistent")
+        """When mc reports 'does not exist' on stderr, raise GroupNotFoundError."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=False,
+            stdout="",
+            stderr="mc: <ERROR> The specified group does not exist.",
+            return_code=1,
+            command="mc admin group info",
+        )
 
-            assert "not found" in str(exc_info.value)
+        with pytest.raises(GroupNotFoundError) as exc_info:
+            await group_manager_instance.get_group_members("nonexistent")
+
+        assert "not found" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
-    async def test_get_group_members_command_fails(self, group_manager_instance):
-        """Test get_group_members raises error when command fails."""
-        with patch.object(
-            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
-        ):
-            group_manager_instance._executor._execute_command.return_value = (
-                CommandResult(
-                    success=False,
-                    stdout="",
-                    stderr="Command failed",
-                    return_code=1,
-                    command="mc admin group info",
-                )
-            )
+    async def test_get_group_members_command_fails_other(self, group_manager_instance):
+        """Transient/non-not-found failures stay as GroupOperationError."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=False,
+            stdout="",
+            stderr="connection refused",
+            return_code=1,
+            command="mc admin group info",
+        )
 
-            with pytest.raises(GroupOperationError) as exc_info:
-                await group_manager_instance.get_group_members("testgroup")
+        with pytest.raises(GroupOperationError) as exc_info:
+            await group_manager_instance.get_group_members("testgroup")
 
-            assert "Failed to get group info" in str(exc_info.value)
+        assert "Failed to get group info" in str(exc_info.value)
+        # Importantly, GroupNotFoundError must NOT be raised here:
+        # the caller may want to distinguish a transient outage from a
+        # genuinely missing group. GroupNotFoundError is a subclass of
+        # GroupOperationError, so we additionally check the exception
+        # type isn't the more specific one.
+        assert not isinstance(exc_info.value, GroupNotFoundError)
 
 
 # =============================================================================
