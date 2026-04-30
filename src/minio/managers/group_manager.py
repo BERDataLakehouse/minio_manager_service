@@ -1,7 +1,8 @@
 import json
 import logging
-from typing import List
+from typing import List, Optional
 
+from service.cache import SingleFlightTTLCache
 from service.exceptions import GroupNotFoundError, GroupOperationError
 from s3.core.s3_client import S3Client
 from minio.models.command import GroupAction, UserAction
@@ -15,6 +16,18 @@ logger = logging.getLogger(__name__)
 
 RESOURCE_TYPE = "group"
 
+# Per-replica TTL for read-side group caches. Short enough to bound
+# staleness (operators don't usually wait minutes), long enough to
+# absorb the bursty Tenants-page traffic pattern that historically
+# starved an MMS pod with mc-storms. Mutations explicitly invalidate.
+_GROUP_MEMBERS_CACHE_TTL_SECONDS = 60.0
+_GROUPS_LIST_CACHE_TTL_SECONDS = 60.0
+
+# Single sentinel key for the "all groups" cache; list_resources is
+# parameterless from the cache's perspective (the optional name_filter
+# is applied to the cached list, not the cache key).
+_GROUPS_LIST_CACHE_KEY = "__all__"
+
 
 class GroupManager(ResourceManager[GroupModel]):
     """GroupManager for basic group operations with patterns and generic CRUD."""
@@ -27,6 +40,21 @@ class GroupManager(ResourceManager[GroupModel]):
         # Lazy initialization of dependent managers to avoid circular imports
         self._policy_manager = None
         self._user_manager = None
+
+        # Per-replica caches for the read-heavy paths (list_tenants,
+        # get_tenant_*, sharing checks). Mutations call self._invalidate_*
+        # to guarantee in-pod read-after-write consistency; the TTL acts
+        # only as a backstop for cross-pod / external mutations.
+        self._members_cache: SingleFlightTTLCache[List[str]] = SingleFlightTTLCache(
+            name="group_members",
+            maxsize=1024,
+            ttl_seconds=_GROUP_MEMBERS_CACHE_TTL_SECONDS,
+        )
+        self._groups_list_cache: SingleFlightTTLCache[List[str]] = SingleFlightTTLCache(
+            name="groups_list",
+            maxsize=1,
+            ttl_seconds=_GROUPS_LIST_CACHE_TTL_SECONDS,
+        )
 
     @property
     def user_manager(self):
@@ -98,6 +126,37 @@ class GroupManager(ResourceManager[GroupModel]):
                 f"Failed to parse group list command output: {stdout}"
             ) from e
 
+    # === Cached read-side overrides ===
+
+    async def list_resources(self, name_filter: Optional[str] = None) -> List[str]:
+        """List all groups, served from a per-process TTL cache.
+
+        The unfiltered list is cached under a single sentinel key; the
+        ``name_filter`` (when supplied) is applied to the cached copy
+        so we do not multiply cache entries per filter substring.
+
+        Mutations on this manager (group create/delete) explicitly
+        invalidate the cache for read-after-write consistency in-pod.
+        """
+        all_groups = await self._groups_list_cache.get_or_load(
+            _GROUPS_LIST_CACHE_KEY,
+            lambda: super(GroupManager, self).list_resources(name_filter=None),
+        )
+        if not name_filter:
+            return all_groups
+        needle = name_filter.lower()
+        return [name for name in all_groups if needle in name.lower()]
+
+    # === Cache invalidation helpers ===
+
+    def _invalidate_members(self, group_name: str) -> None:
+        """Invalidate the cached membership of a single group."""
+        self._members_cache.invalidate(group_name)
+
+    def _invalidate_groups_list(self) -> None:
+        """Invalidate the cached list of all groups."""
+        self._groups_list_cache.invalidate(_GROUPS_LIST_CACHE_KEY)
+
     # === Single Group Creation Helper ===
 
     async def _create_single_group(
@@ -138,6 +197,12 @@ class GroupManager(ResourceManager[GroupModel]):
                 raise GroupOperationError(
                     f"Failed to create group{suffix}: {result.stderr}"
                 )
+
+            # Group set just changed: drop the cached "all groups" list,
+            # and seed the membership cache with the initial members so a
+            # follow-up read is a hit (also avoids one MC round-trip).
+            self._invalidate_groups_list()
+            self._invalidate_members(group_name)
 
         # Attach group policy only if not already attached
         if not await self.policy_manager.is_policy_attached_to_group(group_name):
@@ -199,6 +264,11 @@ class GroupManager(ResourceManager[GroupModel]):
                 result = await self._executor._execute_command(cmd_args)
                 if result.success:
                     self.logger.info(f"Deleted read-only group: {ro_group_name}")
+                    # Drop the RO group's cached membership; the
+                    # base group's caches are dropped in
+                    # _post_delete_cleanup once the base group itself
+                    # has been removed.
+                    self._invalidate_members(ro_group_name)
                 else:
                     self.logger.warning(
                         f"Failed to delete read-only group {ro_group_name}: {result.stderr}"
@@ -208,6 +278,13 @@ class GroupManager(ResourceManager[GroupModel]):
 
     async def _post_delete_cleanup(self, name: str) -> None:
         """Clean up group resources after deletion."""
+        # Drop cached state for the deleted group: its membership and
+        # the global group-list. Done unconditionally so that even if
+        # the shared-directory cleanup below raises, the next reader
+        # sees the post-delete state.
+        self._invalidate_members(name)
+        self._invalidate_groups_list()
+
         try:
             await self._delete_group_shared_directory(name)
         except Exception as e:
@@ -336,6 +413,9 @@ class GroupManager(ResourceManager[GroupModel]):
                     f"Failed to add user to group: {result.stderr}"
                 )
 
+            # Membership of this group just changed; bust the cache so
+            # subsequent reads in this pod see the new member.
+            self._invalidate_members(group_name)
             logger.info(f"Added user {username} to group {group_name}")
 
     async def remove_user_from_group(self, username: str, group_name: str) -> None:
@@ -377,14 +457,35 @@ class GroupManager(ResourceManager[GroupModel]):
                     f"Failed to remove user from group: {result.stderr}"
                 )
 
+            # Membership of this group just changed; bust the cache so
+            # subsequent reads in this pod see the removal.
+            self._invalidate_members(group_name)
             logger.info(f"Removed user {username} from group {group_name}")
 
     async def get_group_members(self, group_name: str) -> List[str]:
         """
         Retrieve a list of all usernames that are members of the specified group.
 
+        Reads are served from a per-process TTL cache with single-flight
+        protection: concurrent misses for the same group share one MC
+        subprocess call, and mutations on this manager
+        (``add_user_to_group``, ``remove_user_from_group``) explicitly
+        invalidate the relevant key for read-after-write consistency
+        within the pod.
+
         Args:
             group_name: The name of the group to get members for
+        """
+        return await self._members_cache.get_or_load(
+            group_name, lambda: self._fetch_group_members(group_name)
+        )
+
+    async def _fetch_group_members(self, group_name: str) -> List[str]:
+        """Uncached MC fetch backing :meth:`get_group_members`.
+
+        Kept private so the cache layer is the only entry point for
+        callers; tests can still target this directly to exercise the
+        underlying MC call without cache interference.
         """
         async with self.operation_context("get_group_members"):
             # Check if group exists
