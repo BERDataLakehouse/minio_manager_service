@@ -416,8 +416,7 @@ def validate_policy_name(policy_name: str) -> str:
         policy_name.startswith(prefix) for prefix in DATA_GOVERNANCE_POLICY_PREFIXES
     ):
         raise PolicyValidationError(
-            f"Policy name should start with '{USER_HOME_POLICY_PREFIX}', "
-            f"'{USER_SYSTEM_POLICY_PREFIX}', or '{GROUP_POLICY_PREFIX}'"
+            f"Policy name should start with '{USER_HOME_POLICY_PREFIX}', '{USER_SYSTEM_POLICY_PREFIX}', or '{GROUP_POLICY_PREFIX}'"
         )
 
     return policy_name
