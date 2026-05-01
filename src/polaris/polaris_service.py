@@ -9,21 +9,6 @@ from service.exceptions import PolarisOperationError
 
 logger = logging.getLogger(__name__)
 
-NAMESPACE_READ_PRIVILEGES = (
-    "NAMESPACE_LIST",
-    "NAMESPACE_READ_PROPERTIES",
-    "TABLE_LIST",
-    "TABLE_READ_PROPERTIES",
-    "TABLE_READ_DATA",
-)
-NAMESPACE_WRITE_PRIVILEGES = (
-    *NAMESPACE_READ_PRIVILEGES,
-    "NAMESPACE_WRITE_PROPERTIES",
-    "TABLE_WRITE_PROPERTIES",
-    "TABLE_WRITE_DATA",
-)
-NAMESPACE_ACL_CATALOG_PRIVILEGES = ("NAMESPACE_LIST",)
-
 
 class PolarisService:
     """Service to interact with Apache Polaris management REST API."""
@@ -339,116 +324,6 @@ class PolarisService:
             json=payload,
         )
 
-    async def grant_namespace_privilege(
-        self,
-        catalog: str,
-        role_name: str,
-        namespace: Sequence[str],
-        privilege: str,
-    ) -> Dict[str, Any]:
-        """Grant a namespace-scoped privilege to a catalog role."""
-        namespace_parts = _normalize_namespace(namespace)
-        existing = await self.list_grants_for_catalog_role(catalog, role_name)
-        if _has_namespace_grant(existing, namespace_parts, privilege):
-            logger.info(
-                "Namespace privilege '%s' already granted to role '%s' on %s/%s, skipping.",
-                privilege,
-                role_name,
-                catalog,
-                ".".join(namespace_parts),
-            )
-            return {}
-
-        payload = {
-            "grant": {
-                "type": "namespace",
-                "namespace": list(namespace_parts),
-                "privilege": privilege,
-            }
-        }
-        return await self._request(
-            "PUT",
-            f"/catalogs/{catalog}/catalog-roles/{role_name}/grants",
-            json=payload,
-        )
-
-    async def revoke_namespace_privilege(
-        self,
-        catalog: str,
-        role_name: str,
-        namespace: Sequence[str],
-        privilege: str,
-    ) -> Dict[str, Any]:
-        """Revoke a namespace-scoped privilege from a catalog role."""
-        namespace_parts = _normalize_namespace(namespace)
-        existing = await self.list_grants_for_catalog_role(catalog, role_name)
-        if not _has_namespace_grant(existing, namespace_parts, privilege):
-            logger.info(
-                "Namespace privilege '%s' is not granted to role '%s' on %s/%s, skipping revoke.",
-                privilege,
-                role_name,
-                catalog,
-                ".".join(namespace_parts),
-            )
-            return {}
-
-        payload = {
-            "grant": {
-                "type": "namespace",
-                "namespace": list(namespace_parts),
-                "privilege": privilege,
-            }
-        }
-        return await self._request(
-            "DELETE",
-            f"/catalogs/{catalog}/catalog-roles/{role_name}/grants",
-            json=payload,
-        )
-
-    async def ensure_namespace_acl_role_bindings(
-        self,
-        catalog: str,
-        catalog_role: str,
-        principal_role: str,
-        namespace: Sequence[str],
-        access_level: str,
-    ) -> None:
-        """Ensure Polaris roles and grants for one namespace ACL role record."""
-        namespace_parts = _normalize_namespace(namespace)
-        await self.create_catalog_role(catalog, catalog_role)
-        for privilege in NAMESPACE_ACL_CATALOG_PRIVILEGES:
-            await self.grant_catalog_privilege(catalog, catalog_role, privilege)
-        for privilege in namespace_privileges_for_access_level(access_level):
-            await self.grant_namespace_privilege(
-                catalog,
-                catalog_role,
-                namespace_parts,
-                privilege,
-            )
-        await self.create_principal_role(principal_role)
-        await self.grant_catalog_role_to_principal_role(
-            catalog,
-            catalog_role,
-            principal_role,
-        )
-
-    async def revoke_namespace_acl_role_privileges(
-        self,
-        catalog: str,
-        catalog_role: str,
-        namespace: Sequence[str],
-        access_level: str,
-    ) -> None:
-        """Revoke all namespace-scoped privileges for an ACL role."""
-        namespace_parts = _normalize_namespace(namespace)
-        for privilege in namespace_privileges_for_access_level(access_level):
-            await self.revoke_namespace_privilege(
-                catalog,
-                catalog_role,
-                namespace_parts,
-                privilege,
-            )
-
     async def create_principal_role(self, role_name: str) -> Dict[str, Any]:
         """Create a principal role."""
         payload = {"principalRole": {"name": role_name, "properties": {}}}
@@ -719,8 +594,7 @@ class PolarisService:
         await self.delete_all_namespaces(tenant_name)
 
         # Delete catalog roles explicitly; Polaris will not drop a catalog while
-        # catalog roles such as catalog_admin, tenant readers/writers, or
-        # namespace ACL roles remain.
+        # catalog roles such as catalog_admin or tenant readers/writers remain.
         await self.delete_all_catalog_roles(tenant_name)
 
         # Delete the catalog after child resources are gone.
@@ -799,16 +673,6 @@ class PolarisService:
         )
 
 
-def namespace_privileges_for_access_level(access_level: str) -> tuple[str, ...]:
-    """Return the Polaris namespace privilege set for a read or write grant."""
-    normalized = access_level.strip().lower()
-    if normalized == "read":
-        return NAMESPACE_READ_PRIVILEGES
-    if normalized == "write":
-        return NAMESPACE_WRITE_PRIVILEGES
-    raise ValueError("access_level must be 'read' or 'write'")
-
-
 def _normalize_namespace(namespace: Sequence[str]) -> tuple[str, ...]:
     if isinstance(namespace, str):
         raise ValueError("namespace must be a sequence, not a dotted string")
@@ -848,17 +712,3 @@ def _unwrap_grant_resource(grant: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(nested, dict):
         return nested
     return grant
-
-
-def _has_namespace_grant(
-    grants: Sequence[Dict[str, Any]],
-    namespace: Sequence[str],
-    privilege: str,
-) -> bool:
-    namespace_parts = list(namespace)
-    return any(
-        grant.get("type") == "namespace"
-        and grant.get("namespace") == namespace_parts
-        and grant.get("privilege") == privilege
-        for grant in grants
-    )

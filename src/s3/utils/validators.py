@@ -30,14 +30,12 @@ BUILT_IN_POLICIES = [
 USER_HOME_POLICY_PREFIX = "user-home-policy-"
 USER_SYSTEM_POLICY_PREFIX = "user-system-policy-"
 GROUP_POLICY_PREFIX = "group-policy-"
-NAMESPACE_ACL_POLICY_PREFIX = "namespace-acl-"
 
 # Allowed policy prefixes for data governance policies
 DATA_GOVERNANCE_POLICY_PREFIXES = [
     USER_HOME_POLICY_PREFIX,
     USER_SYSTEM_POLICY_PREFIX,
     GROUP_POLICY_PREFIX,
-    NAMESPACE_ACL_POLICY_PREFIX,
 ]
 
 # =============================================================================
@@ -419,8 +417,7 @@ def validate_policy_name(policy_name: str) -> str:
     ):
         raise PolicyValidationError(
             f"Policy name should start with '{USER_HOME_POLICY_PREFIX}', "
-            f"'{USER_SYSTEM_POLICY_PREFIX}', '{GROUP_POLICY_PREFIX}', "
-            f"or '{NAMESPACE_ACL_POLICY_PREFIX}'"
+            f"'{USER_SYSTEM_POLICY_PREFIX}', or '{GROUP_POLICY_PREFIX}'"
         )
 
     return policy_name

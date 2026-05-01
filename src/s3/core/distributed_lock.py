@@ -124,37 +124,6 @@ class DistributedLockManager:
             except Exception as e:
                 logger.warning(f"Failed to release credential lock '{lock_key}': {e}")
 
-    @asynccontextmanager
-    async def namespace_acl_lock(self, username: str, timeout: Optional[int] = None):
-        """
-        Acquire a distributed lock for namespace ACL reconciliation for one user.
-
-        Namespace ACL sync rewrites a consolidated per-user MinIO policy and
-        reconciles Polaris principal-role assignments. Serializing by user
-        prevents concurrent grant/revoke calls from racing those side effects.
-        """
-        timeout = timeout or self.default_timeout
-        lock_key = f"namespace_acl:{username}"
-        lock = self.redis.lock(name=lock_key, timeout=timeout)
-
-        if not await lock.acquire(blocking=True, blocking_timeout=timeout):
-            raise PolicyOperationError(
-                f"Namespace ACL reconciliation for user '{username}' timed out after "
-                f"{timeout}s. Try again later."
-            )
-
-        logger.info(f"Acquired namespace ACL lock for user '{username}'")
-        try:
-            yield lock
-        finally:
-            try:
-                await lock.release()
-                logger.info(f"Released namespace ACL lock for user '{username}'")
-            except Exception as e:
-                logger.warning(
-                    f"Failed to release namespace ACL lock '{lock_key}': {e}"
-                )
-
     async def is_policy_locked(self, policy_name: str) -> bool:
         """
         Check if a policy is currently locked by any instance.
