@@ -10,7 +10,7 @@ dependencies = [
     "uvicorn==0.42.0",
     "httpx==0.28.1",
     "python-dotenv==1.2.2",
-    "pydantic==2.12.5",
+    "pydantic==2.13.3",
     "aiohttp==3.13.3",
     "cacheout==0.16.0",
     "aiobotocore==3.3.0",
