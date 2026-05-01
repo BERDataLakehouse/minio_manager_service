@@ -321,8 +321,7 @@ async def get_group_sql_warehouse_prefix(
     if not is_member and not is_ro_member:
         raise DataGovernanceError("User is not a member of the group")
 
-    # Get group SQL warehouse prefix (tenant SQL warehouse) using base_group
-    sql_warehouse_prefix = f"s3a://{app_state.group_manager.config.default_bucket}/{app_state.group_manager.tenant_sql_warehouse_prefix}/{base_group}/"
+    sql_warehouse_prefix = f"{app_state.tenant_sql_warehouse_base}/{base_group}/"
 
     response = GroupSqlWarehousePrefixResponse(
         group_name=base_group,
@@ -349,7 +348,7 @@ async def get_my_sql_warehouse_prefix(
     app_state = get_app_state(request)
 
     username = authenticated_user.user
-    sql_warehouse_prefix = f"s3a://{app_state.user_manager.config.default_bucket}/{app_state.user_manager.users_sql_warehouse_prefix}/{username}/"
+    sql_warehouse_prefix = f"{app_state.users_sql_warehouse_base}/{username}/"
 
     response = UserSqlWarehousePrefixResponse(
         username=username,
