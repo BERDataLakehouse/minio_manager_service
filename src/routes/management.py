@@ -127,6 +127,32 @@ class UserNamesResponse(BaseModel):
     total_count: Annotated[int, Field(description="Total number of users", ge=0)]
 
 
+class MigrationError(BaseModel):
+    """A single error encountered during a bulk operation."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    resource_type: Annotated[str, Field(description="Type of resource (user/group)")]
+    resource_name: Annotated[str, Field(description="Name of the resource")]
+    error: Annotated[str, Field(description="Error message")]
+
+
+class RotateAllCredentialsResponse(BaseModel):
+    """Response model for bulk credential rotation."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    users_rotated: Annotated[
+        int, Field(description="Number of users whose credentials were rotated", ge=0)
+    ]
+    users_failed: Annotated[
+        int, Field(description="Number of users whose rotation failed", ge=0)
+    ]
+    errors: Annotated[list[MigrationError], Field(description="Errors encountered")]
+    performed_by: Annotated[str, Field(description="Admin who performed the operation")]
+    timestamp: Annotated[datetime, Field(description="When operation was performed")]
+
+
 # ===== USER MANAGEMENT ENDPOINTS =====
 
 
@@ -534,14 +560,52 @@ async def delete_group(
 # ===== MIGRATION ENDPOINTS =====
 
 
-class MigrationError(BaseModel):
-    """A single error encountered during migration."""
+@router.post(
+    "/credentials/rotate-all-credentials",
+    response_model=RotateAllCredentialsResponse,
+    summary="Rotate all users' credentials",
+    description=(
+        "Force-rotate credentials for every user in the system. "
+        "Each rotation is independent — errors do not block others. "
+        "Returns counts of successes and failures with error details."
+    ),
+)
+async def rotate_all_credentials(
+    request: Request,
+    authenticated_user=Depends(require_admin),
+):
+    """Rotate credentials for all users in the system."""
+    app_state = get_app_state(request)
+    errors: list[MigrationError] = []
+    users_rotated = 0
 
-    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+    all_usernames = await app_state.user_manager.list_resources()
+    logger.info(f"Rotating credentials for {len(all_usernames)} users")
 
-    resource_type: Annotated[str, Field(description="Type of resource (user/group)")]
-    resource_name: Annotated[str, Field(description="Name of the resource")]
-    error: Annotated[str, Field(description="Error message")]
+    for username in all_usernames:
+        try:
+            await app_state.credential_service.rotate(username)
+            users_rotated += 1
+        except Exception as e:
+            logger.warning(f"Failed to rotate credentials for user {username}: {e}")
+            errors.append(
+                MigrationError(
+                    resource_type="user", resource_name=username, error=str(e)
+                )
+            )
+
+    logger.info(
+        f"Admin {authenticated_user.user} rotated credentials: "
+        f"{users_rotated} succeeded, {len(errors)} failed"
+    )
+
+    return RotateAllCredentialsResponse(
+        users_rotated=users_rotated,
+        users_failed=len(errors),
+        errors=errors,
+        performed_by=authenticated_user.user,
+        timestamp=datetime.now(),
+    )
 
 
 class RegeneratePoliciesResponse(BaseModel):
