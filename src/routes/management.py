@@ -13,6 +13,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from polaris.constants import (
+    ICEBERG_STORAGE_SUBDIRECTORY,
+    normalize_group_name_for_polaris,
+)
 from s3.models.policy import PolicyModel, PolicyTarget
 from s3.models.user import UserModel
 from s3.utils.validators import validate_group_name
@@ -314,6 +318,7 @@ async def delete_user(
     # Clean up cached credentials before deleting the MinIO user so that
     # a retry after partial failure doesn't fail on a missing user.
     await app_state.credential_service.delete_credentials(username)
+    await app_state.polaris_credential_service.delete_credentials(username)
 
     success = await app_state.user_manager.delete_resource(username)
     if not success:
@@ -425,6 +430,20 @@ async def create_group(
         creator=authenticated_user.user,
     )
 
+    group_config = app_state.group_manager.config
+    storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{group_name}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
+
+    await app_state.polaris_service.ensure_tenant_catalog(group_name, storage_location)
+
+    # Ensure the creator has a Polaris principal (idempotent — handles pre-Polaris users)
+    await app_state.polaris_service.create_principal(name=authenticated_user.user)
+
+    # The creator should be automatically granted the writer role
+    writer_principal_role = f"{group_name}_member"
+    await app_state.polaris_service.grant_principal_role_to_principal(
+        authenticated_user.user, writer_principal_role
+    )
+
     # Ensure tenant metadata row exists for this group
     await app_state.tenant_manager.ensure_metadata(
         group_name, created_by=authenticated_user.user
@@ -462,8 +481,29 @@ async def add_group_member(
 ):
     """Add a member to a group."""
     app_state = get_app_state(request)
+    base_group_name, is_read_only_group = normalize_group_name_for_polaris(group_name)
 
     await app_state.group_manager.add_user_to_group(username, group_name)
+
+    # Ensure tenant catalog exists in Polaris (idempotent — handles pre-Polaris groups)
+    group_config = app_state.group_manager.config
+    storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{base_group_name}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
+    await app_state.polaris_service.ensure_tenant_catalog(
+        base_group_name, storage_location
+    )
+
+    # Ensure the user has a Polaris principal (idempotent — handles pre-Polaris users)
+    await app_state.polaris_service.create_principal(name=username)
+
+    # Grant the user's principal the correct tenant principal role.
+    principal_role_name = (
+        f"{base_group_name}ro_member"
+        if is_read_only_group
+        else f"{base_group_name}_member"
+    )
+    await app_state.polaris_service.grant_principal_role_to_principal(
+        username, principal_role_name
+    )
 
     # Get updated group info
     group_info = await app_state.group_manager.get_group_info(group_name)
@@ -499,8 +539,18 @@ async def remove_group_member(
 ):
     """Remove a member from a group."""
     app_state = get_app_state(request)
+    base_group_name, is_read_only_group = normalize_group_name_for_polaris(group_name)
 
     await app_state.group_manager.remove_user_from_group(username, group_name)
+
+    principal_role_name = (
+        f"{base_group_name}ro_member"
+        if is_read_only_group
+        else f"{base_group_name}_member"
+    )
+    await app_state.polaris_service.revoke_principal_role_from_principal(
+        username, principal_role_name
+    )
 
     # Get updated group info
     group_info = await app_state.group_manager.get_group_info(group_name)
@@ -721,13 +771,29 @@ class RegeneratePoliciesResponse(BaseModel):
     timestamp: Annotated[datetime, Field(description="When operation was performed")]
 
 
+class EnsurePolarisResponse(BaseModel):
+    """Response model for bulk Polaris resource provisioning."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    users_provisioned: Annotated[
+        int, Field(description="Number of users provisioned in Polaris", ge=0)
+    ]
+    groups_provisioned: Annotated[
+        int, Field(description="Number of tenant catalogs ensured", ge=0)
+    ]
+    errors: Annotated[list[MigrationError], Field(description="Errors encountered")]
+    performed_by: Annotated[str, Field(description="Admin who performed the operation")]
+    timestamp: Annotated[datetime, Field(description="When operation was performed")]
+
+
 @router.post(
     "/migrate/regenerate-policies",
     response_model=RegeneratePoliciesResponse,
     summary="Regenerate all IAM policies",
     description=(
         "Force-regenerate HOME policies for all users and groups from the current template. "
-        "This updates pre-existing policies to include new path statements. "
+        "This updates pre-existing policies to include new path statements (e.g., Iceberg paths). "
         "Each regeneration is independent — errors do not block others."
     ),
 )
@@ -808,6 +874,132 @@ async def regenerate_all_policies(
     return RegeneratePoliciesResponse(
         users_updated=users_updated,
         groups_updated=groups_updated,
+        errors=errors,
+        performed_by=authenticated_user.user,
+        timestamp=datetime.now(),
+    )
+
+
+@router.post(
+    "/migrate/ensure-polaris-resources",
+    response_model=EnsurePolarisResponse,
+    summary="Ensure Polaris resources for all users and groups",
+    description=(
+        "Ensure all users have Polaris principals, personal catalogs, and roles. "
+        "Ensure all groups have tenant catalogs. Grant correct principal roles "
+        "based on group memberships. All operations are idempotent."
+    ),
+)
+async def ensure_all_polaris_resources(
+    request: Request,
+    authenticated_user=Depends(require_admin),
+):
+    """Provision Polaris resources for all existing users and groups."""
+    app_state = get_app_state(request)
+    polaris = app_state.polaris_service
+    errors: list[MigrationError] = []
+    users_provisioned = 0
+    groups_provisioned = 0
+
+    # Ensure tenant catalogs for all base groups first
+    all_group_names = await app_state.group_manager.list_resources()
+    base_groups = [g for g in all_group_names if not g.endswith("ro")]
+    group_config = app_state.group_manager.config
+
+    logger.info(f"Ensuring Polaris tenant catalogs for {len(base_groups)} groups")
+
+    for base_group in base_groups:
+        try:
+            storage_location = (
+                f"s3a://{group_config.default_bucket}/"
+                f"{group_config.tenant_sql_warehouse_prefix}/"
+                f"{base_group}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
+            )
+            await polaris.ensure_tenant_catalog(base_group, storage_location)
+            groups_provisioned += 1
+        except Exception as e:
+            logger.warning(
+                f"Failed to ensure tenant catalog for group {base_group}: {e}"
+            )
+            errors.append(
+                MigrationError(
+                    resource_type="group", resource_name=base_group, error=str(e)
+                )
+            )
+
+    # Provision each user: personal catalog + principal + roles + group memberships
+    all_usernames = await app_state.user_manager.list_resources()
+    user_config = app_state.user_manager.config
+
+    logger.info(f"Ensuring Polaris resources for {len(all_usernames)} users")
+
+    for username in all_usernames:
+        try:
+            # Personal catalog
+            catalog_name = f"user_{username}"
+            storage_location = (
+                f"s3a://{user_config.default_bucket}/"
+                f"{user_config.users_sql_warehouse_prefix}/"
+                f"{username}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
+            )
+            await polaris.create_catalog(
+                name=catalog_name, storage_location=storage_location
+            )
+
+            # Principal
+            await polaris.create_principal(name=username)
+
+            # Catalog role with CATALOG_MANAGE_CONTENT
+            catalog_role = "catalog_admin"
+            await polaris.create_catalog_role(
+                catalog=catalog_name, role_name=catalog_role
+            )
+            await polaris.grant_catalog_privilege(
+                catalog=catalog_name,
+                role_name=catalog_role,
+                privilege="CATALOG_MANAGE_CONTENT",
+            )
+
+            # Principal role wired to catalog role
+            principal_role = f"{username}_role"
+            await polaris.create_principal_role(role_name=principal_role)
+            await polaris.grant_catalog_role_to_principal_role(
+                catalog=catalog_name,
+                catalog_role=catalog_role,
+                principal_role=principal_role,
+            )
+            await polaris.grant_principal_role_to_principal(
+                principal=username, principal_role=principal_role
+            )
+
+            # Grant tenant roles based on group memberships
+            user_groups = await app_state.group_manager.get_user_groups(username)
+            for group_name in user_groups:
+                base_group, is_ro = normalize_group_name_for_polaris(group_name)
+                principal_role_name = (
+                    f"{base_group}ro_member" if is_ro else f"{base_group}_member"
+                )
+                await polaris.grant_principal_role_to_principal(
+                    username, principal_role_name
+                )
+
+            users_provisioned += 1
+        except Exception as e:
+            logger.warning(f"Failed to provision Polaris for user {username}: {e}")
+            errors.append(
+                MigrationError(
+                    resource_type="user", resource_name=username, error=str(e)
+                )
+            )
+
+    logger.info(
+        f"Admin {authenticated_user.user} ensured Polaris resources: "
+        f"{users_provisioned} users, {groups_provisioned} groups, {len(errors)} errors"
+    )
+
+    return EnsurePolarisResponse(
+        users_provisioned=users_provisioned,
+        groups_provisioned=groups_provisioned,
         errors=errors,
         performed_by=authenticated_user.user,
         timestamp=datetime.now(),
