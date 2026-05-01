@@ -920,8 +920,17 @@ class TestGetUserGroups:
     """
 
     @staticmethod
-    def _user_info_json(member_of: list[str] | None, user: str = "testuser") -> str:
-        """Build a sample 'mc admin user info --json' response."""
+    def _user_info_json(
+        member_of: list[str] | list[dict] | None, user: str = "testuser"
+    ) -> str:
+        """Build a sample 'mc admin user info --json' response.
+
+        Newer mc clients return ``memberOf`` as a list of group-info objects
+        (``{"name": ..., "policy": ...}``), while older ones returned a plain
+        list of group-name strings. Pass either shape — string entries are
+        wrapped into the dict shape automatically so tests default to the
+        production format that triggered the original sort-of-dicts bug.
+        """
         payload: dict = {
             "status": "success",
             "accessKey": user,
@@ -929,7 +938,12 @@ class TestGetUserGroups:
             "policyName": "consoleAdmin",
         }
         if member_of is not None:
-            payload["memberOf"] = member_of
+            payload["memberOf"] = [
+                {"name": entry, "policy": f"group-policy-{entry}"}
+                if isinstance(entry, str)
+                else entry
+                for entry in member_of
+            ]
         return json.dumps(payload)
 
     @pytest.mark.asyncio
@@ -952,6 +966,62 @@ class TestGetUserGroups:
         called_args = group_manager_instance._executor._execute_command.call_args[0][0]
         assert called_args[:3] == ["admin", "user", "info"]
         assert "--json" in called_args
+
+    @pytest.mark.asyncio
+    async def test_get_user_groups_member_of_string_list_legacy(
+        self, group_manager_instance
+    ):
+        """Older mc clients returned ``memberOf`` as a list of strings.
+
+        The parser must keep handling that legacy shape so a downgrade of
+        the mc binary doesn't break this call.
+        """
+        payload = {
+            "status": "success",
+            "accessKey": "testuser",
+            "userStatus": "enabled",
+            "policyName": "consoleAdmin",
+            "memberOf": ["zebra", "alpha"],
+        }
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=json.dumps(payload),
+            stderr="",
+            return_code=0,
+            command="mc admin user info",
+        )
+
+        result = await group_manager_instance.get_user_groups("testuser")
+
+        assert result == ["alpha", "zebra"]
+
+    @pytest.mark.asyncio
+    async def test_get_user_groups_unexpected_member_of_shape(
+        self, group_manager_instance
+    ):
+        """``memberOf`` entries that are neither strings nor dicts with a
+        ``name`` key must surface a clear GroupOperationError instead of a
+        cryptic TypeError from the sort step."""
+        payload = {
+            "status": "success",
+            "accessKey": "testuser",
+            "userStatus": "enabled",
+            "policyName": "consoleAdmin",
+            # dict entry without the expected 'name' key
+            "memberOf": [{"policy": "group-policy-x"}],
+        }
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=json.dumps(payload),
+            stderr="",
+            return_code=0,
+            command="mc admin user info",
+        )
+
+        with pytest.raises(GroupOperationError) as exc_info:
+            await group_manager_instance.get_user_groups("testuser")
+
+        assert "memberOf" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_get_user_groups_no_groups(self, group_manager_instance):
@@ -1357,7 +1427,14 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_get_user_groups_sorted(self, group_manager_instance):
-        """Test get_user_groups returns the memberOf array sorted alphabetically."""
+        """Test get_user_groups returns the memberOf array sorted alphabetically.
+
+        Regression test for the original sort-of-dicts bug: production mc
+        emits ``memberOf`` as a list of group-info objects (each with a
+        ``name`` field), and naively sorting that list raises
+        ``'<' not supported between instances of 'dict' and 'dict'``.
+        Use the dict shape here so a regression to the naive sort is caught.
+        """
         group_manager_instance._executor._execute_command.return_value = CommandResult(
             success=True,
             stdout=json.dumps(
@@ -1366,7 +1443,11 @@ class TestEdgeCases:
                     "accessKey": "testuser",
                     "userStatus": "enabled",
                     "policyName": "consoleAdmin",
-                    "memberOf": ["zebra", "alpha", "middle"],
+                    "memberOf": [
+                        {"name": "zebra", "policy": "group-policy-zebra"},
+                        {"name": "alpha", "policy": "group-policy-alpha"},
+                        {"name": "middle", "policy": "group-policy-middle"},
+                    ],
                 }
             ),
             stderr="",

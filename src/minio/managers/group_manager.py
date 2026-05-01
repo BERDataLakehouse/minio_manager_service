@@ -620,7 +620,23 @@ class GroupManager(ResourceManager[GroupModel]):
                 ) from e
 
             # `memberOf` is an array (or absent for users with no groups).
-            user_groups = sorted(user_info.get("memberOf", []) or [])
+            # Newer mc clients return a list of group-info objects of the
+            # form ``{"name": "...", "policy": "...", ...}``; older clients
+            # returned a plain list of group-name strings. Handle both so
+            # the response format change in mc doesn't break this call.
+            raw_member_of = user_info.get("memberOf") or []
+            try:
+                group_names = [
+                    entry["name"] if isinstance(entry, dict) else entry
+                    for entry in raw_member_of
+                ]
+            except (KeyError, TypeError) as e:
+                raise GroupOperationError(
+                    f"Unexpected memberOf shape in user info for {username}: "
+                    f"{raw_member_of!r}"
+                ) from e
+
+            user_groups = sorted(group_names)
             logger.info(f"User {username} is a member of {len(user_groups)} groups")
             return user_groups
 
