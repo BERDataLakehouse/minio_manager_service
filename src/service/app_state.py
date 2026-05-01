@@ -14,13 +14,16 @@ from fastapi import FastAPI, Request
 
 from credentials.service import CredentialService
 from credentials.store import CredentialStore
-from s3.core.distributed_lock import DistributedLockManager
-from s3.core.s3_client import S3Client
 from minio.managers.group_manager import GroupManager
 from minio.managers.policy_manager import PolicyManager
 from minio.managers.sharing_manager import SharingManager
 from minio.managers.tenant_manager import TenantManager
 from minio.managers.user_manager import UserManager
+from polaris.credential_service import PolarisCredentialService
+from polaris.credential_store import PolarisCredentialStore
+from polaris.polaris_service import PolarisService
+from s3.core.distributed_lock import DistributedLockManager
+from s3.core.s3_client import S3Client
 from s3.models.s3_config import S3Config
 from service.arg_checkers import not_falsy
 from service.database import DatabasePool, run_migrations
@@ -40,8 +43,11 @@ class AppState(NamedTuple):
     group_manager: GroupManager
     policy_manager: PolicyManager
     sharing_manager: SharingManager
+    polaris_service: PolarisService
+    polaris_credential_service: PolarisCredentialService
     credential_service: CredentialService
     tenant_manager: TenantManager
+    profile_client: KBaseUserProfileClient
 
 
 class RequestState(NamedTuple):
@@ -89,6 +95,12 @@ async def build_app(app: FastAPI) -> None:
             os.getenv("MMS_DB_ENCRYPTION_KEY"), "MMS_DB_ENCRYPTION_KEY"
         ),
     )
+    polaris_credential_store = PolarisCredentialStore(
+        pool=db_pool.pool,
+        encryption_key=not_falsy(
+            os.getenv("MMS_DB_ENCRYPTION_KEY"), "MMS_DB_ENCRYPTION_KEY"
+        ),
+    )
     user_profile_store = UserProfileStore(pool=db_pool.pool)
     tenant_metadata_store = TenantMetadataStore(pool=db_pool.pool)
     logger.info("Database stores initialized")
@@ -129,9 +141,25 @@ async def build_app(app: FastAPI) -> None:
         )
     logger.info("Distributed lock manager initialized and Redis connection verified")
 
-    # Initialize all managers with the shared client
-    user_manager = UserManager(minio_client, config)
-    group_manager = GroupManager(minio_client, config)
+    # Initialize Polaris Service
+    logger.info("Initializing Polaris Service...")
+    polaris_uri = not_falsy(os.getenv("POLARIS_CATALOG_URI"), "POLARIS_CATALOG_URI")
+    polaris_cred = not_falsy(os.getenv("POLARIS_CREDENTIAL"), "POLARIS_CREDENTIAL")
+    minio_endpoint = str(config.endpoint)
+    polaris_service = PolarisService(polaris_uri, polaris_cred, minio_endpoint)
+    logger.info("Polaris Service initialized")
+
+    # Initialize Polaris credential service (coordinates lock + Polaris + DB)
+    polaris_credential_service = PolarisCredentialService(
+        polaris_service=polaris_service,
+        credential_store=polaris_credential_store,
+        lock_manager=lock_manager,
+    )
+    logger.info("Polaris credential service initialized")
+
+    # Initialize all managers with the shared client and polaris hook
+    user_manager = UserManager(minio_client, config, polaris_service=polaris_service)
+    group_manager = GroupManager(minio_client, config, polaris_service=polaris_service)
     policy_manager = PolicyManager(minio_client, config, lock_manager=lock_manager)
     sharing_manager = SharingManager(
         minio_client,
@@ -155,6 +183,7 @@ async def build_app(app: FastAPI) -> None:
     tenant_manager = TenantManager(
         metadata_store=tenant_metadata_store,
         group_manager=group_manager,
+        polaris_service=polaris_service,
         profile_client=profile_client,
         minio_config=config,
     )
@@ -171,8 +200,11 @@ async def build_app(app: FastAPI) -> None:
         group_manager=group_manager,
         policy_manager=policy_manager,
         sharing_manager=sharing_manager,
+        polaris_service=polaris_service,
+        polaris_credential_service=polaris_credential_service,
         credential_service=credential_service,
         tenant_manager=tenant_manager,
+        profile_client=profile_client,
     )
     logger.info("Application state initialized")
 
@@ -200,6 +232,14 @@ async def destroy_app_state(app: FastAPI) -> None:
             logger.info("S3 client session closed")
         except Exception as e:
             logger.warning(f"Error closing S3 client session: {e}")
+
+    if hasattr(app.state, "_minio_manager_state") and app.state._minio_manager_state:
+        try:
+            # Close Polaris HTTP session
+            await app.state._minio_manager_state.polaris_service.close()
+            logger.info("Polaris HTTP session closed")
+        except Exception as e:
+            logger.warning(f"Error closing Polaris HTTP session: {e}")
 
     if hasattr(app.state, "_db_pool"):
         try:
