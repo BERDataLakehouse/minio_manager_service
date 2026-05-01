@@ -13,7 +13,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from s3.models.policy import PolicyModel, PolicyTarget
 from s3.models.user import UserModel
 from s3.utils.validators import validate_group_name
 from service.app_state import get_app_state
@@ -21,7 +20,6 @@ from service.dependencies import auth, require_admin
 from service.exceptions import (
     DataGovernanceError,
     GroupOperationError,
-    PolicyOperationError,
     TenantNotFoundError,
     UserOperationError,
 )
@@ -88,7 +86,6 @@ class GroupManagementResponse(BaseModel):
     ]
     members: Annotated[list[str], Field(description="Group members")]
     member_count: Annotated[int, Field(description="Number of members", ge=0)]
-    policy_name: Annotated[str, Field(description="Associated policy name")]
     operation: Annotated[
         str, Field(description="Operation performed (create/update/delete)")
     ]
@@ -96,23 +93,6 @@ class GroupManagementResponse(BaseModel):
         str, Field(description="Admin who performed the operation", min_length=1)
     ]
     timestamp: Annotated[datetime, Field(description="When operation was performed")]
-
-
-class PolicyListResponse(BaseModel):
-    """Response model for policy listing with pagination."""
-
-    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
-
-    policies: Annotated[list[PolicyModel], Field(description="List of policies")]
-    total_count: Annotated[int, Field(description="Total number of policies", ge=0)]
-    retrieved_count: Annotated[
-        int, Field(description="Number of policies retrieved", ge=0)
-    ]
-    page: Annotated[int, Field(description="Current page number", ge=1)]
-    page_size: Annotated[int, Field(description="Number of items per page", ge=1)]
-    total_pages: Annotated[int, Field(description="Total number of pages", ge=1)]
-    has_next: Annotated[bool, Field(description="Whether there are more pages")]
-    has_prev: Annotated[bool, Field(description="Whether there are previous pages")]
 
 
 class ResourceDeleteResponse(BaseModel):
@@ -145,6 +125,32 @@ class UserNamesResponse(BaseModel):
 
     usernames: Annotated[list[str], Field(description="List of all usernames")]
     total_count: Annotated[int, Field(description="Total number of users", ge=0)]
+
+
+class MigrationError(BaseModel):
+    """A single error encountered during a bulk operation."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    resource_type: Annotated[str, Field(description="Type of resource (user/group)")]
+    resource_name: Annotated[str, Field(description="Name of the resource")]
+    error: Annotated[str, Field(description="Error message")]
+
+
+class RotateAllCredentialsResponse(BaseModel):
+    """Response model for bulk credential rotation."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    users_rotated: Annotated[
+        int, Field(description="Number of users whose credentials were rotated", ge=0)
+    ]
+    users_failed: Annotated[
+        int, Field(description="Number of users whose rotation failed", ge=0)
+    ]
+    errors: Annotated[list[MigrationError], Field(description="Errors encountered")]
+    performed_by: Annotated[str, Field(description="Admin who performed the operation")]
+    timestamp: Annotated[datetime, Field(description="When operation was performed")]
 
 
 # ===== USER MANAGEMENT ENDPOINTS =====
@@ -355,7 +361,6 @@ async def list_groups(
                     "group_name": group_info.group_name,
                     "members": group_info.members,
                     "member_count": len(group_info.members),
-                    "policy_name": group_info.policy_name,
                 }
             )
         except Exception as e:
@@ -436,7 +441,6 @@ async def create_group(
         ro_group_name=ro_group_info.group_name,
         members=group_info.members,
         member_count=len(group_info.members),
-        policy_name=str(group_info.policy_name),
         operation="create",
         performed_by=authenticated_user.user,
         timestamp=datetime.now(),
@@ -473,7 +477,6 @@ async def add_group_member(
         ro_group_name=None,  # RO group name is only returned on group creation
         members=group_info.members,
         member_count=len(group_info.members),
-        policy_name=str(group_info.policy_name),
         operation="add_member",
         performed_by=authenticated_user.user,
         timestamp=datetime.now(),
@@ -510,7 +513,6 @@ async def remove_group_member(
         ro_group_name=None,  # RO group name is only returned on group creation
         members=group_info.members,
         member_count=len(group_info.members),
-        policy_name=str(group_info.policy_name),
         operation="remove_member",
         performed_by=authenticated_user.user,
         timestamp=datetime.now(),
@@ -555,154 +557,55 @@ async def delete_group(
     return response
 
 
-# ===== POLICY MANAGEMENT ENDPOINTS =====
-
-
-@router.get(
-    "/policies",
-    response_model=PolicyListResponse,
-    summary="List all policies",
-    description="Get a paginated list of all policies in the system.",
-)
-async def list_policies(
-    request: Request,
-    authenticated_user=Depends(require_admin),
-    page: Annotated[
-        int,
-        Query(ge=1, description="Page number (1-based)"),
-    ] = 1,
-    page_size: Annotated[
-        int,
-        Query(ge=1, le=500, description="Number of policies per page"),
-    ] = 50,
-):
-    """List all policies in the system with pagination."""
-    app_state = get_app_state(request)
-
-    # Get all policies
-    all_policies = await app_state.policy_manager.list_all_policies()
-    total_count = len(all_policies)
-
-    # Calculate pagination
-    total_pages = (total_count + page_size - 1) // page_size  # Ceiling division
-    offset = (page - 1) * page_size
-    paginated_policies = all_policies[offset : offset + page_size]
-
-    response = PolicyListResponse(
-        policies=paginated_policies,
-        total_count=total_count,
-        retrieved_count=len(paginated_policies),
-        page=page,
-        page_size=page_size,
-        total_pages=max(1, total_pages),  # At least 1 page
-        has_next=page < total_pages,
-        has_prev=page > 1,
-    )
-
-    logger.info(
-        f"Admin {authenticated_user.user} listed {len(paginated_policies)} policies (page {page}/{total_pages})"
-    )
-    return response
-
-
-@router.delete(
-    "/policies/{policy_name}",
-    response_model=ResourceDeleteResponse,
-    summary="Delete policy",
-    description="Delete a policy from the system.",
-)
-async def delete_policy(
-    policy_name: Annotated[
-        str, Path(description="Policy name to delete", min_length=1)
-    ],
-    request: Request,
-    authenticated_user=Depends(require_admin),
-):
-    """Delete a policy."""
-    app_state = get_app_state(request)
-
-    try:
-        # Check if policy exists first
-        policy_exists = await app_state.policy_manager.resource_exists(policy_name)
-        if not policy_exists:
-            # Policy doesn't exist - return idempotent success response
-            response = ResourceDeleteResponse(
-                resource_type="policy",
-                resource_name=policy_name,
-                message=f"Policy {policy_name} was already deleted or does not exist",
-            )
-            logger.info(
-                f"Admin {authenticated_user.user} attempted to delete non-existent policy {policy_name} - returning idempotent success"
-            )
-            return response
-
-        # Get all entities (users and groups) that have this policy attached
-        try:
-            attached_entities = (
-                await app_state.policy_manager._get_policy_attached_entities(
-                    policy_name
-                )
-            )
-        except Exception as e:
-            logger.warning(
-                f"Could not get attached entities for policy {policy_name}: {e}"
-            )
-            attached_entities = {PolicyTarget.USER: [], PolicyTarget.GROUP: []}
-
-        # Detach policy from all users
-        for username in attached_entities.get(PolicyTarget.USER, []):
-            try:
-                await app_state.policy_manager.detach_policy_from_user(
-                    policy_name, username
-                )
-                logger.info(f"Detached policy {policy_name} from user {username}")
-            except Exception as e:
-                logger.warning(
-                    f"Failed to detach policy {policy_name} from user {username}: {e}"
-                )
-
-        # Detach policy from all groups
-        for group_name in attached_entities.get(PolicyTarget.GROUP, []):
-            try:
-                await app_state.policy_manager.detach_policy_from_group(
-                    policy_name, group_name
-                )
-                logger.info(f"Detached policy {policy_name} from group {group_name}")
-            except Exception as e:
-                logger.warning(
-                    f"Failed to detach policy {policy_name} from group {group_name}: {e}"
-                )
-
-        # Now delete the policy
-        success = await app_state.policy_manager.delete_resource(policy_name)
-        if not success:
-            raise PolicyOperationError(f"Failed to delete policy {policy_name}")
-
-        response = ResourceDeleteResponse(
-            resource_type="policy",
-            resource_name=policy_name,
-            message=f"Policy {policy_name} deleted successfully",
-        )
-
-        logger.info(f"Admin {authenticated_user.user} deleted policy {policy_name}")
-        return response
-
-    except Exception as e:
-        logger.error(f"Unexpected error deleting policy {policy_name}: {e}")
-        raise PolicyOperationError(f"Failed to delete policy {policy_name}") from e
-
-
 # ===== MIGRATION ENDPOINTS =====
 
 
-class MigrationError(BaseModel):
-    """A single error encountered during migration."""
+@router.post(
+    "/credentials/rotate-all-credentials",
+    response_model=RotateAllCredentialsResponse,
+    summary="Rotate all users' credentials",
+    description=(
+        "Force-rotate credentials for every user in the system. "
+        "Each rotation is independent — errors do not block others. "
+        "Returns counts of successes and failures with error details."
+    ),
+)
+async def rotate_all_credentials(
+    request: Request,
+    authenticated_user=Depends(require_admin),
+):
+    """Rotate credentials for all users in the system."""
+    app_state = get_app_state(request)
+    errors: list[MigrationError] = []
+    users_rotated = 0
 
-    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+    all_usernames = await app_state.user_manager.list_resources()
+    logger.info(f"Rotating credentials for {len(all_usernames)} users")
 
-    resource_type: Annotated[str, Field(description="Type of resource (user/group)")]
-    resource_name: Annotated[str, Field(description="Name of the resource")]
-    error: Annotated[str, Field(description="Error message")]
+    for username in all_usernames:
+        try:
+            await app_state.credential_service.rotate(username)
+            users_rotated += 1
+        except Exception as e:
+            logger.warning(f"Failed to rotate credentials for user {username}: {e}")
+            errors.append(
+                MigrationError(
+                    resource_type="user", resource_name=username, error=str(e)
+                )
+            )
+
+    logger.info(
+        f"Admin {authenticated_user.user} rotated credentials: "
+        f"{users_rotated} succeeded, {len(errors)} failed"
+    )
+
+    return RotateAllCredentialsResponse(
+        users_rotated=users_rotated,
+        users_failed=len(errors),
+        errors=errors,
+        performed_by=authenticated_user.user,
+        timestamp=datetime.now(),
+    )
 
 
 class RegeneratePoliciesResponse(BaseModel):

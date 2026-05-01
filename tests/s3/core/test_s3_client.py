@@ -187,6 +187,50 @@ class TestBucketOperations:
                 await mock_s3_client.create_bucket("test-bucket")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error_code", ["BucketAlreadyExists", "BucketAlreadyOwnedByYou"]
+    )
+    async def test_create_bucket_exists_ok_suppresses_already_exists(
+        self, mock_s3_client, mock_aiobotocore_client, error_code
+    ):
+        mock_aiobotocore_client.create_bucket = AsyncMock(
+            side_effect=ClientError(
+                {"Error": {"Code": error_code, "Message": "already exists"}},
+                "CreateBucket",
+            )
+        )
+        async with mock_s3_client:
+            await mock_s3_client.create_bucket("test-bucket", exists_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_create_bucket_exists_ok_false_raises_already_exists(
+        self, mock_s3_client, mock_aiobotocore_client
+    ):
+        mock_aiobotocore_client.create_bucket = AsyncMock(
+            side_effect=ClientError(
+                {"Error": {"Code": "BucketAlreadyOwnedByYou", "Message": "exists"}},
+                "CreateBucket",
+            )
+        )
+        async with mock_s3_client:
+            with pytest.raises(BucketOperationError):
+                await mock_s3_client.create_bucket("test-bucket", exists_ok=False)
+
+    @pytest.mark.asyncio
+    async def test_create_bucket_exists_ok_other_error_reraises(
+        self, mock_s3_client, mock_aiobotocore_client
+    ):
+        mock_aiobotocore_client.create_bucket = AsyncMock(
+            side_effect=ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "denied"}},
+                "CreateBucket",
+            )
+        )
+        async with mock_s3_client:
+            with pytest.raises(BucketOperationError):
+                await mock_s3_client.create_bucket("test-bucket", exists_ok=True)
+
+    @pytest.mark.asyncio
     async def test_bucket_exists_true(self, mock_s3_client, mock_aiobotocore_client):
         """Test bucket existence check when bucket exists."""
         mock_aiobotocore_client.head_bucket = AsyncMock()

@@ -97,12 +97,13 @@ class S3Client:
             logger.error(f"Connection test failed: {e}")
             return False
 
-    async def create_bucket(self, bucket_name: str) -> None:
+    async def create_bucket(self, bucket_name: str, exists_ok: bool = False) -> None:
         """
         Creates a new bucket on the S3 server.
 
         Args:
             bucket_name: The name of the bucket to create.
+            exists_ok: If True, silently succeed if the bucket already exists.
 
         Raises:
             BucketOperationError: If the bucket creation fails for any reason.
@@ -111,6 +112,14 @@ class S3Client:
             async with self._get_client() as client:
                 await client.create_bucket(Bucket=bucket_name)
                 logger.info(f"Created bucket: {bucket_name}")
+        except ClientError as e:
+            if exists_ok and e.response["Error"]["Code"] in (
+                "BucketAlreadyExists",
+                "BucketAlreadyOwnedByYou",
+            ):
+                return
+            logger.error(f"Unexpected error creating bucket {bucket_name}: {e}")
+            raise BucketOperationError(f"Bucket creation failed: {e}") from e
         except Exception as e:
             logger.error(f"Unexpected error creating bucket {bucket_name}: {e}")
             raise BucketOperationError(f"Bucket creation failed: {e}") from e

@@ -42,6 +42,8 @@ class AppState(NamedTuple):
     sharing_manager: SharingManager
     credential_service: CredentialService
     tenant_manager: TenantManager
+    users_sql_warehouse_base: str
+    tenant_sql_warehouse_base: str
 
 
 class RequestState(NamedTuple):
@@ -173,6 +175,9 @@ async def build_app(app: FastAPI) -> None:
         sharing_manager=sharing_manager,
         credential_service=credential_service,
         tenant_manager=tenant_manager,
+        # ruff is forcing these long lines, yuck
+        users_sql_warehouse_base=f"s3a://{config.default_bucket}/{config.users_sql_warehouse_prefix}",
+        tenant_sql_warehouse_base=f"s3a://{config.default_bucket}/{config.tenant_sql_warehouse_prefix}",
     )
     logger.info("Application state initialized")
 

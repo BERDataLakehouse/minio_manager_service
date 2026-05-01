@@ -4,7 +4,6 @@ Comprehensive tests for the routes.management module.
 Tests cover:
 - User management endpoints (list, create, rotate, delete)
 - Group management endpoints (list, create, add/remove member, delete)
-- Policy management endpoints (list, delete)
 - Pagination
 - Response model validation
 - Error handling and admin authorization
@@ -18,17 +17,16 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from s3.models.policy import PolicyDocument, PolicyModel, PolicyTarget
 from s3.models.user import UserModel
 from routes.management import (
     GroupManagementResponse,
     GroupNamesResponse,
     ResourceDeleteResponse,
+    RotateAllCredentialsResponse,
     UserListResponse,
     UserManagementResponse,
     UserNamesResponse,
     create_user,
-    delete_policy,
     list_group_names,
     list_user_names,
     list_users,
@@ -87,16 +85,13 @@ def mock_app_state():
     mock_group_info = MagicMock()
     mock_group_info.group_name = "group1"
     mock_group_info.members = ["user1"]
-    mock_group_info.policy_name = "group-policy-group1"
     app_state.group_manager.get_group_info = AsyncMock(return_value=mock_group_info)
     mock_created_group = MagicMock()
     mock_created_group.group_name = "newgroup"
     mock_created_group.members = []
-    mock_created_group.policy_name = "group-policy-newgroup"
     mock_created_ro_group = MagicMock()
     mock_created_ro_group.group_name = "newgroupro"
     mock_created_ro_group.members = []
-    mock_created_ro_group.policy_name = "group-policy-newgroupro"
     app_state.group_manager.create_group = AsyncMock(
         return_value=(mock_created_group, mock_created_ro_group)
     )
@@ -109,24 +104,6 @@ def mock_app_state():
     app_state.credential_service.rotate = AsyncMock(
         return_value=("user1", "new-secret-key")
     )
-
-    # Mock policy manager
-    app_state.policy_manager = AsyncMock()
-    mock_policy = PolicyModel(
-        policy_name="user-home-user1",
-        policy_document=PolicyDocument(
-            version="2012-10-17",
-            statement=[],
-        ),
-    )
-    app_state.policy_manager.list_all_policies = AsyncMock(return_value=[mock_policy])
-    app_state.policy_manager.resource_exists = AsyncMock(return_value=True)
-    app_state.policy_manager._get_policy_attached_entities = AsyncMock(
-        return_value={PolicyTarget.USER: [], PolicyTarget.GROUP: []}
-    )
-    app_state.policy_manager.detach_policy_from_user = AsyncMock()
-    app_state.policy_manager.detach_policy_from_group = AsyncMock()
-    app_state.policy_manager.delete_resource = AsyncMock(return_value=True)
 
     # Mock tenant manager
     app_state.tenant_manager = AsyncMock()
@@ -221,7 +198,6 @@ class TestGroupManagementResponse:
             group_name="testgroup",
             members=["user1", "user2"],
             member_count=2,
-            policy_name="group-policy-testgroup",
             operation="create",
             performed_by="admin",
             timestamp=datetime.now(),
@@ -567,88 +543,6 @@ class TestDeleteGroupEndpoint:
         assert response.status_code == 400  # GroupOperationError maps to 400
 
 
-# === POLICY MANAGEMENT ENDPOINT TESTS ===
-
-
-class TestListPoliciesEndpoint:
-    """Tests for list_policies endpoint."""
-
-    def test_list_policies_success(self, client, mock_app_state):
-        """Test listing policies successfully."""
-        response = client.get("/management/policies")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert "policies" in data
-        assert data["total_count"] == 1
-
-    def test_list_policies_pagination(self, client, mock_app_state):
-        """Test listing policies with pagination."""
-        response = client.get("/management/policies?page=1&page_size=25")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["page"] == 1
-        assert data["page_size"] == 25
-
-
-class TestDeletePolicyEndpoint:
-    """Tests for delete_policy endpoint."""
-
-    def test_delete_policy_success(self, client, mock_app_state):
-        """Test deleting a policy successfully."""
-        response = client.delete("/management/policies/user-home-user1")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["resource_type"] == "policy"
-        assert data["resource_name"] == "user-home-user1"
-
-    def test_delete_policy_not_found(self, client, mock_app_state):
-        """Test deleting non-existent policy (idempotent)."""
-        mock_app_state.policy_manager.resource_exists.return_value = False
-
-        response = client.delete("/management/policies/nonexistent")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert (
-            "already deleted" in data["message"] or "does not exist" in data["message"]
-        )
-
-    def test_delete_policy_with_attached_users(self, client, mock_app_state):
-        """Test deleting policy detaches from users first."""
-        mock_app_state.policy_manager._get_policy_attached_entities.return_value = {
-            PolicyTarget.USER: ["user1", "user2"],
-            PolicyTarget.GROUP: [],
-        }
-
-        response = client.delete("/management/policies/user-home-user1")
-
-        assert response.status_code == 200
-        assert mock_app_state.policy_manager.detach_policy_from_user.call_count == 2
-
-    def test_delete_policy_with_attached_groups(self, client, mock_app_state):
-        """Test deleting policy detaches from groups first."""
-        mock_app_state.policy_manager._get_policy_attached_entities.return_value = {
-            PolicyTarget.USER: [],
-            PolicyTarget.GROUP: ["group1"],
-        }
-
-        response = client.delete("/management/policies/user-home-user1")
-
-        assert response.status_code == 200
-        mock_app_state.policy_manager.detach_policy_from_group.assert_called_once()
-
-    def test_delete_policy_failure(self, client, mock_app_state):
-        """Test handling policy delete failure."""
-        mock_app_state.policy_manager.delete_resource.return_value = False
-
-        response = client.delete("/management/policies/user-home-user1")
-
-        assert response.status_code == 500  # PolicyOperationError
-
-
 # === ASYNC FUNCTION TESTS ===
 
 
@@ -679,28 +573,6 @@ class TestManagementFunctionsAsync:
 
             assert response.username == "newuser"
             assert response.operation == "create"
-
-    @pytest.mark.asyncio
-    async def test_delete_policy_detach_error_handling(
-        self, mock_app_state, mock_admin_user
-    ):
-        """Test that detach errors don't stop policy deletion."""
-
-        mock_request = MagicMock()
-
-        mock_app_state.policy_manager._get_policy_attached_entities.return_value = {
-            PolicyTarget.USER: ["user1"],
-            PolicyTarget.GROUP: [],
-        }
-        mock_app_state.policy_manager.detach_policy_from_user.side_effect = Exception(
-            "Detach error"
-        )
-
-        with patch("routes.management.get_app_state", return_value=mock_app_state):
-            # Should not raise, just log warning
-            response = await delete_policy("test-policy", mock_request, mock_admin_user)
-
-            assert response.resource_type == "policy"
 
 
 # === PAGINATION TESTS ===
@@ -1010,3 +882,91 @@ class TestRegeneratePoliciesEndpoint:
         assert data["users_updated"] == 0
         assert data["groups_updated"] == 0
         assert data["errors"] == []
+
+
+class TestRotateAllCredentialsEndpoint:
+    """Tests for rotate_all_credentials endpoint."""
+
+    @pytest.fixture
+    def rotate_app_state(self, mock_app_state):
+        mock_app_state.user_manager.list_resources = AsyncMock(
+            return_value=["alice", "bob"]
+        )
+        mock_app_state.credential_service.rotate = AsyncMock(
+            return_value=("alice", "new-secret")
+        )
+        return mock_app_state
+
+    @pytest.fixture
+    def rotate_client(self, test_app, rotate_app_state):
+        with patch("routes.management.get_app_state", return_value=rotate_app_state):
+            yield TestClient(test_app, raise_server_exceptions=False)
+
+    def test_rotate_all_success(self, rotate_client, rotate_app_state):
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_rotated"] == 2
+        assert data["users_failed"] == 0
+        assert data["errors"] == []
+        assert data["performed_by"] == "admin"
+
+    def test_rotate_all_calls_rotate_for_each_user(
+        self, rotate_client, rotate_app_state
+    ):
+        rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        calls = rotate_app_state.credential_service.rotate.call_args_list
+        assert len(calls) == 2
+        assert calls[0].args == ("alice",)
+        assert calls[1].args == ("bob",)
+
+    def test_rotate_all_error_continues(self, rotate_client, rotate_app_state):
+        rotate_app_state.credential_service.rotate.side_effect = [
+            Exception("alice rotate failed"),
+            ("bob", "new-secret"),
+        ]
+
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_rotated"] == 1
+        assert data["users_failed"] == 1
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["resource_name"] == "alice"
+        assert data["errors"][0]["resource_type"] == "user"
+        assert "alice rotate failed" in data["errors"][0]["error"]
+
+    def test_rotate_all_all_fail(self, rotate_client, rotate_app_state):
+        rotate_app_state.credential_service.rotate.side_effect = Exception(
+            "rotate failed"
+        )
+
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_rotated"] == 0
+        assert data["users_failed"] == 2
+        assert len(data["errors"]) == 2
+
+    def test_rotate_all_no_users(self, rotate_client, rotate_app_state):
+        rotate_app_state.user_manager.list_resources.return_value = []
+
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_rotated"] == 0
+        assert data["users_failed"] == 0
+        assert data["errors"] == []
+
+    def test_rotate_all_response_model_valid(self, rotate_client, rotate_app_state):
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        parsed = RotateAllCredentialsResponse(**response.json())
+        assert parsed.users_rotated == 2
+        assert parsed.users_failed == 0
