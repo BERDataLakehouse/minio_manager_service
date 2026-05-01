@@ -38,6 +38,8 @@ class TestAppStateNamedTuple:
             sharing_manager=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
+            users_sql_warehouse_base="s3a://test-bucket/users-sql",
+            tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
         )
         assert state.auth is not None
         assert state.credential_service is not None
