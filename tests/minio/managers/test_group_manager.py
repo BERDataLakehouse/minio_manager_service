@@ -1854,3 +1854,123 @@ class TestListResourcesCache:
         # One MC call total, regardless of filter.
         assert group_manager_instance._executor._execute_command.call_count == 1
         assert all_groups == ["analysts", "devteam", "testgroup"]
+
+    @pytest.mark.asyncio
+    async def test_create_group_invalidates_list_resources_cache(
+        self,
+        group_manager_instance,
+        mock_policy_manager,
+        mock_user_manager,
+        sample_group_list_json,
+    ):
+        """Creating a new group must drop the cached 'all groups' list.
+
+        Without this invalidation, list_tenants would keep returning the
+        pre-create view of the world for up to TTL seconds in the same
+        pod, defeating the read-after-write guarantee for the operator
+        who just performed the create.
+        """
+        group_manager_instance._policy_manager = mock_policy_manager
+        group_manager_instance._user_manager = mock_user_manager
+
+        # Prime the cache with the original list.
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=sample_group_list_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group ls",
+        )
+        first = await group_manager_instance.list_resources()
+        assert first == ["analysts", "devteam", "testgroup"]
+        prime_calls = group_manager_instance._executor._execute_command.call_count
+
+        # Create a new group. resource_exists=False forces the ADD path
+        # which is what triggers the cache invalidation.
+        with patch.object(
+            group_manager_instance, "resource_exists", AsyncMock(return_value=False)
+        ):
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout="",
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group add",
+                )
+            )
+            await group_manager_instance.create_group("newgroup", "creator")
+
+        # Next list_resources must re-fetch with the new group present.
+        new_list_json = json.dumps(
+            {
+                "status": "success",
+                "groups": [
+                    "testgroup",
+                    "devteam",
+                    "analysts",
+                    "newgroup",
+                    "newgroupro",
+                ],
+            }
+        )
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=new_list_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group ls",
+        )
+        refreshed = await group_manager_instance.list_resources()
+
+        assert "newgroup" in refreshed
+        assert "newgroupro" in refreshed
+        # Cache was busted: this read incurred a fresh MC call rather than
+        # returning the primed three-group list.
+        post_calls = group_manager_instance._executor._execute_command.call_count
+        assert post_calls > prime_calls + 1, (
+            "list_resources after create_group should have re-fetched "
+            "(observed only the create_group MC calls themselves)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_invalidates_list_resources_cache(
+        self, group_manager_instance, sample_group_list_json, mock_minio_client
+    ):
+        """Deleting a group must drop the cached 'all groups' list.
+
+        Without this invalidation, a deleted tenant would keep showing up
+        on the Tenants page for up to TTL seconds in the same pod.
+        """
+        # Prime the cache with the original three-group list.
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=sample_group_list_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group ls",
+        )
+        await group_manager_instance.list_resources()
+        assert group_manager_instance._executor._execute_command.call_count == 1
+
+        # _post_delete_cleanup is the hook called after a group has been
+        # removed. It should invalidate the groups-list cache.
+        await group_manager_instance._post_delete_cleanup("testgroup")
+
+        # The next read must re-fetch (no longer includes testgroup).
+        new_list_json = json.dumps(
+            {"status": "success", "groups": ["devteam", "analysts"]}
+        )
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=new_list_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group ls",
+        )
+        refreshed = await group_manager_instance.list_resources()
+
+        assert "testgroup" not in refreshed
+        assert refreshed == ["analysts", "devteam"]
+        # Two MC list calls in total: the prime and the post-invalidation refetch.
+        assert group_manager_instance._executor._execute_command.call_count == 2

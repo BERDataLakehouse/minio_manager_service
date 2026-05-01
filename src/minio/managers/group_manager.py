@@ -198,9 +198,9 @@ class GroupManager(ResourceManager[GroupModel]):
                     f"Failed to create group{suffix}: {result.stderr}"
                 )
 
-            # Group set just changed: drop the cached "all groups" list,
-            # and seed the membership cache with the initial members so a
-            # follow-up read is a hit (also avoids one MC round-trip).
+            # Group set just changed: drop the cached "all groups" list
+            # and any stale membership entry for this name so the next
+            # read reflects the new group.
             self._invalidate_groups_list()
             self._invalidate_members(group_name)
 
