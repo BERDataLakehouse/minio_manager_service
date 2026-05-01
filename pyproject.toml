@@ -13,7 +13,7 @@ dependencies = [
     "pydantic==2.12.5",
     "aiohttp==3.13.3",
     "cacheout==0.16.0",
-    "aiobotocore==3.3.0",
+    "aiobotocore==3.5.0",
     "redis==7.4.0",
     "ruff==0.15.7",
     "psycopg[binary]==3.3.3",
