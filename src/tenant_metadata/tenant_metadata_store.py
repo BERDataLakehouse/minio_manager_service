@@ -6,14 +6,9 @@ from datetime import datetime, timezone
 from psycopg_pool import AsyncConnectionPool
 
 from service.cache import SingleFlightTTLCache
+from service.config import settings
 
 logger = logging.getLogger(__name__)
-
-# Per-replica TTL for read-side metadata caches. Aligned with the
-# GroupManager caches so the whole list_tenants path collapses to
-# ~zero work on a hot pod between mutations. Mutations explicitly
-# invalidate the affected keys for in-pod read-after-write.
-_METADATA_CACHE_TTL_SECONDS = 60.0
 
 # Sentinel key for "all metadata"; list_metadata() takes no args.
 _LIST_METADATA_CACHE_KEY = "__all__"
@@ -116,35 +111,37 @@ class TenantMetadataStore:
         # Caches are intentionally per-instance (so pytest gives every
         # test a fresh cache) and per-process (so each MMS replica
         # maintains its own — cross-replica sharing is a future
-        # optimization).
+        # optimization). TTL is tuned globally via
+        # settings.read_cache_ttl_seconds (env READ_CACHE_TTL_SECONDS).
+        ttl = settings.read_cache_ttl_seconds
         self._list_metadata_cache: SingleFlightTTLCache[list[dict]] = (
             SingleFlightTTLCache(
                 name="list_metadata",
                 maxsize=1,
-                ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
+                ttl_seconds=ttl,
             )
         )
         self._metadata_cache: SingleFlightTTLCache[dict | None] = SingleFlightTTLCache(
             name="metadata",
             maxsize=1024,
-            ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
+            ttl_seconds=ttl,
         )
         self._stewards_cache: SingleFlightTTLCache[list[dict]] = SingleFlightTTLCache(
             name="stewards",
             maxsize=1024,
-            ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
+            ttl_seconds=ttl,
         )
         self._steward_tenants_cache: SingleFlightTTLCache[list[str]] = (
             SingleFlightTTLCache(
                 name="steward_tenants",
                 maxsize=4096,
-                ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
+                ttl_seconds=ttl,
             )
         )
         self._is_steward_cache: SingleFlightTTLCache[bool] = SingleFlightTTLCache(
             name="is_steward",
             maxsize=8192,
-            ttl_seconds=_METADATA_CACHE_TTL_SECONDS,
+            ttl_seconds=ttl,
         )
 
     # ── Cache invalidation helpers ───────────────────────────────────────

@@ -3,6 +3,7 @@ import logging
 from typing import List, Optional
 
 from service.cache import SingleFlightTTLCache
+from service.config import settings
 from service.exceptions import GroupNotFoundError, GroupOperationError
 from s3.core.s3_client import S3Client
 from minio.models.command import GroupAction, UserAction
@@ -15,13 +16,6 @@ from minio.managers.resource_manager import ResourceManager
 logger = logging.getLogger(__name__)
 
 RESOURCE_TYPE = "group"
-
-# Per-replica TTL for read-side group caches. Short enough to bound
-# staleness (operators don't usually wait minutes), long enough to
-# absorb the bursty Tenants-page traffic pattern that historically
-# starved an MMS pod with mc-storms. Mutations explicitly invalidate.
-_GROUP_MEMBERS_CACHE_TTL_SECONDS = 60.0
-_GROUPS_LIST_CACHE_TTL_SECONDS = 60.0
 
 # Single sentinel key for the "all groups" cache; list_resources is
 # parameterless from the cache's perspective (the optional name_filter
@@ -44,16 +38,19 @@ class GroupManager(ResourceManager[GroupModel]):
         # Per-replica caches for the read-heavy paths (list_tenants,
         # get_tenant_*, sharing checks). Mutations call self._invalidate_*
         # to guarantee in-pod read-after-write consistency; the TTL acts
-        # only as a backstop for cross-pod / external mutations.
+        # only as a backstop for cross-pod / external mutations. TTL is
+        # tuned globally via settings.read_cache_ttl_seconds (env var
+        # READ_CACHE_TTL_SECONDS).
+        ttl = settings.read_cache_ttl_seconds
         self._members_cache: SingleFlightTTLCache[List[str]] = SingleFlightTTLCache(
             name="group_members",
             maxsize=1024,
-            ttl_seconds=_GROUP_MEMBERS_CACHE_TTL_SECONDS,
+            ttl_seconds=ttl,
         )
         self._groups_list_cache: SingleFlightTTLCache[List[str]] = SingleFlightTTLCache(
             name="groups_list",
             maxsize=1,
-            ttl_seconds=_GROUPS_LIST_CACHE_TTL_SECONDS,
+            ttl_seconds=ttl,
         )
 
     @property
