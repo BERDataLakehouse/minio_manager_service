@@ -42,7 +42,13 @@ DELETE FROM polaris_user_credentials WHERE username = %(username)s;
 
 @dataclass(frozen=True)
 class PolarisCredentialRecord:
-    """Cached Polaris credential material for one user."""
+    """Cached Polaris credential material for one user.
+
+    ``personal_catalog`` is co-located with the credentials because the catalog
+    name is provisioned together with the principal and is treated as immutable
+    for the lifetime of that principal. If the catalog assignment ever needs to
+    change independently of the credentials, lift it into a separate table.
+    """
 
     client_id: str
     client_secret: str
@@ -99,6 +105,16 @@ class PolarisCredentialStore:
             await conn.execute(_DELETE, {"username": username})
             await conn.commit()
         logger.info("Deleted cached Polaris credentials for user %s", username)
+
+    async def health_check(self) -> bool:
+        """Verify the database connection is alive."""
+        try:
+            async with self._pool.connection() as conn:
+                await conn.execute("SELECT 1")
+            return True
+        except Exception:
+            logger.exception("PolarisCredentialStore health check failed")
+            return False
 
     async def close(self) -> None:
         """No-op. Pool lifecycle is managed by DatabasePool."""
