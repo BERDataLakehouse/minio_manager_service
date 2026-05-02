@@ -1,5 +1,6 @@
 """Comprehensive tests for the minio.managers.group_manager module."""
 
+import asyncio
 import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,7 +17,7 @@ from s3.models.policy import (
     PolicyModel,
     PolicyStatement,
 )
-from service.exceptions import GroupOperationError
+from service.exceptions import GroupNotFoundError, GroupOperationError
 
 
 # =============================================================================
@@ -730,83 +731,87 @@ class TestRemoveUserFromGroup:
 
 
 class TestGetGroupMembers:
-    """Tests for get_group_members method."""
+    """Tests for get_group_members method.
+
+    The implementation now issues a single ``mc admin group info --json``
+    call (no separate ``resource_exists`` pre-check) and infers
+    'group not found' from the MC error string in stderr.
+    """
 
     @pytest.mark.asyncio
     async def test_get_group_members_success(
         self, group_manager_instance, sample_group_info_json
     ):
         """Test successfully getting group members."""
-        with patch.object(
-            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
-        ):
-            group_manager_instance._executor._execute_command.return_value = (
-                CommandResult(
-                    success=True,
-                    stdout=sample_group_info_json,
-                    stderr="",
-                    return_code=0,
-                    command="mc admin group info",
-                )
-            )
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=sample_group_info_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group info",
+        )
 
-            members = await group_manager_instance.get_group_members("testgroup")
+        members = await group_manager_instance.get_group_members("testgroup")
 
-            assert members == ["user1", "user2", "user3"]
+        assert members == ["user1", "user2", "user3"]
+        # Exactly one MC subprocess call — the redundant
+        # resource_exists pre-check has been dropped.
+        assert group_manager_instance._executor._execute_command.call_count == 1
 
     @pytest.mark.asyncio
     async def test_get_group_members_empty_group(
         self, group_manager_instance, sample_empty_group_info_json
     ):
         """Test get_group_members returns empty list for empty group."""
-        with patch.object(
-            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
-        ):
-            group_manager_instance._executor._execute_command.return_value = (
-                CommandResult(
-                    success=True,
-                    stdout=sample_empty_group_info_json,
-                    stderr="",
-                    return_code=0,
-                    command="mc admin group info",
-                )
-            )
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=sample_empty_group_info_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group info",
+        )
 
-            members = await group_manager_instance.get_group_members("emptygroup")
+        members = await group_manager_instance.get_group_members("emptygroup")
 
-            assert members == []
+        assert members == []
 
     @pytest.mark.asyncio
     async def test_get_group_members_group_not_exists(self, group_manager_instance):
-        """Test get_group_members fails when group doesn't exist."""
-        with patch.object(
-            group_manager_instance, "resource_exists", AsyncMock(return_value=False)
-        ):
-            with pytest.raises(GroupOperationError) as exc_info:
-                await group_manager_instance.get_group_members("nonexistent")
+        """When mc reports 'does not exist' on stderr, raise GroupNotFoundError."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=False,
+            stdout="",
+            stderr="mc: <ERROR> The specified group does not exist.",
+            return_code=1,
+            command="mc admin group info",
+        )
 
-            assert "not found" in str(exc_info.value)
+        with pytest.raises(GroupNotFoundError) as exc_info:
+            await group_manager_instance.get_group_members("nonexistent")
+
+        assert "not found" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
-    async def test_get_group_members_command_fails(self, group_manager_instance):
-        """Test get_group_members raises error when command fails."""
-        with patch.object(
-            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
-        ):
-            group_manager_instance._executor._execute_command.return_value = (
-                CommandResult(
-                    success=False,
-                    stdout="",
-                    stderr="Command failed",
-                    return_code=1,
-                    command="mc admin group info",
-                )
-            )
+    async def test_get_group_members_command_fails_other(self, group_manager_instance):
+        """Transient/non-not-found failures stay as GroupOperationError."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=False,
+            stdout="",
+            stderr="connection refused",
+            return_code=1,
+            command="mc admin group info",
+        )
 
-            with pytest.raises(GroupOperationError) as exc_info:
-                await group_manager_instance.get_group_members("testgroup")
+        with pytest.raises(GroupOperationError) as exc_info:
+            await group_manager_instance.get_group_members("testgroup")
 
-            assert "Failed to get group info" in str(exc_info.value)
+        assert "Failed to get group info" in str(exc_info.value)
+        # Importantly, GroupNotFoundError must NOT be raised here:
+        # the caller may want to distinguish a transient outage from a
+        # genuinely missing group. GroupNotFoundError is a subclass of
+        # GroupOperationError, so we additionally check the exception
+        # type isn't the more specific one.
+        assert not isinstance(exc_info.value, GroupNotFoundError)
 
 
 # =============================================================================
@@ -907,54 +912,196 @@ class TestIsUserInGroup:
 
 
 class TestGetUserGroups:
-    """Tests for get_user_groups method."""
+    """Tests for get_user_groups method.
+
+    The implementation issues a single ``mc admin user info <user> --json``
+    call and reads the ``memberOf`` field. These tests mock the executor
+    response directly rather than the deprecated per-group iteration.
+    """
+
+    @staticmethod
+    def _user_info_json(
+        member_of: list[str] | list[dict] | None, user: str = "testuser"
+    ) -> str:
+        """Build a sample 'mc admin user info --json' response.
+
+        Newer mc clients return ``memberOf`` as a list of group-info objects
+        (``{"name": ..., "policy": ...}``), while older ones returned a plain
+        list of group-name strings. Pass either shape — string entries are
+        wrapped into the dict shape automatically so tests default to the
+        production format that triggered the original sort-of-dicts bug.
+        """
+        payload: dict = {
+            "status": "success",
+            "accessKey": user,
+            "userStatus": "enabled",
+            "policyName": "consoleAdmin",
+        }
+        if member_of is not None:
+            payload["memberOf"] = [
+                {"name": entry, "policy": f"group-policy-{entry}"}
+                if isinstance(entry, str)
+                else entry
+                for entry in member_of
+            ]
+        return json.dumps(payload)
 
     @pytest.mark.asyncio
     async def test_get_user_groups_success(self, group_manager_instance):
-        """Test successfully getting user's groups."""
-        with patch.object(
-            group_manager_instance,
-            "list_resources",
-            AsyncMock(return_value=["group1", "group2", "group3"]),
-        ):
-            with patch.object(
-                group_manager_instance,
-                "is_user_in_group",
-                AsyncMock(
-                    side_effect=[True, False, True]
-                ),  # user is in group1 and group3
-            ):
-                result = await group_manager_instance.get_user_groups("testuser")
+        """Test successfully getting user's groups, returned sorted."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=self._user_info_json(["group3", "group1"]),
+            stderr="",
+            return_code=0,
+            command="mc admin user info",
+        )
 
-                # Results should be sorted
-                assert result == ["group1", "group3"]
+        result = await group_manager_instance.get_user_groups("testuser")
+
+        # Results should be sorted alphabetically.
+        assert result == ["group1", "group3"]
+        # Exactly one MC subprocess call (vs the old O(num_groups) fan-out).
+        assert group_manager_instance._executor._execute_command.call_count == 1
+        called_args = group_manager_instance._executor._execute_command.call_args[0][0]
+        assert called_args[:3] == ["admin", "user", "info"]
+        assert "--json" in called_args
+
+    @pytest.mark.asyncio
+    async def test_get_user_groups_member_of_string_list_legacy(
+        self, group_manager_instance
+    ):
+        """Older mc clients returned ``memberOf`` as a list of strings.
+
+        The parser must keep handling that legacy shape so a downgrade of
+        the mc binary doesn't break this call.
+        """
+        payload = {
+            "status": "success",
+            "accessKey": "testuser",
+            "userStatus": "enabled",
+            "policyName": "consoleAdmin",
+            "memberOf": ["zebra", "alpha"],
+        }
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=json.dumps(payload),
+            stderr="",
+            return_code=0,
+            command="mc admin user info",
+        )
+
+        result = await group_manager_instance.get_user_groups("testuser")
+
+        assert result == ["alpha", "zebra"]
+
+    @pytest.mark.asyncio
+    async def test_get_user_groups_unexpected_member_of_shape(
+        self, group_manager_instance
+    ):
+        """``memberOf`` entries that are neither strings nor dicts with a
+        ``name`` key must surface a clear GroupOperationError instead of a
+        cryptic TypeError from the sort step."""
+        payload = {
+            "status": "success",
+            "accessKey": "testuser",
+            "userStatus": "enabled",
+            "policyName": "consoleAdmin",
+            # dict entry without the expected 'name' key
+            "memberOf": [{"policy": "group-policy-x"}],
+        }
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=json.dumps(payload),
+            stderr="",
+            return_code=0,
+            command="mc admin user info",
+        )
+
+        with pytest.raises(GroupOperationError) as exc_info:
+            await group_manager_instance.get_user_groups("testuser")
+
+        assert "memberOf" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_get_user_groups_no_groups(self, group_manager_instance):
-        """Test get_user_groups when user is not in any group."""
-        with patch.object(
-            group_manager_instance,
-            "list_resources",
-            AsyncMock(return_value=["group1", "group2"]),
-        ):
-            with patch.object(
-                group_manager_instance,
-                "is_user_in_group",
-                AsyncMock(return_value=False),
-            ):
-                result = await group_manager_instance.get_user_groups("testuser")
+        """Test get_user_groups when user is not in any group (memberOf empty)."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=self._user_info_json([]),
+            stderr="",
+            return_code=0,
+            command="mc admin user info",
+        )
 
-                assert result == []
+        result = await group_manager_instance.get_user_groups("testuser")
+
+        assert result == []
 
     @pytest.mark.asyncio
-    async def test_get_user_groups_empty_system(self, group_manager_instance):
-        """Test get_user_groups when no groups exist."""
-        with patch.object(
-            group_manager_instance, "list_resources", AsyncMock(return_value=[])
-        ):
-            result = await group_manager_instance.get_user_groups("testuser")
+    async def test_get_user_groups_member_of_absent(self, group_manager_instance):
+        """Test get_user_groups when memberOf field is omitted from the response."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=self._user_info_json(member_of=None),
+            stderr="",
+            return_code=0,
+            command="mc admin user info",
+        )
 
-            assert result == []
+        result = await group_manager_instance.get_user_groups("testuser")
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_get_user_groups_user_not_found(self, group_manager_instance):
+        """Test get_user_groups raises GroupNotFoundError when user does not exist."""
+        from service.exceptions import GroupNotFoundError
+
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=False,
+            stdout="",
+            stderr="mc: <ERROR> The specified user does not exist.",
+            return_code=1,
+            command="mc admin user info",
+        )
+
+        with pytest.raises(GroupNotFoundError) as exc_info:
+            await group_manager_instance.get_user_groups("ghost")
+
+        assert "not found" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_get_user_groups_command_fails_other(self, group_manager_instance):
+        """Test get_user_groups raises GroupOperationError on transient failures."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=False,
+            stdout="",
+            stderr="connection refused",
+            return_code=1,
+            command="mc admin user info",
+        )
+
+        with pytest.raises(GroupOperationError) as exc_info:
+            await group_manager_instance.get_user_groups("testuser")
+
+        assert "Failed to get user info" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_get_user_groups_invalid_json(self, group_manager_instance):
+        """Test get_user_groups raises GroupOperationError on unparseable output."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout="not json",
+            stderr="",
+            return_code=0,
+            command="mc admin user info",
+        )
+
+        with pytest.raises(GroupOperationError) as exc_info:
+            await group_manager_instance.get_user_groups("testuser")
+
+        assert "Failed to parse user info" in str(exc_info.value)
 
 
 # =============================================================================
@@ -1280,18 +1427,37 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_get_user_groups_sorted(self, group_manager_instance):
-        """Test get_user_groups returns sorted list."""
-        with patch.object(
-            group_manager_instance,
-            "list_resources",
-            AsyncMock(return_value=["zebra", "alpha", "middle"]),
-        ):
-            with patch.object(
-                group_manager_instance, "is_user_in_group", AsyncMock(return_value=True)
-            ):
-                result = await group_manager_instance.get_user_groups("testuser")
+        """Test get_user_groups returns the memberOf array sorted alphabetically.
 
-                assert result == ["alpha", "middle", "zebra"]
+        Regression test for the original sort-of-dicts bug: production mc
+        emits ``memberOf`` as a list of group-info objects (each with a
+        ``name`` field), and naively sorting that list raises
+        ``'<' not supported between instances of 'dict' and 'dict'``.
+        Use the dict shape here so a regression to the naive sort is caught.
+        """
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=json.dumps(
+                {
+                    "status": "success",
+                    "accessKey": "testuser",
+                    "userStatus": "enabled",
+                    "policyName": "consoleAdmin",
+                    "memberOf": [
+                        {"name": "zebra", "policy": "group-policy-zebra"},
+                        {"name": "alpha", "policy": "group-policy-alpha"},
+                        {"name": "middle", "policy": "group-policy-middle"},
+                    ],
+                }
+            ),
+            stderr="",
+            return_code=0,
+            command="mc admin user info",
+        )
+
+        result = await group_manager_instance.get_user_groups("testuser")
+
+        assert result == ["alpha", "middle", "zebra"]
 
     def test_group_model_properties(self):
         """Test GroupModel computed properties."""
@@ -1392,3 +1558,419 @@ class TestEdgeCases:
             result = await group_manager_instance.delete_resource("testgroup")
 
             assert result is False
+
+
+# =============================================================================
+# TEST READ-SIDE CACHES + INVALIDATION
+# =============================================================================
+
+
+class TestGroupMembersCache:
+    """Tests for the SingleFlightTTLCache wiring around get_group_members.
+
+    The cache lives on the GroupManager instance. Hits short-circuit the MC
+    subprocess call entirely; mutations on the same manager invalidate the
+    affected key so subsequent reads return fresh data.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_group_members_caches_after_first_call(
+        self, group_manager_instance, sample_group_info_json
+    ):
+        """A second read for the same group does not invoke MC again."""
+        with patch.object(
+            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
+        ):
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout=sample_group_info_json,
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group info",
+                )
+            )
+
+            first = await group_manager_instance.get_group_members("testgroup")
+            second = await group_manager_instance.get_group_members("testgroup")
+
+            assert first == second == ["user1", "user2", "user3"]
+            # Exactly one underlying MC subprocess call across two reads.
+            assert group_manager_instance._executor._execute_command.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_get_group_members_distinct_keys_independent(
+        self, group_manager_instance, sample_group_info_json
+    ):
+        """Cache keyed by group name; different groups don't collide."""
+        with patch.object(
+            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
+        ):
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout=sample_group_info_json,
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group info",
+                )
+            )
+
+            await group_manager_instance.get_group_members("g1")
+            await group_manager_instance.get_group_members("g2")
+            # Two distinct keys -> two MC calls.
+            assert group_manager_instance._executor._execute_command.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_get_group_members_concurrent_misses_dedup(
+        self, group_manager_instance, sample_group_info_json
+    ):
+        """N concurrent reads for the same key share one MC subprocess call."""
+        execute_calls = 0
+        loader_started = asyncio.Event()
+        loader_can_finish = asyncio.Event()
+
+        async def slow_execute(_cmd_args):
+            nonlocal execute_calls
+            execute_calls += 1
+            loader_started.set()
+            await loader_can_finish.wait()
+            return CommandResult(
+                success=True,
+                stdout=sample_group_info_json,
+                stderr="",
+                return_code=0,
+                command="mc admin group info",
+            )
+
+        group_manager_instance._executor._execute_command.side_effect = slow_execute
+
+        with patch.object(
+            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
+        ):
+            tasks = [
+                asyncio.create_task(
+                    group_manager_instance.get_group_members("testgroup")
+                )
+                for _ in range(8)
+            ]
+            await loader_started.wait()
+            loader_can_finish.set()
+            results = await asyncio.gather(*tasks)
+
+        assert all(r == ["user1", "user2", "user3"] for r in results)
+        # Single-flight: 8 concurrent reads -> 1 MC subprocess call.
+        assert execute_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_add_user_to_group_invalidates_membership_cache(
+        self, group_manager_instance, mock_user_manager, sample_group_info_json
+    ):
+        """add_user_to_group must bust the cached membership for that group."""
+        group_manager_instance._user_manager = mock_user_manager
+
+        with patch.object(
+            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
+        ):
+            # Prime the cache with the original membership.
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout=sample_group_info_json,
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group info",
+                )
+            )
+            assert await group_manager_instance.get_group_members("testgroup") == [
+                "user1",
+                "user2",
+                "user3",
+            ]
+
+            # Mutation: this should invalidate testgroup's membership entry.
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout="",
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group add",
+                )
+            )
+            await group_manager_instance.add_user_to_group("newuser", "testgroup")
+
+            # Now the next read should re-fetch (fresh membership).
+            new_payload = json.dumps(
+                {
+                    "status": "success",
+                    "groupName": "testgroup",
+                    "members": ["user1", "user2", "user3", "newuser"],
+                    "groupStatus": "enabled",
+                    "groupPolicy": "group-policy-testgroup",
+                }
+            )
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout=new_payload,
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group info",
+                )
+            )
+            refreshed = await group_manager_instance.get_group_members("testgroup")
+            assert refreshed == ["user1", "user2", "user3", "newuser"]
+
+    @pytest.mark.asyncio
+    async def test_remove_user_from_group_invalidates_membership_cache(
+        self, group_manager_instance, sample_group_info_json
+    ):
+        """remove_user_from_group must bust the cached membership for that group."""
+        with patch.object(
+            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
+        ):
+            # Prime cache.
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout=sample_group_info_json,
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group info",
+                )
+            )
+            await group_manager_instance.get_group_members("testgroup")
+
+            # Mutation.
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout="",
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group rm",
+                )
+            )
+            await group_manager_instance.remove_user_from_group("user1", "testgroup")
+
+            # Next read re-fetches.
+            new_payload = json.dumps(
+                {
+                    "status": "success",
+                    "groupName": "testgroup",
+                    "members": ["user2", "user3"],
+                    "groupStatus": "enabled",
+                    "groupPolicy": "group-policy-testgroup",
+                }
+            )
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout=new_payload,
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group info",
+                )
+            )
+            refreshed = await group_manager_instance.get_group_members("testgroup")
+            assert refreshed == ["user2", "user3"]
+
+    @pytest.mark.asyncio
+    async def test_mutation_does_not_invalidate_unrelated_group(
+        self, group_manager_instance, mock_user_manager, sample_group_info_json
+    ):
+        """Mutations on one group must not bust the cached membership of another."""
+        group_manager_instance._user_manager = mock_user_manager
+
+        with patch.object(
+            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
+        ):
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout=sample_group_info_json,
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group info",
+                )
+            )
+            # Prime caches for two groups.
+            await group_manager_instance.get_group_members("alphagroup")
+            await group_manager_instance.get_group_members("betagroup")
+            base_calls = group_manager_instance._executor._execute_command.call_count
+
+            # Mutate alphagroup.
+            await group_manager_instance.add_user_to_group("alice", "alphagroup")
+
+            # Read betagroup: must still hit cache (no extra MC call).
+            await group_manager_instance.get_group_members("betagroup")
+            new_calls = group_manager_instance._executor._execute_command.call_count
+            # Only the add_user_to_group call (1) was added.
+            assert new_calls == base_calls + 1
+
+
+class TestListResourcesCache:
+    """Tests for the SingleFlightTTLCache wiring around list_resources."""
+
+    @pytest.mark.asyncio
+    async def test_list_resources_caches_after_first_call(
+        self, group_manager_instance, sample_group_list_json
+    ):
+        """A second list_resources call does not invoke MC again."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=sample_group_list_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group ls",
+        )
+
+        first = await group_manager_instance.list_resources()
+        second = await group_manager_instance.list_resources()
+
+        assert first == second == ["analysts", "devteam", "testgroup"]
+        assert group_manager_instance._executor._execute_command.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_list_resources_filter_uses_cached_unfiltered_list(
+        self, group_manager_instance, sample_group_list_json
+    ):
+        """name_filter is applied client-side; cache is keyed only on the unfiltered list."""
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=sample_group_list_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group ls",
+        )
+
+        all_groups = await group_manager_instance.list_resources()
+        filtered = await group_manager_instance.list_resources(name_filter="dev")
+
+        assert "devteam" in filtered
+        assert "testgroup" not in filtered
+        assert "analysts" not in filtered
+        # One MC call total, regardless of filter.
+        assert group_manager_instance._executor._execute_command.call_count == 1
+        assert all_groups == ["analysts", "devteam", "testgroup"]
+
+    @pytest.mark.asyncio
+    async def test_create_group_invalidates_list_resources_cache(
+        self,
+        group_manager_instance,
+        mock_policy_manager,
+        mock_user_manager,
+        sample_group_list_json,
+    ):
+        """Creating a new group must drop the cached 'all groups' list.
+
+        Without this invalidation, list_tenants would keep returning the
+        pre-create view of the world for up to TTL seconds in the same
+        pod, defeating the read-after-write guarantee for the operator
+        who just performed the create.
+        """
+        group_manager_instance._policy_manager = mock_policy_manager
+        group_manager_instance._user_manager = mock_user_manager
+
+        # Prime the cache with the original list.
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=sample_group_list_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group ls",
+        )
+        first = await group_manager_instance.list_resources()
+        assert first == ["analysts", "devteam", "testgroup"]
+        prime_calls = group_manager_instance._executor._execute_command.call_count
+
+        # Create a new group. resource_exists=False forces the ADD path
+        # which is what triggers the cache invalidation.
+        with patch.object(
+            group_manager_instance, "resource_exists", AsyncMock(return_value=False)
+        ):
+            group_manager_instance._executor._execute_command.return_value = (
+                CommandResult(
+                    success=True,
+                    stdout="",
+                    stderr="",
+                    return_code=0,
+                    command="mc admin group add",
+                )
+            )
+            await group_manager_instance.create_group("newgroup", "creator")
+
+        # Next list_resources must re-fetch with the new group present.
+        new_list_json = json.dumps(
+            {
+                "status": "success",
+                "groups": [
+                    "testgroup",
+                    "devteam",
+                    "analysts",
+                    "newgroup",
+                    "newgroupro",
+                ],
+            }
+        )
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=new_list_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group ls",
+        )
+        refreshed = await group_manager_instance.list_resources()
+
+        assert "newgroup" in refreshed
+        assert "newgroupro" in refreshed
+        # Cache was busted: this read incurred a fresh MC call rather than
+        # returning the primed three-group list.
+        post_calls = group_manager_instance._executor._execute_command.call_count
+        assert post_calls > prime_calls + 1, (
+            "list_resources after create_group should have re-fetched "
+            "(observed only the create_group MC calls themselves)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_post_delete_cleanup_invalidates_list_resources_cache(
+        self, group_manager_instance, sample_group_list_json, mock_minio_client
+    ):
+        """Deleting a group must drop the cached 'all groups' list.
+
+        Without this invalidation, a deleted tenant would keep showing up
+        on the Tenants page for up to TTL seconds in the same pod.
+        """
+        # Prime the cache with the original three-group list.
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=sample_group_list_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group ls",
+        )
+        await group_manager_instance.list_resources()
+        assert group_manager_instance._executor._execute_command.call_count == 1
+
+        # _post_delete_cleanup is the hook called after a group has been
+        # removed. It should invalidate the groups-list cache.
+        await group_manager_instance._post_delete_cleanup("testgroup")
+
+        # The next read must re-fetch (no longer includes testgroup).
+        new_list_json = json.dumps(
+            {"status": "success", "groups": ["devteam", "analysts"]}
+        )
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout=new_list_json,
+            stderr="",
+            return_code=0,
+            command="mc admin group ls",
+        )
+        refreshed = await group_manager_instance.list_resources()
+
+        assert "testgroup" not in refreshed
+        assert refreshed == ["analysts", "devteam"]
+        # Two MC list calls in total: the prime and the post-invalidation refetch.
+        assert group_manager_instance._executor._execute_command.call_count == 2
