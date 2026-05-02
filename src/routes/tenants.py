@@ -138,6 +138,13 @@ async def add_tenant_member(
     ``tenant_manager.add_member`` performs the MinIO group move; we then
     mirror the same writer/reader binding into Polaris so a user shows up
     in the tenant's catalog as soon as they show up in the MinIO group.
+
+    Polaris ops are ordered grant-before-revoke so a user being moved
+    between RW and RO never observes a window with neither role bound.
+    The cost is a brief overlap where the user holds both roles, which
+    is harmless — write strictly supersedes read. (The MinIO ops inside
+    add_member follow the opposite order — remove-then-add — and that's
+    a separate concern owned by TenantManager.)
     """
     await require_steward_or_admin(tenant_name, request, authenticated_user)
     app_state = get_app_state(request)
@@ -147,13 +154,13 @@ async def add_tenant_member(
         tenant_name, username, permission, token
     )
 
-    # Mirror the MinIO membership change into Polaris.
+    # Mirror the MinIO membership change into Polaris (grant first for continuity).
     target_group = tenant_name if permission == "read_write" else f"{tenant_name}ro"
     opposite_group = f"{tenant_name}ro" if permission == "read_write" else tenant_name
+    await app_state.polaris_group_manager.add_user_to_group(username, target_group)
     await app_state.polaris_group_manager.remove_user_from_group(
         username, opposite_group
     )
-    await app_state.polaris_group_manager.add_user_to_group(username, target_group)
 
     return response
 

@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from minio.managers.user_manager import GLOBAL_USER_GROUP, REFDATA_TENANT_RO_GROUP
-from polaris.constants import normalize_group_name_for_polaris
+from polaris.constants import dedup_groups_preferring_write
 from s3.models.user import UserModel
 from s3.utils.validators import validate_group_name
 from service.app_state import get_app_state
@@ -983,13 +983,16 @@ async def ensure_all_polaris_resources(
             await polaris_user_manager.create_user(username)
 
             user_groups = await app_state.group_manager.get_user_groups(username)
-            for group_name in user_groups:
-                # Skip role bindings whose base group was excluded so this
-                # endpoint's exclusion semantics are consistent across both
-                # phases.
-                base_group, _ = normalize_group_name_for_polaris(group_name)
+            # Same dedup the live provisioning path uses: when a user is in
+            # both the {group} and {group}ro variants, only bind the higher-
+            # privilege role once. Then drop excluded base groups so this
+            # endpoint's exclusion semantics are consistent across both phases.
+            for base_group, is_ro in dedup_groups_preferring_write(user_groups).items():
                 if base_group in exclude_groups:
                     continue
+                # Reconstruct the canonical group name so PolarisGroupManager's
+                # internal normalisation maps to the right writer/reader role.
+                group_name = f"{base_group}ro" if is_ro else base_group
                 await polaris_group_manager.add_user_to_group(username, group_name)
 
             users_provisioned += 1

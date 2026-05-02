@@ -1435,6 +1435,31 @@ class TestEnsurePolarisResourcesEndpoint:
         assert data["users_provisioned"] == 1  # only bob
         assert data["groups_provisioned"] == 0  # team1 was the only base group
 
+    def test_ensure_polaris_dedups_writer_and_reader_variants(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """A user in both team1 AND team1ro gets only the writer binding once.
+
+        Mirrors the dedup-preferring-write semantics that the live
+        /polaris/user_provision endpoint uses, so backfill produces the
+        same end-state as a fresh provision.
+        """
+        polaris_migration_state.group_manager.get_user_groups.return_value = [
+            "team1",
+            "team1ro",
+        ]
+        polaris_group_manager = polaris_migration_state.polaris_group_manager
+
+        polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
+
+        # Each user gets exactly one binding (writer "team1"), not two.
+        add_calls = polaris_group_manager.add_user_to_group.call_args_list
+        per_user_groups = {
+            user: [c.args[1] for c in add_calls if c.args[0] == user]
+            for user in ("alice", "bob")
+        }
+        assert per_user_groups == {"alice": ["team1"], "bob": ["team1"]}
+
 
 class TestMigrationResponseModels:
     """Tests for migration response model validation."""

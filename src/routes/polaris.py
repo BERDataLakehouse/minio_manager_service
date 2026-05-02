@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from polaris.constants import (
     ICEBERG_STORAGE_SUBDIRECTORY,
     PERSONAL_CATALOG_ADMIN_ROLE,
-    normalize_group_name_for_polaris,
+    dedup_groups_preferring_write,
     personal_catalog_name,
     personal_principal_role,
     tenant_catalog_name,
@@ -91,30 +91,6 @@ def _authorize_polaris_provision(username: str, authenticated_user: KBaseUser) -
         )
 
 
-def _dedup_groups_preferring_write(
-    user_groups: list[str],
-) -> dict[str, bool]:
-    """Collapse a user's group membership to one entry per base tenant.
-
-    When a user is in both the read-write (``teamA``) and read-only
-    (``teamAro``) variants of the same tenant we only need to bind the
-    higher-privilege role once. Empty base names (groups normalising to
-    ``""``) are dropped defensively.
-
-    Returns:
-        Mapping from base group name to ``is_read_only`` flag.
-    """
-    deduped: dict[str, bool] = {}
-    for group_name in user_groups:
-        base, is_ro = normalize_group_name_for_polaris(group_name)
-        if not base:
-            continue
-        # Prefer write (is_ro=False) over read (is_ro=True) when both variants present.
-        if not is_ro or base not in deduped:
-            deduped[base] = is_ro
-    return deduped
-
-
 async def _ensure_polaris_user_resources(
     username: str,
     app_state_obj: app_state.AppState,
@@ -179,7 +155,7 @@ async def _ensure_polaris_user_resources(
     # principal is created above because grant_principal_role_to_principal
     # requires the principal to exist.
     user_groups = await app_state_obj.group_manager.get_user_groups(username)
-    deduped = _dedup_groups_preferring_write(user_groups)
+    deduped = dedup_groups_preferring_write(user_groups)
 
     tenant_catalogs: list[str] = []
     for base_group, is_ro in deduped.items():
@@ -315,7 +291,7 @@ async def _effective_access_response(
     app_state_obj: app_state.AppState,
 ) -> PolarisEffectiveAccessResponse:
     user_groups = await app_state_obj.group_manager.get_user_groups(username)
-    deduped = _dedup_groups_preferring_write(user_groups)
+    deduped = dedup_groups_preferring_write(user_groups)
 
     group_tenants = [
         EffectiveAccessGroupTenant(
