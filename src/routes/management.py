@@ -557,6 +557,9 @@ async def delete_group(
     return response
 
 
+# ===== MIGRATION ENDPOINTS =====
+
+
 @router.post(
     "/credentials/rotate-all-credentials",
     response_model=RotateAllCredentialsResponse,
@@ -603,9 +606,6 @@ async def rotate_all_credentials(
         performed_by=authenticated_user.user,
         timestamp=datetime.now(),
     )
-
-
-# ===== MIGRATION ENDPOINTS =====
 
 
 class RegeneratePoliciesResponse(BaseModel):
