@@ -4,6 +4,8 @@
 
 A centralized FastAPI-based microservice that manages data governance within the BERDL platform. It programmatically provisions MinIO S3 storage policies and Apache Polaris (Iceberg REST) catalogs, providing dynamic credential management and unified access control for Spark applications without requiring code changes.
 
+> **Note on naming.** The product is the **KBERDL Data Governance Service**. The repository, Python package (`minio-manager-service`), Docker service (`minio-manager`), and `MMS_*` environment variables retain the historical "MinIO Manager Service" name and will be renamed in a future cycle.
+
 ## Overview
 
 The KBERDL Data Governance Service enables:
@@ -83,6 +85,13 @@ docker compose logs -f minio-manager
 # - MinIO Console: http://localhost:9013
 # - Polaris API: http://localhost:8182/api/catalog
 ```
+
+> **Upgrading an existing local stack.** A named `postgres_data` volume now
+> backs the postgres container, and the default database has changed from
+> `hive` to `polaris`. If you have an existing local checkout, run
+> `docker compose down -v` once before `docker compose up -d` so the new
+> init scripts run against a clean data directory. This drops the previous
+> ephemeral postgres state — production deployments are unaffected.
 
 ## Configuration
 

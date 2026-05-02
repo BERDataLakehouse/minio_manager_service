@@ -12,6 +12,7 @@ from polaris.credential_store import PolarisCredentialRecord
 from service import app_state
 from service.dependencies import auth
 from service.exception_handlers import universal_error_handler
+from service.exceptions import PolarisOperationError
 from service.kb_auth import AdminPermission, KBaseUser
 
 
@@ -27,7 +28,7 @@ def mock_mc_path():
 
 @pytest.fixture
 def mock_polaris_service():
-    """Create a mock PolarisService."""
+    """Create a mock PolarisService with the methods exercised by the route."""
     polaris = AsyncMock()
     polaris.minio_endpoint = "http://minio:9002"
     polaris.create_catalog = AsyncMock(return_value={})
@@ -37,14 +38,7 @@ def mock_polaris_service():
     polaris.create_principal_role = AsyncMock(return_value={})
     polaris.grant_catalog_role_to_principal_role = AsyncMock(return_value={})
     polaris.grant_principal_role_to_principal = AsyncMock(return_value={})
-    polaris.rotate_principal_credentials = AsyncMock(
-        return_value={
-            "credentials": {
-                "clientId": "test-client-id",
-                "clientSecret": "test-client-secret",
-            }
-        }
-    )
+    polaris.ensure_tenant_catalog = AsyncMock(return_value=None)
     return polaris
 
 
@@ -53,14 +47,11 @@ def mock_app_state_obj(mock_polaris_service):
     """Create a mock application state with Polaris service."""
     state = MagicMock()
 
-    # Mock user manager config
-    state.user_manager = MagicMock()
-    state.user_manager.config = MagicMock()
-    state.user_manager.config.default_bucket = "cdm-lake"
-    state.user_manager.config.users_sql_warehouse_prefix = "users-sql-warehouse"
-    state.user_manager.config.tenant_sql_warehouse_prefix = "tenant-sql-warehouse"
+    # Pre-built warehouse base URLs (mirrors AppState.build_app()).
+    state.users_sql_warehouse_base = "s3a://cdm-lake/users-sql-warehouse"
+    state.tenant_sql_warehouse_base = "s3a://cdm-lake/tenant-sql-warehouse"
 
-    # Mock group manager
+    # Group manager
     state.group_manager = AsyncMock()
     state.group_manager.get_user_groups = AsyncMock(return_value=[])
 
@@ -103,7 +94,8 @@ def _create_test_app(mock_state, authenticated_user):
     test_app.include_router(router)
     test_app.add_exception_handler(Exception, universal_error_handler)
 
-    # Override dependencies
+    # Override only `auth` — `require_admin` chains through the real `auth`
+    # dependency, so overriding `auth` is enough to drive both code paths.
     test_app.dependency_overrides[auth] = lambda: authenticated_user
     test_app.dependency_overrides[app_state.get_app_state] = lambda: mock_state
 
@@ -172,7 +164,6 @@ class TestProvisionPolarisUser:
         polaris.grant_principal_role_to_principal.assert_called_once_with(
             principal="testuser", principal_role="testuser_role"
         )
-        polaris.rotate_principal_credentials.assert_not_called()
         mock_app_state_obj.polaris_credential_service.get_or_create.assert_called_once_with(
             username="testuser",
             personal_catalog="user_testuser",
@@ -197,17 +188,39 @@ class TestProvisionPolarisUser:
         assert response.status_code == 200
         assert response.json()["personal_catalog"] == "user_otheruser"
 
-    def test_provision_catalog_polaris_error(self, mock_app_state_obj, regular_user):
-        """Test 500 when Polaris operations fail."""
-        mock_app_state_obj.polaris_service.create_catalog.side_effect = Exception(
-            "Connection refused"
+    def test_provision_catalog_polaris_error_returns_structured_500(
+        self, mock_app_state_obj, regular_user
+    ):
+        """Test PolarisOperationError surfaces through the universal error handler."""
+        mock_app_state_obj.polaris_service.create_catalog.side_effect = (
+            PolarisOperationError("Polaris is unhappy", status=500)
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/polaris/user_provision/testuser")
 
         assert response.status_code == 500
-        assert "Failed to provision Polaris environment" in response.json()["detail"]
+        body = response.json()
+        # Universal handler maps PolarisOperationError → POLARIS_OPERATION_ERROR.
+        assert body["error_type"] == "Polaris catalog operation error"
+        assert "Polaris is unhappy" in body["message"]
+
+    def test_provision_catalog_unexpected_error_does_not_leak_internals(
+        self, mock_app_state_obj, regular_user
+    ):
+        """Test generic exceptions are sanitized to 'An unexpected error occurred'."""
+        mock_app_state_obj.polaris_service.create_catalog.side_effect = RuntimeError(
+            "internal segfault details"
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/polaris/user_provision/testuser")
+
+        assert response.status_code == 500
+        body = response.json()
+        assert body["message"] == "An unexpected error occurred"
+        # Internal RuntimeError details must not leak.
+        assert "segfault" not in str(body).lower()
 
     def test_provision_catalog_with_group_memberships(
         self, mock_app_state_obj, regular_user
@@ -228,7 +241,7 @@ class TestProvisionPolarisUser:
     def test_provision_ensures_tenant_catalogs_for_groups(
         self, mock_app_state_obj, regular_user
     ):
-        """Test ensure_tenant_catalog is called for each group during provisioning."""
+        """Test ensure_tenant_catalog is called once per base group."""
         mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
             return_value=["teamA", "teamBro"]
         )
@@ -245,6 +258,22 @@ class TestProvisionPolarisUser:
         call_group_names = [c[0][0] for c in calls]
         assert "teamA" in call_group_names
         assert "teamB" in call_group_names
+
+    def test_provision_ensures_tenant_catalog_uses_tenant_warehouse_base(
+        self, mock_app_state_obj, regular_user
+    ):
+        """Test ensure_tenant_catalog is called with the tenant warehouse path."""
+        mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
+            return_value=["teamA"]
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+        client.post("/polaris/user_provision/testuser")
+
+        mock_app_state_obj.polaris_service.ensure_tenant_catalog.assert_called_once_with(
+            "teamA",
+            "s3a://cdm-lake/tenant-sql-warehouse/teamA/iceberg/",
+        )
 
     def test_provision_catalog_with_globalusers_group(
         self, mock_app_state_obj, regular_user
@@ -274,58 +303,58 @@ class TestProvisionPolarisUser:
         data = response.json()
         assert "tenant_globalusers" in data["tenant_catalogs"]
 
-    def test_provision_catalog_deduplicates_tenant_catalogs(
+    def test_provision_dedups_when_user_in_both_write_and_read_variants(
         self, mock_app_state_obj, regular_user
     ):
-        """Test duplicate tenant catalogs are removed."""
+        """Test the same base tenant appears once and only the writer role is bound."""
         mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
-            return_value=["globalusers"]
+            return_value=["teamA", "teamAro"]  # both variants of the same base
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/polaris/user_provision/testuser")
+
+        # Tenant appears exactly once in the response.
+        assert response.json()["tenant_catalogs"] == ["tenant_teamA"]
+
+        # ensure_tenant_catalog called once per base group (not once per variant).
+        polaris = mock_app_state_obj.polaris_service
+        assert polaris.ensure_tenant_catalog.call_count == 1
+        polaris.ensure_tenant_catalog.assert_called_once_with(
+            "teamA", "s3a://cdm-lake/tenant-sql-warehouse/teamA/iceberg/"
+        )
+
+        # Only the WRITER principal role binding is granted (write supersedes read).
+        tenant_grant_calls = [
+            call
+            for call in polaris.grant_principal_role_to_principal.call_args_list
+            if call.kwargs.get("principal_role", "").startswith("teamA")
+            or (len(call.args) >= 2 and call.args[1].startswith("teamA"))
+        ]
+        assert len(tenant_grant_calls) == 1
+        # Positional call: grant_principal_role_to_principal(username, role)
+        granted_role = tenant_grant_calls[0].args[1]
+        assert granted_role == "teamA_member"  # writer, not "teamAro_member"
+
+    def test_provision_skips_empty_base_group_defensively(
+        self, mock_app_state_obj, regular_user
+    ):
+        """Test a group named exactly 'ro' (normalises to '') is skipped."""
+        mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
+            return_value=["ro", "teamA"]
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/polaris/user_provision/testuser")
 
         data = response.json()
-        assert data["tenant_catalogs"].count("tenant_globalusers") == 1
-
-    def test_provision_tenant_catalog_failure_returns_500(
-        self, mock_app_state_obj, regular_user
-    ):
-        """Test that a failure in ensure_tenant_catalog returns a clean 500."""
-        mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
-            return_value=["teamA"]
+        # No "tenant_" entry from the empty base.
+        assert "tenant_" not in data["tenant_catalogs"]
+        assert data["tenant_catalogs"] == ["tenant_teamA"]
+        polaris = mock_app_state_obj.polaris_service
+        polaris.ensure_tenant_catalog.assert_called_once_with(
+            "teamA", "s3a://cdm-lake/tenant-sql-warehouse/teamA/iceberg/"
         )
-        mock_app_state_obj.polaris_service.ensure_tenant_catalog = AsyncMock(
-            side_effect=Exception("Polaris connection refused")
-        )
-        app = _create_test_app(mock_app_state_obj, regular_user)
-        client = TestClient(app, raise_server_exceptions=False)
-        response = client.post("/polaris/user_provision/testuser")
-
-        assert response.status_code == 500
-        data = response.json()
-        assert "Failed to provision Polaris environment" in data["detail"]
-        # Internal error details should not leak to the client
-        assert "connection refused" not in data["detail"].lower()
-
-    def test_provision_grant_tenant_role_failure_returns_500(
-        self, mock_app_state_obj, regular_user
-    ):
-        """Test that a failure in grant_principal_role_to_principal for tenant returns 500."""
-        mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
-            return_value=["teamA"]
-        )
-        mock_app_state_obj.polaris_service.grant_principal_role_to_principal = (
-            AsyncMock(side_effect=Exception("grant failed"))
-        )
-        app = _create_test_app(mock_app_state_obj, regular_user)
-        client = TestClient(app, raise_server_exceptions=False)
-        response = client.post("/polaris/user_provision/testuser")
-
-        assert response.status_code == 500
-        data = response.json()
-        assert "Failed to provision Polaris environment" in data["detail"]
-        assert "grant failed" not in data["detail"]
 
 
 class TestRotatePolarisCredentials:
@@ -367,14 +396,14 @@ class TestRotatePolarisCredentials:
             personal_catalog="user_otheruser",
         )
 
-    def test_rotate_credentials_returns_500_on_rotation_failure(
+    def test_rotate_credentials_unexpected_error_sanitised(
         self,
         mock_app_state_obj,
         regular_user,
     ):
-        """Test rotation errors return a clean 500."""
-        mock_app_state_obj.polaris_credential_service.rotate.side_effect = Exception(
-            "rotation failed"
+        """Test rotation errors return a clean 500 via the universal handler."""
+        mock_app_state_obj.polaris_credential_service.rotate.side_effect = RuntimeError(
+            "rotation failed internals"
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
@@ -382,9 +411,9 @@ class TestRotatePolarisCredentials:
         response = client.post("/polaris/credentials/rotate/testuser")
 
         assert response.status_code == 500
-        assert response.json()["detail"] == (
-            "Failed to rotate Polaris credentials for testuser"
-        )
+        body = response.json()
+        assert body["message"] == "An unexpected error occurred"
+        assert "rotation failed internals" not in str(body)
 
 
 class TestEffectiveAccess:
@@ -434,6 +463,19 @@ class TestEffectiveAccess:
         assert response.json()["username"] == "alice"
         mock_app_state_obj.group_manager.get_user_groups.assert_called_with("alice")
 
+    def test_regular_user_cannot_get_other_user_effective_access(
+        self, mock_app_state_obj, regular_user
+    ):
+        """Test regular users get 403 when querying another user's access."""
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.get("/polaris/effective-access/otheruser")
+
+        assert response.status_code == 403
+        # group_manager must NOT have been queried — auth fired first.
+        mock_app_state_obj.group_manager.get_user_groups.assert_not_called()
+
     def test_effective_access_skips_empty_group_and_prefers_read_write(
         self,
         mock_app_state_obj,
@@ -441,6 +483,29 @@ class TestEffectiveAccess:
     ):
         mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
             return_value=["", "teamA", "teamAro"]
+        )
+        app = _create_test_app(mock_app_state_obj, regular_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.get("/polaris/effective-access/me")
+
+        assert response.status_code == 200
+        assert response.json()["group_tenants"] == [
+            {
+                "tenant_name": "teamA",
+                "catalog_name": "tenant_teamA",
+                "access_level": "read_write",
+            }
+        ]
+
+    def test_effective_access_prefers_read_write_regardless_of_iteration_order(
+        self,
+        mock_app_state_obj,
+        regular_user,
+    ):
+        """Test RW preference holds when read variant comes first in input."""
+        mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
+            return_value=["teamAro", "teamA"]  # read variant first
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)

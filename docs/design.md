@@ -72,15 +72,24 @@ flowchart TD
     SparkApp -->|Read Metadata| Polaris
 ```
 
-## 5. Primary API Endpoints (Example-WIP)
+## 5. Primary API Endpoints
 
-| Endpoint                  | Method | Description                                              |
-|---------------------------|--------|----------------------------------------------------------|
-| `/polaris/user_provision/{user}`| POST | Provision Polaris user environment (catalog, principal, roles, credentials, tenant access). |
-| `/credentials/`           | GET    | Get/refresh MinIO user credentials and current policy.   |
-| `/users/{user}/share`     | POST   | Grant path-level access between users/groups (Delta).    |
-| `/groups/{group}`         | POST   | Create/update group, creating S3 policy & Polaris catalog.|
-| `/management/groups/{group}/members/{user}` | POST | Add user to group (grants S3 + Polaris roles). |
+A representative subset of the public surface is shown below; the live OpenAPI
+schema at `/docs` is authoritative.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/credentials/` | GET | Get cached MinIO credentials for the authenticated user (creates them on first call). |
+| `/credentials/rotate` | POST | Explicitly rotate the authenticated user's MinIO credentials. |
+| `/polaris/user_provision/{username}` | POST | Provision the user's Polaris environment (catalog, principal, roles) and return cached credentials. |
+| `/polaris/credentials/rotate/{username}` | POST | Rotate the user's Polaris credentials. |
+| `/polaris/effective-access/me` | GET | List the caller's effective Polaris catalog access. |
+| `/polaris/effective-access/{username}` | GET | Admin-only: list a given user's effective Polaris catalog access. |
+| `/management/groups/{group_name}` | POST / DELETE | Create or delete a tenant group (provisions/drops the matching Polaris tenant catalog). |
+| `/management/groups/{group_name}/members/{username}` | POST / DELETE | Add or remove a user from a group; updates both MinIO IAM and Polaris principal-role bindings. |
+| `/sharing/share` | POST | Grant path-level S3 access between users/groups (legacy Delta/Parquet sharing). |
+| `/sharing/unshare` | POST | Revoke path-level S3 access. |
+| `/tenants/...` | various | Tenant metadata (display name, stewards, members) — see `/docs`. |
 
 ## 6. Data & Control Flow
 
@@ -97,13 +106,14 @@ flowchart TD
 3. **Spark Configuration Injection**
    - Notebook helper code sets the generated credentials into the PySpark session:
      ```python
-     # Legacy Delta configuration
+     # Legacy Delta / direct-S3 configuration
      spark.conf.set("spark.hadoop.fs.s3a.access.key", MINIO_ACCESS_KEY)
-     # Polaris configuration injected dynamically
+     spark.conf.set("spark.hadoop.fs.s3a.secret.key", MINIO_SECRET_KEY)
+     # Polaris-backed Iceberg catalog wired dynamically per user
      spark.conf.set("spark.sql.catalog.my.credential", POLARIS_CREDENTIAL)
-     spark.conf.set("spark.sql.catalog.my.warehouse", "user_tgu2")
+     spark.conf.set("spark.sql.catalog.my.warehouse", f"user_{USER}")
      ```
-   - Spark jobs now transparently respect MinIO policies and Polaris ICEBERG limits.
+   - Spark jobs now transparently respect MinIO IAM policies and Polaris RBAC role bindings on Iceberg catalogs.
 
 4. **Tenant Sharing / Group Updates**
    - When an admin adds a user to a group, the Governance Service provisions dual-layer access: Modifies MinIO IAM policies to grant path access, and assigns the Polaris principal to the tenant's catalog roles (Read-Write or Read-Only).
