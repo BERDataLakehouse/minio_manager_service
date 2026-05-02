@@ -19,7 +19,7 @@ Once the MinIO code (`src/minio/`) is deleted:
   populate it and the field has been removed from API responses.
 - Remove `_generate_policy_name` from `PolicyCreator` (`src/s3/core/policy_creator.py`)
   and the `policy_name` field it populates in `build()` — only called from the MinIO
-  policy manager (`src/minio/managers/policy_manager.py:1019`), not used anywhere in
+  policy manager (`src/minio/managers/policy_manager.py`), not used anywhere in
   the Ceph managers. `PolicyCreator` is a document builder and should not own IAM naming;
   `build()` should return a `PolicyDocument` (or accept the name as a constructor
   parameter), and `PolicyManager._create_policy_model` should set the name via
