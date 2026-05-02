@@ -1,6 +1,16 @@
+"""Async client for the Apache Polaris management and Iceberg catalog REST APIs.
+
+Exposes high-level operations used by the MinIO Manager Service to provision
+per-user/per-tenant Polaris catalogs, principals, roles, and grants. All
+non-404/409 failures surface as :class:`PolarisOperationError` so callers see
+a consistent exception surface.
+"""
+
+import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Awaitable, Sequence
+from typing import Any, Dict, List
 from urllib.parse import quote
 
 import aiohttp
@@ -8,6 +18,9 @@ import aiohttp
 from service.exceptions import PolarisOperationError
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_POLARIS_REALM = "POLARIS"
+_DEFAULT_STORAGE_REGION = "us-east-1"
 
 
 class PolarisService:
@@ -18,6 +31,9 @@ class PolarisService:
         polaris_uri: str,
         root_credential: str,
         minio_endpoint: str | None = None,
+        *,
+        polaris_realm: str = _DEFAULT_POLARIS_REALM,
+        storage_region: str = _DEFAULT_STORAGE_REGION,
     ):
         """
         Initialize the Polaris service.
@@ -27,6 +43,8 @@ class PolarisService:
             root_credential: The client_id:client_secret string for Polaris admin access
             minio_endpoint: MinIO S3 endpoint URL (e.g., http://minio:9002). Required for
                 creating catalogs with correct storageConfigInfo for MinIO connectivity.
+            polaris_realm: Polaris realm header value sent on every request.
+            storage_region: AWS region string written into catalog storage config.
         """
         # Strip trailing slashes and /api/catalog if provided by mistake
         base_uri = polaris_uri.rstrip("/")
@@ -45,8 +63,13 @@ class PolarisService:
         self.client_id = parts[0]
         self.client_secret = parts[1] if len(parts) > 1 else ""
         self.minio_endpoint = minio_endpoint
-        self._token: Optional[str] = None
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._polaris_realm = polaris_realm
+        self._storage_region = storage_region
+        self._token: str | None = None
+        self._session: aiohttp.ClientSession | None = None
+        # Single-flight lock so concurrent callers issue only one OAuth POST
+        # when the cached token is missing or has just been invalidated.
+        self._token_lock = asyncio.Lock()
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create a shared aiohttp.ClientSession for connection reuse."""
@@ -61,32 +84,105 @@ class PolarisService:
             self._session = None
 
     async def _get_token(self, session: aiohttp.ClientSession) -> str:
-        """Get or refresh OAuth token for Polaris admin access."""
+        """Get or refresh the OAuth token for Polaris admin access.
+
+        Concurrent callers are coalesced behind ``self._token_lock`` so only
+        one OAuth POST is issued even under load.
+        """
         if self._token is not None:
             return self._token
 
+        async with self._token_lock:
+            # Another coroutine may have populated the token while we waited.
+            if self._token is not None:
+                return self._token
+            # Capture the fetched token in a local before publishing it to the
+            # shared attribute so the return value can't be mutated out from
+            # under us (e.g., by a parallel _do_request clearing self._token
+            # on a 401) if any await is added between assignment and return.
+            token = await self._fetch_token(session)
+            self._token = token
+            return token
+
+    async def _fetch_token(self, session: aiohttp.ClientSession) -> str:
+        """Issue a client_credentials OAuth POST and return the access token.
+
+        Wraps both HTTP errors (4xx/5xx) and connection errors as
+        :class:`PolarisOperationError` so the surface stays consistent.
+        """
         data = {"grant_type": "client_credentials", "scope": "PRINCIPAL_ROLE:ALL"}
         auth = aiohttp.BasicAuth(self.client_id, self.client_secret)
-        headers = {"Polaris-Realm": "POLARIS"}
+        headers = {"Polaris-Realm": self._polaris_realm}
 
-        async with session.post(
-            self.oauth_url, data=data, auth=auth, headers=headers
-        ) as resp:
-            resp.raise_for_status()
-            result = await resp.json()
-            self._token = result["access_token"]
-            return str(self._token)
+        try:
+            async with session.post(
+                self.oauth_url, data=data, auth=auth, headers=headers
+            ) as resp:
+                if resp.status >= 400:
+                    body_text = await resp.text()
+                    error_message = self._extract_error_message(body_text, resp.reason)
+                    raise PolarisOperationError(
+                        f"Polaris OAuth token request failed: {error_message}",
+                        status=resp.status,
+                    )
+                result = await resp.json()
+                return str(result["access_token"])
+        except aiohttp.ClientError as e:
+            raise PolarisOperationError(
+                f"Polaris OAuth token request failed: {e}"
+            ) from e
+
+    @staticmethod
+    def _extract_error_message(body_text: str, fallback_reason: str | None) -> str:
+        """Extract a human-readable error message from a Polaris error body.
+
+        Prefers Polaris's ``{"error": {"message": ...}}`` envelope, falls back
+        to the raw body, then to the HTTP reason phrase.
+        """
+        if not body_text:
+            return fallback_reason or "Unknown Error"
+        try:
+            error_json = json.loads(body_text)
+        except (json.JSONDecodeError, TypeError):
+            return body_text
+        if (
+            isinstance(error_json, dict)
+            and isinstance(error_json.get("error"), dict)
+            and "message" in error_json["error"]
+        ):
+            return str(error_json["error"]["message"])
+        return body_text
 
     async def _request(
         self, method: str, endpoint: str, base_url: str | None = None, **kwargs: Any
     ) -> Dict[str, Any]:
-        """Make an authenticated request to Polaris management API."""
+        """Make an authenticated request to Polaris (management or catalog API).
+
+        On a 401 response the cached OAuth token is cleared and the request is
+        retried exactly once with a fresh token. Any other error (or a second
+        401) is raised as :class:`PolarisOperationError`.
+        """
+        try:
+            return await self._do_request(method, endpoint, base_url=base_url, **kwargs)
+        except PolarisOperationError as e:
+            if e.status != 401:
+                raise
+            logger.warning(
+                "Polaris admin token expired or invalid, retrying with a fresh token."
+            )
+            # _do_request already cleared the cached token; this retry will fetch a new one.
+            return await self._do_request(method, endpoint, base_url=base_url, **kwargs)
+
+    async def _do_request(
+        self, method: str, endpoint: str, base_url: str | None = None, **kwargs: Any
+    ) -> Dict[str, Any]:
+        """Issue a single authenticated request to Polaris (no retry)."""
         session = await self._get_session()
         token = await self._get_token(session)
 
         headers: dict[str, str] = kwargs.pop("headers", {})
         headers["Authorization"] = f"Bearer {token}"
-        headers["Polaris-Realm"] = "POLARIS"
+        headers["Polaris-Realm"] = self._polaris_realm
         headers["Accept"] = "application/json"
 
         url = f"{base_url or self.base_url}/{endpoint.lstrip('/')}"
@@ -95,21 +191,7 @@ class PolarisService:
             async with session.request(method, url, headers=headers, **kwargs) as resp:
                 if resp.status >= 400:
                     body_text = await resp.text()
-                    error_message: str = resp.reason or "Unknown Error"
-                    if body_text:
-                        # Try to extract the inner error message from Polaris JSON
-                        try:
-                            error_json = json.loads(body_text)
-                            if (
-                                "error" in error_json
-                                and "message" in error_json["error"]
-                            ):
-                                error_message = str(error_json["error"]["message"])
-                            else:
-                                error_message = body_text
-                        except (json.JSONDecodeError, TypeError):
-                            error_message = body_text
-
+                    error_message = self._extract_error_message(body_text, resp.reason)
                     raise aiohttp.ClientResponseError(
                         resp.request_info,
                         resp.history,
@@ -126,12 +208,10 @@ class PolarisService:
                     return {}
                 return await resp.json()
         except aiohttp.ClientResponseError as e:
-            # If we get 401, token might have expired. Clear it so next request fetches a new one.
+            # If we get 401, token might have expired. Clear it so the retry
+            # in _request (or the next caller) fetches a new one.
             if e.status == 401:
                 self._token = None
-                logger.warning(
-                    "Polaris admin token expired or invalid, clearing cache."
-                )
             raise PolarisOperationError(str(e.message), status=e.status) from e
 
     async def _catalog_request(
@@ -175,7 +255,7 @@ class PolarisService:
                     "endpointInternal": endpoint,
                     "pathStyleAccess": True,
                     "stsUnavailable": True,
-                    "region": "us-east-1",
+                    "region": self._storage_region,
                 }
             )
 
@@ -243,9 +323,6 @@ class PolarisService:
         """
         return await self._request("POST", f"/principals/{name}/reset", json={})
 
-    # Alias for backwards compatibility
-    rotate_principal_credentials = reset_principal_credentials
-
     async def create_catalog_role(self, catalog: str, role_name: str) -> Dict[str, Any]:
         """Create a role within a catalog."""
         payload = {"catalogRole": {"name": role_name, "properties": {}}}
@@ -255,10 +332,14 @@ class PolarisService:
             )
         except PolarisOperationError as e:
             if e.status == 409:
-                return await self._request(
-                    "GET", f"/catalogs/{catalog}/catalog-roles/{role_name}"
-                )
+                return await self.get_catalog_role(catalog, role_name)
             raise e
+
+    async def get_catalog_role(self, catalog: str, role_name: str) -> Dict[str, Any]:
+        """Get a specific role within a catalog."""
+        return await self._request(
+            "GET", f"/catalogs/{catalog}/catalog-roles/{role_name}"
+        )
 
     async def list_catalog_roles(self, catalog: str) -> List[Dict[str, Any]]:
         """List all roles defined within a catalog."""
@@ -459,26 +540,34 @@ class PolarisService:
         )
 
     async def delete_principal(self, name: str) -> None:
-        """Delete a Polaris principal."""
+        """Delete a Polaris principal.
+
+        404 (already absent) is treated as success; any other error is
+        re-raised so callers can decide how to handle it.
+        """
         try:
             await self._request("DELETE", f"/principals/{name}")
-            logger.info(f"Deleted Polaris principal {name}")
+            logger.info("Deleted Polaris principal %s", name)
         except PolarisOperationError as e:
             if e.status == 404:
-                logger.info(f"Polaris principal {name} not found, ignoring deletion.")
-            else:
-                logger.warning(f"Failed to delete Polaris principal {name}: {e}")
+                logger.info("Polaris principal %s not found, ignoring deletion.", name)
+                return
+            raise
 
     async def delete_catalog(self, name: str) -> None:
-        """Delete a Polaris catalog."""
+        """Delete a Polaris catalog.
+
+        404 (already absent) is treated as success; any other error is
+        re-raised so callers can decide how to handle it.
+        """
         try:
             await self._request("DELETE", f"/catalogs/{name}")
-            logger.info(f"Deleted Polaris catalog {name}")
+            logger.info("Deleted Polaris catalog %s", name)
         except PolarisOperationError as e:
             if e.status == 404:
-                logger.info(f"Polaris catalog {name} not found, ignoring deletion.")
-            else:
-                logger.warning(f"Failed to delete Polaris catalog {name}: {e}")
+                logger.info("Polaris catalog %s not found, ignoring deletion.", name)
+                return
+            raise
 
     async def delete_namespace(
         self,
@@ -561,20 +650,30 @@ class PolarisService:
                 )
 
     async def delete_principal_role(self, name: str) -> None:
-        """Delete a Polaris principal role."""
+        """Delete a Polaris principal role.
+
+        404 (already absent) is treated as success; any other error is
+        re-raised so callers can decide how to handle it.
+        """
         try:
             await self._request("DELETE", f"/principal-roles/{name}")
-            logger.info(f"Deleted Polaris principal role {name}")
+            logger.info("Deleted Polaris principal role %s", name)
         except PolarisOperationError as e:
             if e.status == 404:
                 logger.info(
-                    f"Polaris principal role {name} not found, ignoring deletion."
+                    "Polaris principal role %s not found, ignoring deletion.", name
                 )
-            else:
-                logger.warning(f"Failed to delete Polaris principal role {name}: {e}")
+                return
+            raise
 
     async def drop_tenant_catalog(self, group_name: str) -> None:
         """Drop a Polaris tenant catalog and its associated principal roles.
+
+        Best-effort: per-step failures are logged so a single failure doesn't
+        leave downstream resources orphaned. Order matters — principal-role ->
+        catalog-role bindings must be torn down before catalog roles, and
+        catalog roles/namespaces must be empty before the catalog itself is
+        dropped.
 
         Args:
             group_name: The MinIO group name corresponding to the catalog
@@ -584,21 +683,40 @@ class PolarisService:
         writer_principal_role = f"{group_name}_member"
         reader_principal_role = f"{group_name}ro_member"
 
-        # Remove top-level principal roles before catalog roles so any
-        # principal-role -> catalog-role bindings are gone before the catalog
-        # role deletion pass.
-        await self.delete_principal_role(writer_principal_role)
-        await self.delete_principal_role(reader_principal_role)
+        await self._safe_delete(
+            f"principal role {writer_principal_role}",
+            self.delete_principal_role(writer_principal_role),
+        )
+        await self._safe_delete(
+            f"principal role {reader_principal_role}",
+            self.delete_principal_role(reader_principal_role),
+        )
+        await self._safe_delete(
+            f"namespaces in {tenant_name}",
+            self.delete_all_namespaces(tenant_name),
+        )
+        await self._safe_delete(
+            f"catalog roles in {tenant_name}",
+            self.delete_all_catalog_roles(tenant_name),
+        )
+        await self._safe_delete(
+            f"catalog {tenant_name}",
+            self.delete_catalog(tenant_name),
+        )
 
-        # Delete empty namespaces first; Polaris refuses to drop non-empty catalogs.
-        await self.delete_all_namespaces(tenant_name)
+    @staticmethod
+    async def _safe_delete(description: str, action: Awaitable[None]) -> None:
+        """Await ``action`` and swallow PolarisOperationError with a warning.
 
-        # Delete catalog roles explicitly; Polaris will not drop a catalog while
-        # catalog roles such as catalog_admin or tenant readers/writers remain.
-        await self.delete_all_catalog_roles(tenant_name)
-
-        # Delete the catalog after child resources are gone.
-        await self.delete_catalog(tenant_name)
+        Used by best-effort orchestrators (e.g. ``drop_tenant_catalog``) where
+        an early failure must not block subsequent cleanup steps.
+        """
+        try:
+            await action
+        except PolarisOperationError as e:
+            logger.warning(
+                "Failed to delete %s: %s; continuing teardown.", description, e
+            )
 
     async def namespace_exists(self, catalog: str, namespace: Sequence[str]) -> bool:
         """Return whether a namespace exists in the Iceberg REST catalog API."""
