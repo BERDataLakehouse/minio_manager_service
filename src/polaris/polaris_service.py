@@ -1,0 +1,832 @@
+"""Async client for the Apache Polaris management and Iceberg catalog REST APIs.
+
+Exposes high-level operations used by the MinIO Manager Service to provision
+per-user/per-tenant Polaris catalogs, principals, roles, and grants. All
+non-404/409 failures surface as :class:`PolarisOperationError` so callers see
+a consistent exception surface.
+"""
+
+import asyncio
+import json
+import logging
+from collections.abc import Awaitable, Sequence
+from typing import Any, Dict, List
+from urllib.parse import quote
+
+import aiohttp
+
+from service.exceptions import PolarisOperationError
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_POLARIS_REALM = "POLARIS"
+_DEFAULT_STORAGE_REGION = "us-east-1"
+
+
+class PolarisService:
+    """Service to interact with Apache Polaris management REST API."""
+
+    def __init__(
+        self,
+        polaris_uri: str,
+        root_credential: str,
+        minio_endpoint: str | None = None,
+        *,
+        polaris_realm: str = _DEFAULT_POLARIS_REALM,
+        storage_region: str = _DEFAULT_STORAGE_REGION,
+    ):
+        """
+        Initialize the Polaris service.
+
+        Args:
+            polaris_uri: The base URI for Polaris API (e.g., http://polaris:8181/api/management/v1)
+            root_credential: The client_id:client_secret string for Polaris admin access
+            minio_endpoint: MinIO S3 endpoint URL (e.g., http://minio:9002). Required for
+                creating catalogs with correct storageConfigInfo for MinIO connectivity.
+            polaris_realm: Polaris realm header value sent on every request.
+            storage_region: AWS region string written into catalog storage config.
+        """
+        # Strip trailing slashes and /api/catalog if provided by mistake
+        base_uri = polaris_uri.rstrip("/")
+        if base_uri.endswith("/api/catalog"):
+            self.base_url = base_uri.replace("/api/catalog", "/api/management/v1")
+            self.catalog_base_url = base_uri.replace("/api/catalog", "/api/catalog/v1")
+            self.oauth_url = base_uri.replace(
+                "/api/catalog", "/api/catalog/v1/oauth/tokens"
+            )
+        else:
+            self.base_url = f"{base_uri}/api/management/v1"
+            self.catalog_base_url = f"{base_uri}/api/catalog/v1"
+            self.oauth_url = f"{base_uri}/api/catalog/v1/oauth/tokens"
+
+        parts = root_credential.split(":", 1)
+        self.client_id = parts[0]
+        self.client_secret = parts[1] if len(parts) > 1 else ""
+        self.minio_endpoint = minio_endpoint
+        self._polaris_realm = polaris_realm
+        self._storage_region = storage_region
+        self._token: str | None = None
+        self._session: aiohttp.ClientSession | None = None
+        # Single-flight lock so concurrent callers issue only one OAuth POST
+        # when the cached token is missing or has just been invalidated.
+        self._token_lock = asyncio.Lock()
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create a shared aiohttp.ClientSession for connection reuse."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def close(self) -> None:
+        """Close the shared aiohttp session. Call during application shutdown."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
+
+    async def _get_token(self, session: aiohttp.ClientSession) -> str:
+        """Get or refresh the OAuth token for Polaris admin access.
+
+        Concurrent callers are coalesced behind ``self._token_lock`` so only
+        one OAuth POST is issued even under load.
+        """
+        if self._token is not None:
+            return self._token
+
+        async with self._token_lock:
+            # Another coroutine may have populated the token while we waited.
+            if self._token is not None:
+                return self._token
+            # Capture the fetched token in a local before publishing it to the
+            # shared attribute so the return value can't be mutated out from
+            # under us (e.g., by a parallel _do_request clearing self._token
+            # on a 401) if any await is added between assignment and return.
+            token = await self._fetch_token(session)
+            self._token = token
+            return token
+
+    async def _fetch_token(self, session: aiohttp.ClientSession) -> str:
+        """Issue a client_credentials OAuth POST and return the access token.
+
+        Wraps both HTTP errors (4xx/5xx) and connection errors as
+        :class:`PolarisOperationError` so the surface stays consistent.
+        """
+        data = {"grant_type": "client_credentials", "scope": "PRINCIPAL_ROLE:ALL"}
+        auth = aiohttp.BasicAuth(self.client_id, self.client_secret)
+        headers = {"Polaris-Realm": self._polaris_realm}
+
+        try:
+            async with session.post(
+                self.oauth_url, data=data, auth=auth, headers=headers
+            ) as resp:
+                if resp.status >= 400:
+                    body_text = await resp.text()
+                    error_message = self._extract_error_message(body_text, resp.reason)
+                    raise PolarisOperationError(
+                        f"Polaris OAuth token request failed: {error_message}",
+                        status=resp.status,
+                    )
+                result = await resp.json()
+                return str(result["access_token"])
+        except aiohttp.ClientError as e:
+            raise PolarisOperationError(
+                f"Polaris OAuth token request failed: {e}"
+            ) from e
+
+    @staticmethod
+    def _extract_error_message(body_text: str, fallback_reason: str | None) -> str:
+        """Extract a human-readable error message from a Polaris error body.
+
+        Prefers Polaris's ``{"error": {"message": ...}}`` envelope, falls back
+        to the raw body, then to the HTTP reason phrase.
+        """
+        if not body_text:
+            return fallback_reason or "Unknown Error"
+        try:
+            error_json = json.loads(body_text)
+        except (json.JSONDecodeError, TypeError):
+            return body_text
+        if (
+            isinstance(error_json, dict)
+            and isinstance(error_json.get("error"), dict)
+            and "message" in error_json["error"]
+        ):
+            return str(error_json["error"]["message"])
+        return body_text
+
+    async def _request(
+        self, method: str, endpoint: str, base_url: str | None = None, **kwargs: Any
+    ) -> Dict[str, Any]:
+        """Make an authenticated request to Polaris (management or catalog API).
+
+        On a 401 response the cached OAuth token is cleared and the request is
+        retried exactly once with a fresh token. Any other error (or a second
+        401) is raised as :class:`PolarisOperationError`.
+        """
+        try:
+            return await self._do_request(method, endpoint, base_url=base_url, **kwargs)
+        except PolarisOperationError as e:
+            if e.status != 401:
+                raise
+            logger.warning(
+                "Polaris admin token expired or invalid, retrying with a fresh token."
+            )
+            # _do_request already cleared the cached token; this retry will fetch a new one.
+            return await self._do_request(method, endpoint, base_url=base_url, **kwargs)
+
+    async def _do_request(
+        self, method: str, endpoint: str, base_url: str | None = None, **kwargs: Any
+    ) -> Dict[str, Any]:
+        """Issue a single authenticated request to Polaris (no retry)."""
+        session = await self._get_session()
+        token = await self._get_token(session)
+
+        headers: dict[str, str] = kwargs.pop("headers", {})
+        headers["Authorization"] = f"Bearer {token}"
+        headers["Polaris-Realm"] = self._polaris_realm
+        headers["Accept"] = "application/json"
+
+        url = f"{base_url or self.base_url}/{endpoint.lstrip('/')}"
+
+        try:
+            async with session.request(method, url, headers=headers, **kwargs) as resp:
+                if resp.status >= 400:
+                    body_text = await resp.text()
+                    error_message = self._extract_error_message(body_text, resp.reason)
+                    raise aiohttp.ClientResponseError(
+                        resp.request_info,
+                        resp.history,
+                        status=resp.status,
+                        message=error_message,
+                        headers=resp.headers,
+                    )
+
+                # Some endpoints return 201/204 with no JSON body
+                if resp.status == 204:
+                    return {}
+                content_type = resp.headers.get("Content-Type", "")
+                if resp.status == 201 and "application/json" not in content_type:
+                    return {}
+                return await resp.json()
+        except aiohttp.ClientResponseError as e:
+            # If we get 401, token might have expired. Clear it so the retry
+            # in _request (or the next caller) fetches a new one.
+            if e.status == 401:
+                self._token = None
+            raise PolarisOperationError(str(e.message), status=e.status) from e
+
+    async def _catalog_request(
+        self, method: str, endpoint: str, **kwargs: Any
+    ) -> Dict[str, Any]:
+        """Make an authenticated request to the Polaris Iceberg catalog API."""
+        return await self._request(
+            method,
+            endpoint,
+            base_url=self.catalog_base_url,
+            **kwargs,
+        )
+
+    async def create_catalog(
+        self,
+        name: str,
+        storage_location: str,
+        s3_endpoint: str | None = None,
+    ) -> Dict[str, Any]:
+        """Create a Polaris catalog with S3/MinIO storage.
+
+        Args:
+            name: Catalog name (e.g., "user_tgu2", "tenant_globalusers")
+            storage_location: S3 base path (e.g., "s3a://cdm-lake/users-general-warehouse/tgu2/iceberg/")
+            s3_endpoint: S3/MinIO endpoint URL. When provided, storageConfigInfo includes
+                endpoint, pathStyleAccess, and stsUnavailable fields required for MinIO.
+                Falls back to self.minio_endpoint if not provided.
+        """
+        endpoint = s3_endpoint or self.minio_endpoint
+
+        # Build storageConfigInfo — fields MUST be at the top level (flat schema).
+        # Polaris silently ignores fields nested under "s3".
+        storage_config: Dict[str, Any] = {
+            "storageType": "S3",
+            "allowedLocations": [storage_location],
+        }
+        if endpoint:
+            storage_config.update(
+                {
+                    "endpoint": endpoint,
+                    "endpointInternal": endpoint,
+                    "pathStyleAccess": True,
+                    "stsUnavailable": True,
+                    "region": self._storage_region,
+                }
+            )
+
+        payload = {
+            "catalog": {
+                "name": name,
+                "type": "INTERNAL",
+                "properties": {"default-base-location": storage_location},
+                "storageConfigInfo": storage_config,
+            }
+        }
+        try:
+            return await self._request("POST", "/catalogs", json=payload)
+        except PolarisOperationError as e:
+            if e.status == 409:  # Conflict - already exists
+                return await self.get_catalog(name)
+            raise e
+
+    async def get_catalog(self, name: str) -> Dict[str, Any]:
+        """Get a specific catalog."""
+        return await self._request("GET", f"/catalogs/{name}")
+
+    async def list_catalogs(self) -> List[Dict[str, Any]]:
+        """List all catalogs."""
+        resp = await self._request("GET", "/catalogs")
+        return resp.get("catalogs", [])
+
+    async def create_principal(self, name: str) -> Dict[str, Any]:
+        """Create a Polaris principal and its credentials."""
+        payload = {"principal": {"name": name, "type": "USER", "properties": {}}}
+        try:
+            return await self._request("POST", "/principals", json=payload)
+        except PolarisOperationError as e:
+            if e.status == 409:
+                return await self.get_principal(name)
+            raise e
+
+    async def get_principal(self, name: str) -> Dict[str, Any]:
+        """Get a specific principal."""
+        return await self._request("GET", f"/principals/{name}")
+
+    async def get_principal_role(self, role_name: str) -> Dict[str, Any]:
+        """Get a specific principal role by name."""
+        return await self._request("GET", f"/principal-roles/{role_name}")
+
+    async def get_principal_roles_for_principal(self, principal: str) -> List[str]:
+        """List all principal role names assigned to a given principal."""
+        resp = await self._request("GET", f"/principals/{principal}/principal-roles")
+        roles = resp.get("roles", [])
+        return [r.get("name", "") for r in roles if r.get("name")]
+
+    async def list_principal_roles(self) -> List[Dict[str, Any]]:
+        """List all principal roles in Polaris."""
+        resp = await self._request("GET", "/principal-roles")
+        return resp.get("roles", [])
+
+    async def reset_principal_credentials(self, name: str) -> Dict[str, Any]:
+        """Reset credentials for a principal (admin operation).
+
+        Uses POST /principals/{name}/reset which is allowed for admin principals.
+        The rotate endpoint (POST /principals/{name}/rotate) can only be called
+        by the principal itself, not by an admin on behalf of another principal.
+
+        Returns PrincipalWithCredentials with clientId and clientSecret.
+        """
+        return await self._request("POST", f"/principals/{name}/reset", json={})
+
+    async def create_catalog_role(self, catalog: str, role_name: str) -> Dict[str, Any]:
+        """Create a role within a catalog."""
+        payload = {"catalogRole": {"name": role_name, "properties": {}}}
+        try:
+            return await self._request(
+                "POST", f"/catalogs/{catalog}/catalog-roles", json=payload
+            )
+        except PolarisOperationError as e:
+            if e.status == 409:
+                return await self.get_catalog_role(catalog, role_name)
+            raise e
+
+    async def get_catalog_role(self, catalog: str, role_name: str) -> Dict[str, Any]:
+        """Get a specific role within a catalog."""
+        return await self._request(
+            "GET", f"/catalogs/{catalog}/catalog-roles/{role_name}"
+        )
+
+    async def list_catalog_roles(self, catalog: str) -> List[Dict[str, Any]]:
+        """List all roles defined within a catalog."""
+        resp = await self._request("GET", f"/catalogs/{catalog}/catalog-roles")
+        return resp.get("roles", [])
+
+    async def delete_catalog_role(self, catalog: str, role_name: str) -> None:
+        """Delete a role from a catalog."""
+        try:
+            await self._request(
+                "DELETE",
+                f"/catalogs/{catalog}/catalog-roles/{role_name}",
+            )
+            logger.info("Deleted catalog role %s from catalog %s", role_name, catalog)
+        except PolarisOperationError as e:
+            if e.status == 404:
+                logger.info(
+                    "Catalog role %s not found in catalog %s, ignoring deletion.",
+                    role_name,
+                    catalog,
+                )
+            else:
+                raise
+
+    async def get_grants_for_catalog_role(
+        self, catalog: str, role_name: str
+    ) -> List[str]:
+        """List catalog-scoped privilege names already granted to a catalog role."""
+        grants = await self.list_grants_for_catalog_role(catalog, role_name)
+        return [
+            grant.get("privilege", "")
+            for grant in grants
+            if grant.get("privilege") and grant.get("type", "catalog") == "catalog"
+        ]
+
+    async def list_grants_for_catalog_role(
+        self, catalog: str, role_name: str
+    ) -> List[Dict[str, Any]]:
+        """List full grant resources already assigned to a catalog role."""
+        resp = await self._request(
+            "GET", f"/catalogs/{catalog}/catalog-roles/{role_name}/grants"
+        )
+        return [_unwrap_grant_resource(grant) for grant in resp.get("grants", [])]
+
+    async def grant_catalog_privilege(
+        self, catalog: str, role_name: str, privilege: str = "CATALOG_MANAGE_CONTENT"
+    ) -> Dict[str, Any]:
+        """Grant a privilege on the catalog to a catalog role (idempotent — checks first)."""
+        existing = await self.get_grants_for_catalog_role(catalog, role_name)
+        if privilege in existing:
+            logger.info(
+                "Privilege '%s' already granted to role '%s' on catalog '%s', skipping.",
+                privilege,
+                role_name,
+                catalog,
+            )
+            return {}
+
+        payload = {"grant": {"type": "catalog", "privilege": privilege}}
+        return await self._request(
+            "PUT",
+            f"/catalogs/{catalog}/catalog-roles/{role_name}/grants",
+            json=payload,
+        )
+
+    async def create_principal_role(self, role_name: str) -> Dict[str, Any]:
+        """Create a principal role."""
+        payload = {"principalRole": {"name": role_name, "properties": {}}}
+        try:
+            return await self._request("POST", "/principal-roles", json=payload)
+        except PolarisOperationError as e:
+            if e.status == 409:
+                return await self._request("GET", f"/principal-roles/{role_name}")
+            raise e
+
+    async def get_catalog_roles_for_principal_role(
+        self, principal_role: str, catalog: str
+    ) -> List[str]:
+        """List catalog role names granted to a principal role for a specific catalog."""
+        resp = await self._request(
+            "GET", f"/principal-roles/{principal_role}/catalog-roles/{catalog}"
+        )
+        roles = resp.get("roles", [])
+        return [r.get("name", "") for r in roles if r.get("name")]
+
+    async def grant_catalog_role_to_principal_role(
+        self, catalog: str, catalog_role: str, principal_role: str
+    ) -> Dict[str, Any]:
+        """Grant a catalog role to a principal role (idempotent — checks first)."""
+        # Check if already granted to avoid Polaris duplicate key errors
+        existing = await self.get_catalog_roles_for_principal_role(
+            principal_role, catalog
+        )
+        if catalog_role in existing:
+            logger.info(
+                "Catalog role '%s' already granted to principal role '%s' on catalog '%s', skipping.",
+                catalog_role,
+                principal_role,
+                catalog,
+            )
+            return {}
+
+        payload = {"catalogRole": {"name": catalog_role}}
+        return await self._request(
+            "PUT",
+            f"/principal-roles/{principal_role}/catalog-roles/{catalog}",
+            json=payload,
+        )
+
+    async def grant_principal_role_to_principal(
+        self, principal: str, principal_role: str
+    ) -> Dict[str, Any]:
+        """Assign a principal role to a user (principal) (idempotent — checks first)."""
+        existing = await self.get_principal_roles_for_principal(principal)
+        if principal_role in existing:
+            logger.info(
+                "Principal role '%s' already assigned to principal '%s', skipping.",
+                principal_role,
+                principal,
+            )
+            return {}
+
+        payload = {"principalRole": {"name": principal_role}}
+        return await self._request(
+            "PUT", f"/principals/{principal}/principal-roles", json=payload
+        )
+
+    async def revoke_principal_role_from_principal(
+        self, principal: str, principal_role: str
+    ) -> Dict[str, Any]:
+        """Revoke a principal role from a user (principal) (idempotent — checks first)."""
+        try:
+            existing = await self.get_principal_roles_for_principal(principal)
+        except PolarisOperationError as e:
+            if e.status == 404:
+                logger.info(
+                    "Principal '%s' not found in Polaris, skipping revoke of '%s'.",
+                    principal,
+                    principal_role,
+                )
+                return {}
+            raise
+
+        if principal_role not in existing:
+            logger.info(
+                "Principal role '%s' not assigned to principal '%s', skipping revoke.",
+                principal_role,
+                principal,
+            )
+            return {}
+
+        return await self._request(
+            "DELETE", f"/principals/{principal}/principal-roles/{principal_role}"
+        )
+
+    async def ensure_tenant_catalog(
+        self,
+        group_name: str,
+        storage_location: str,
+    ) -> None:
+        """Ensure a Polaris tenant catalog exists with writer/reader roles.
+
+        Idempotent — safe to call on every user provisioning. All create
+        operations handle 409 (already exists) gracefully.
+
+        Args:
+            group_name: The MinIO group name (e.g., "globalusers")
+            storage_location: S3 storage path for the catalog
+        """
+        tenant_name = f"tenant_{group_name}"
+
+        # Create catalog (idempotent)
+        await self.create_catalog(tenant_name, storage_location)
+
+        # Writer role: CATALOG_MANAGE_CONTENT
+        writer_role_name = f"{group_name}_writer"
+        await self.create_catalog_role(tenant_name, writer_role_name)
+        await self.grant_catalog_privilege(
+            tenant_name, writer_role_name, "CATALOG_MANAGE_CONTENT"
+        )
+
+        writer_principal_role = f"{group_name}_member"
+        await self.create_principal_role(writer_principal_role)
+        await self.grant_catalog_role_to_principal_role(
+            tenant_name, writer_role_name, writer_principal_role
+        )
+
+        # Reader role: read data + list namespaces/tables (but no create/write/drop)
+        reader_role_name = f"{group_name}_reader"
+        await self.create_catalog_role(tenant_name, reader_role_name)
+        for privilege in ["TABLE_READ_DATA", "TABLE_LIST", "NAMESPACE_LIST"]:
+            await self.grant_catalog_privilege(tenant_name, reader_role_name, privilege)
+
+        reader_principal_role = f"{group_name}ro_member"
+        await self.create_principal_role(reader_principal_role)
+        await self.grant_catalog_role_to_principal_role(
+            tenant_name, reader_role_name, reader_principal_role
+        )
+
+    async def delete_principal(self, name: str) -> None:
+        """Delete a Polaris principal.
+
+        404 (already absent) is treated as success; any other error is
+        re-raised so callers can decide how to handle it.
+        """
+        try:
+            await self._request("DELETE", f"/principals/{name}")
+            logger.info("Deleted Polaris principal %s", name)
+        except PolarisOperationError as e:
+            if e.status == 404:
+                logger.info("Polaris principal %s not found, ignoring deletion.", name)
+                return
+            raise
+
+    async def delete_catalog(self, name: str) -> None:
+        """Delete a Polaris catalog.
+
+        404 (already absent) is treated as success; any other error is
+        re-raised so callers can decide how to handle it.
+        """
+        try:
+            await self._request("DELETE", f"/catalogs/{name}")
+            logger.info("Deleted Polaris catalog %s", name)
+        except PolarisOperationError as e:
+            if e.status == 404:
+                logger.info("Polaris catalog %s not found, ignoring deletion.", name)
+                return
+            raise
+
+    async def delete_namespace(
+        self,
+        catalog: str,
+        namespace: Sequence[str],
+    ) -> None:
+        """Delete an empty namespace from a catalog."""
+        namespace_path = _namespace_url(_normalize_namespace(namespace))
+        try:
+            await self._catalog_request(
+                "DELETE",
+                f"/{catalog}/namespaces/{namespace_path}",
+            )
+            logger.info(
+                "Deleted namespace %s from catalog %s",
+                ".".join(namespace),
+                catalog,
+            )
+        except PolarisOperationError as e:
+            if e.status == 404:
+                logger.info(
+                    "Namespace %s not found in catalog %s, ignoring deletion.",
+                    ".".join(namespace),
+                    catalog,
+                )
+            else:
+                raise
+
+    async def delete_all_namespaces(self, catalog: str) -> None:
+        """Best-effort delete all empty namespaces in a catalog, deepest first."""
+        try:
+            namespaces = await self._list_all_namespaces(catalog)
+        except PolarisOperationError as e:
+            if e.status == 404:
+                return
+            raise
+
+        for namespace in sorted(namespaces, key=len, reverse=True):
+            try:
+                await self.delete_namespace(catalog, namespace)
+            except PolarisOperationError as e:
+                logger.warning(
+                    "Failed to delete namespace %s from catalog %s: %s",
+                    ".".join(namespace),
+                    catalog,
+                    e,
+                )
+
+    async def _list_all_namespaces(self, catalog: str) -> list[tuple[str, ...]]:
+        """Return all namespaces in a catalog, including nested namespaces."""
+        discovered: list[tuple[str, ...]] = []
+        pending = list(await self.list_namespaces(catalog))
+        while pending:
+            namespace = pending.pop()
+            discovered.append(namespace)
+            pending.extend(await self.list_namespaces(catalog, parent=namespace))
+        return discovered
+
+    async def delete_all_catalog_roles(self, catalog: str) -> None:
+        """Best-effort delete all catalog roles before dropping a catalog."""
+        try:
+            roles = await self.list_catalog_roles(catalog)
+        except PolarisOperationError as e:
+            if e.status == 404:
+                return
+            raise
+
+        for role in roles:
+            role_name = role.get("name")
+            if not role_name:
+                continue
+            try:
+                await self.delete_catalog_role(catalog, role_name)
+            except PolarisOperationError as e:
+                logger.warning(
+                    "Failed to delete catalog role %s from catalog %s: %s",
+                    role_name,
+                    catalog,
+                    e,
+                )
+
+    async def delete_principal_role(self, name: str) -> None:
+        """Delete a Polaris principal role.
+
+        404 (already absent) is treated as success; any other error is
+        re-raised so callers can decide how to handle it.
+        """
+        try:
+            await self._request("DELETE", f"/principal-roles/{name}")
+            logger.info("Deleted Polaris principal role %s", name)
+        except PolarisOperationError as e:
+            if e.status == 404:
+                logger.info(
+                    "Polaris principal role %s not found, ignoring deletion.", name
+                )
+                return
+            raise
+
+    async def drop_tenant_catalog(self, group_name: str) -> None:
+        """Drop a Polaris tenant catalog and its associated principal roles.
+
+        Best-effort: per-step failures are logged so a single failure doesn't
+        leave downstream resources orphaned. Order matters — principal-role ->
+        catalog-role bindings must be torn down before catalog roles, and
+        catalog roles/namespaces must be empty before the catalog itself is
+        dropped.
+
+        Args:
+            group_name: The MinIO group name corresponding to the catalog
+        """
+        # Roles and catalogs that were created in `ensure_tenant_catalog`
+        tenant_name = f"tenant_{group_name}"
+        writer_principal_role = f"{group_name}_member"
+        reader_principal_role = f"{group_name}ro_member"
+
+        await self._safe_delete(
+            f"principal role {writer_principal_role}",
+            self.delete_principal_role(writer_principal_role),
+        )
+        await self._safe_delete(
+            f"principal role {reader_principal_role}",
+            self.delete_principal_role(reader_principal_role),
+        )
+        await self._safe_delete(
+            f"namespaces in {tenant_name}",
+            self.delete_all_namespaces(tenant_name),
+        )
+        await self._safe_delete(
+            f"catalog roles in {tenant_name}",
+            self.delete_all_catalog_roles(tenant_name),
+        )
+        await self._safe_delete(
+            f"catalog {tenant_name}",
+            self.delete_catalog(tenant_name),
+        )
+
+    @staticmethod
+    async def _safe_delete(description: str, action: Awaitable[None]) -> None:
+        """Await ``action`` and swallow PolarisOperationError with a warning.
+
+        Used by best-effort orchestrators (e.g. ``drop_tenant_catalog``) where
+        an early failure must not block subsequent cleanup steps.
+        """
+        try:
+            await action
+        except PolarisOperationError as e:
+            logger.warning(
+                "Failed to delete %s: %s; continuing teardown.", description, e
+            )
+
+    async def namespace_exists(self, catalog: str, namespace: Sequence[str]) -> bool:
+        """Return whether a namespace exists in the Iceberg REST catalog API."""
+        namespace_path = _namespace_url(_normalize_namespace(namespace))
+        try:
+            await self._catalog_request(
+                "GET", f"/{catalog}/namespaces/{namespace_path}"
+            )
+            return True
+        except PolarisOperationError as e:
+            if e.status == 404:
+                return False
+            raise
+
+    async def list_namespaces(
+        self,
+        catalog: str,
+        parent: Sequence[str] | None = None,
+    ) -> List[tuple[str, ...]]:
+        """List child namespaces in a catalog or under a parent namespace."""
+        params = None
+        if parent is not None:
+            params = {"parent": _namespace_query_value(_normalize_namespace(parent))}
+        resp = await self._catalog_request(
+            "GET",
+            f"/{catalog}/namespaces",
+            params=params,
+        )
+        namespaces = resp.get("namespaces", [])
+        if not isinstance(namespaces, list):
+            return []
+        return [
+            namespace
+            for item in namespaces
+            if (namespace := _namespace_from_payload_item(item))
+        ]
+
+    async def list_tables_in_namespace(
+        self, catalog: str, namespace: Sequence[str]
+    ) -> List[str]:
+        """List table names inside a namespace via the Iceberg REST catalog API."""
+        namespace_path = _namespace_url(_normalize_namespace(namespace))
+        resp = await self._catalog_request(
+            "GET", f"/{catalog}/namespaces/{namespace_path}/tables"
+        )
+        identifiers = resp.get("identifiers")
+        if isinstance(identifiers, list):
+            return [
+                item["name"]
+                for item in identifiers
+                if isinstance(item, dict) and item.get("name")
+            ]
+        tables = resp.get("tables", [])
+        return [
+            item["name"] if isinstance(item, dict) else str(item)
+            for item in tables
+            if item
+        ]
+
+    async def load_table(
+        self,
+        catalog: str,
+        namespace: Sequence[str],
+        table_name: str,
+    ) -> Dict[str, Any]:
+        """Load table metadata from the Iceberg REST catalog API."""
+        namespace_path = _namespace_url(_normalize_namespace(namespace))
+        table_path = quote(table_name, safe="")
+        return await self._catalog_request(
+            "GET",
+            f"/{catalog}/namespaces/{namespace_path}/tables/{table_path}",
+        )
+
+
+def _normalize_namespace(namespace: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(namespace, str):
+        raise ValueError("namespace must be a sequence, not a dotted string")
+    namespace_parts = tuple(part.strip() for part in namespace)
+    if not namespace_parts:
+        raise ValueError("namespace must not be empty")
+    if any(not part for part in namespace_parts):
+        raise ValueError("namespace must not contain empty values")
+    return namespace_parts
+
+
+def _namespace_url(namespace: Sequence[str]) -> str:
+    return "%1F".join(quote(part, safe="") for part in namespace)
+
+
+def _namespace_query_value(namespace: Sequence[str]) -> str:
+    return "\x1f".join(namespace)
+
+
+def _namespace_from_payload_item(item: Any) -> tuple[str, ...] | None:
+    if isinstance(item, list):
+        return tuple(str(part) for part in item if part)
+    if isinstance(item, str):
+        return tuple(part for part in item.split(".") if part)
+    if isinstance(item, dict):
+        namespace = item.get("namespace")
+        if isinstance(namespace, list):
+            return tuple(str(part) for part in namespace if part)
+        name = item.get("name")
+        if isinstance(name, str):
+            return tuple(part for part in name.split(".") if part)
+    return None
+
+
+def _unwrap_grant_resource(grant: Dict[str, Any]) -> Dict[str, Any]:
+    nested = grant.get("grant")
+    if isinstance(nested, dict):
+        return nested
+    return grant
