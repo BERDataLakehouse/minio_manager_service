@@ -669,9 +669,51 @@ class RegeneratePoliciesResponse(BaseModel):
     groups_updated: Annotated[
         int, Field(description="Number of group policies regenerated", ge=0)
     ]
+    users_skipped: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description="Usernames excluded by the caller that exist in the system",
+        ),
+    ]
+    groups_skipped: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description="Base group names excluded by the caller that exist in the system",
+        ),
+    ]
     errors: Annotated[list[MigrationError], Field(description="Errors encountered")]
     performed_by: Annotated[str, Field(description="Admin who performed the operation")]
     timestamp: Annotated[datetime, Field(description="When operation was performed")]
+
+
+class RegeneratePoliciesRequest(BaseModel):
+    """Request model for bulk policy regeneration."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    exclude_users: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description=(
+                "Usernames to skip, such as system or service accounts. "
+                "Names that do not exist are silently ignored."
+            ),
+        ),
+    ]
+    exclude_groups: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description=(
+                "Base group names to skip. The corresponding read-only group "
+                "is also skipped automatically. Names that do not exist are "
+                "silently ignored."
+            ),
+        ),
+    ]
 
 
 class EnsurePolarisResponse(BaseModel):
@@ -697,24 +739,34 @@ class EnsurePolarisResponse(BaseModel):
     description=(
         "Force-regenerate HOME policies for all users and groups from the current template. "
         "This updates pre-existing policies to include new path statements (e.g., Iceberg paths). "
-        "Each regeneration is independent — errors do not block others."
+        "Each regeneration is independent — errors do not block others. "
+        "Callers may pass `exclude_users` / `exclude_groups` to skip system or service accounts."
     ),
 )
 async def regenerate_all_policies(
     request: Request,
+    payload: RegeneratePoliciesRequest = RegeneratePoliciesRequest(),
     authenticated_user=Depends(require_admin),
 ):
-    """Regenerate all user and group HOME policies from current templates."""
+    """Regenerate user and group HOME policies, skipping caller-supplied exclusions."""
     app_state = get_app_state(request)
     errors: list[MigrationError] = []
     users_updated = 0
     groups_updated = 0
 
+    exclude_users = set(payload.exclude_users)
+    exclude_groups = set(payload.exclude_groups)
+
     # Regenerate user HOME policies
     all_usernames = await app_state.user_manager.list_resources()
-    logger.info(f"Regenerating HOME policies for {len(all_usernames)} users")
+    target_usernames = [u for u in all_usernames if u not in exclude_users]
+    skipped_users = sorted(set(all_usernames) & exclude_users)
+    logger.info(
+        f"Regenerating HOME policies for {len(target_usernames)} users "
+        f"(skipped {len(skipped_users)} excluded users)"
+    )
 
-    for username in all_usernames:
+    for username in target_usernames:
         try:
             await app_state.policy_manager.regenerate_user_home_policy(username)
             users_updated += 1
@@ -731,11 +783,14 @@ async def regenerate_all_policies(
 
     # Filter to base groups only (exclude *ro groups)
     base_groups = [g for g in all_group_names if not g.endswith("ro")]
+    target_base_groups = [g for g in base_groups if g not in exclude_groups]
+    skipped_groups = sorted(set(base_groups) & exclude_groups)
     logger.info(
-        f"Regenerating HOME policies for {len(base_groups)} base groups (RW + RO)"
+        f"Regenerating HOME policies for {len(target_base_groups)} base groups "
+        f"(RW + RO; skipped {len(skipped_groups)} excluded base groups)"
     )
 
-    for base_group in base_groups:
+    for base_group in target_base_groups:
         # Regenerate RW policy
         try:
             await app_state.policy_manager.regenerate_group_home_policy(
@@ -771,12 +826,16 @@ async def regenerate_all_policies(
 
     logger.info(
         f"Admin {authenticated_user.user} regenerated policies: "
-        f"{users_updated} users, {groups_updated} groups, {len(errors)} errors"
+        f"{users_updated} users, {groups_updated} groups, "
+        f"{len(skipped_users)} users skipped, {len(skipped_groups)} groups skipped, "
+        f"{len(errors)} errors"
     )
 
     return RegeneratePoliciesResponse(
         users_updated=users_updated,
         groups_updated=groups_updated,
+        users_skipped=skipped_users,
+        groups_skipped=skipped_groups,
         errors=errors,
         performed_by=authenticated_user.user,
         timestamp=datetime.now(),

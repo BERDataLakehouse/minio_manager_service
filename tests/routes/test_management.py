@@ -1088,7 +1088,99 @@ class TestRegeneratePoliciesEndpoint:
         data = response.json()
         assert data["users_updated"] == 0
         assert data["groups_updated"] == 0
+        assert data["users_skipped"] == []
+        assert data["groups_skipped"] == []
         assert data["errors"] == []
+
+    def test_regenerate_policies_empty_body_behaves_like_no_body(
+        self, migration_client, migration_app_state
+    ):
+        """Posting an empty JSON object should behave the same as no body."""
+        response = migration_client.post(
+            "/management/migrate/regenerate-policies", json={}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_updated"] == 2
+        assert data["groups_updated"] == 4
+        assert data["users_skipped"] == []
+        assert data["groups_skipped"] == []
+        assert data["errors"] == []
+
+    def test_regenerate_policies_excludes_users(
+        self, migration_client, migration_app_state
+    ):
+        """exclude_users skips matching users and reports them in users_skipped."""
+        response = migration_client.post(
+            "/management/migrate/regenerate-policies",
+            json={"exclude_users": ["alice"]},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_updated"] == 1
+        assert data["users_skipped"] == ["alice"]
+
+        calls = migration_app_state.policy_manager.regenerate_user_home_policy.call_args_list
+        assert len(calls) == 1
+        assert calls[0].args == ("bob",)
+
+    def test_regenerate_policies_excludes_unknown_users_silently(
+        self, migration_client, migration_app_state
+    ):
+        """Unknown excluded usernames are silently ignored and not echoed back."""
+        response = migration_client.post(
+            "/management/migrate/regenerate-policies",
+            json={"exclude_users": ["ghost", "nobody"]},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_updated"] == 2
+        assert data["users_skipped"] == []
+
+    def test_regenerate_policies_excludes_groups_skips_rw_and_ro(
+        self, migration_client, migration_app_state
+    ):
+        """Excluding a base group skips both its RW and RO policies."""
+        response = migration_client.post(
+            "/management/migrate/regenerate-policies",
+            json={"exclude_groups": ["team1"]},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["groups_updated"] == 2
+        assert data["groups_skipped"] == ["team1"]
+
+        calls = migration_app_state.policy_manager.regenerate_group_home_policy.call_args_list
+        assert len(calls) == 2
+        assert calls[0].kwargs == {"group_name": "team2", "read_only": False}
+        assert calls[1].kwargs == {
+            "group_name": "team2ro",
+            "read_only": True,
+            "path_target": "team2",
+        }
+
+    def test_regenerate_policies_excludes_users_and_groups_combined(
+        self, migration_client, migration_app_state
+    ):
+        """exclude_users and exclude_groups can be combined in one request."""
+        response = migration_client.post(
+            "/management/migrate/regenerate-policies",
+            json={
+                "exclude_users": ["alice", "ghost"],
+                "exclude_groups": ["team2", "missing-group"],
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_updated"] == 1
+        assert data["groups_updated"] == 2
+        assert data["users_skipped"] == ["alice"]
+        assert data["groups_skipped"] == ["team2"]
 
 
 class TestEnsurePolarisResourcesEndpoint:
