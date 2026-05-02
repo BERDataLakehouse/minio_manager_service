@@ -6,16 +6,14 @@ import string
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from minio.managers.resource_manager import ResourceManager
-from minio.models.command import UserAction
-from polaris.constants import ICEBERG_STORAGE_SUBDIRECTORY
-from polaris.polaris_service import PolarisService
-from s3.core.policy_creator import SYSTEM_RESOURCE_CONFIG
+from service.exceptions import GroupNotFoundError, UserOperationError
 from s3.core.s3_client import S3Client
+from s3.core.policy_creator import SYSTEM_RESOURCE_CONFIG
+from minio.models.command import UserAction
 from s3.models.s3_config import S3Config
 from s3.models.user import UserModel
 from s3.utils.validators import validate_username
-from service.exceptions import GroupNotFoundError, UserOperationError
+from minio.managers.resource_manager import ResourceManager
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +34,10 @@ REFDATA_TENANT_RO_GROUP = "refdataro"
 class UserManager(ResourceManager[UserModel]):
     """UserManager for basic user operations with patterns and generic CRUD."""
 
-    def __init__(
-        self,
-        client: S3Client,
-        config: S3Config,
-        polaris_service: PolarisService,
-    ) -> None:
+    def __init__(self, client: S3Client, config: S3Config) -> None:
         super().__init__(client, config)
         self.users_general_warehouse_prefix = config.users_general_warehouse_prefix
         self.users_sql_warehouse_prefix = config.users_sql_warehouse_prefix
-        self.polaris_service: PolarisService = polaris_service
 
         # Lazy initialization of dependent managers to avoid circular imports
         self._policy_manager = None
@@ -84,9 +76,7 @@ class UserManager(ResourceManager[UserModel]):
         if self._group_manager is None:
             from minio.managers.group_manager import GroupManager
 
-            self._group_manager = GroupManager(
-                self.client, self.config, polaris_service=self.polaris_service
-            )
+            self._group_manager = GroupManager(self.client, self.config)
         return self._group_manager
 
     # === ResourceManager Abstract Method Implementations ===
@@ -146,24 +136,6 @@ class UserManager(ResourceManager[UserModel]):
             await self._delete_user_system_directory(name)
         except Exception as e:
             logger.warning(f"Failed to delete user system directory: {e}")
-
-        # Polaris cleanup: delete in reverse creation order so that role
-        # assignments are removed before the entities they reference.
-        # Each step is independent so one failure doesn't block the rest.
-        try:
-            await self.polaris_service.delete_principal_role(f"{name}_role")
-        except Exception as e:
-            logger.warning(f"Failed to delete Polaris principal role for {name}: {e}")
-
-        try:
-            await self.polaris_service.delete_principal(name)
-        except Exception as e:
-            logger.warning(f"Failed to delete Polaris principal {name}: {e}")
-
-        try:
-            await self.polaris_service.delete_catalog(f"user_{name}")
-        except Exception as e:
-            logger.warning(f"Failed to delete Polaris catalog for {name}: {e}")
 
     # CORE USER OPERATIONS
 
@@ -235,11 +207,6 @@ class UserManager(ResourceManager[UserModel]):
 
             if not await self.group_manager.resource_exists(GLOBAL_USER_GROUP):
                 await self.group_manager.create_group(GLOBAL_USER_GROUP, username)
-                # Ensure Polaris catalog is created for the global group
-                storage_location = f"s3a://{self.config.default_bucket}/{self.config.tenant_sql_warehouse_prefix}/{GLOBAL_USER_GROUP}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
-                await self.polaris_service.ensure_tenant_catalog(
-                    GLOBAL_USER_GROUP, storage_location
-                )
             await self.group_manager.add_user_to_group(username, GLOBAL_USER_GROUP)
 
             try:

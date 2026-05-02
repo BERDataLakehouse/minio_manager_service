@@ -13,10 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from polaris.constants import (
-    ICEBERG_STORAGE_SUBDIRECTORY,
-    normalize_group_name_for_polaris,
-)
+from minio.managers.user_manager import GLOBAL_USER_GROUP, REFDATA_TENANT_RO_GROUP
 from s3.models.user import UserModel
 from s3.utils.validators import validate_group_name
 from service.app_state import get_app_state
@@ -250,10 +247,36 @@ async def create_user(
     request: Request,
     authenticated_user=Depends(require_admin),
 ):
-    """Create a new user account."""
+    """Create a new user account in MinIO and provision matching Polaris assets.
+
+    Orchestration order:
+      1. ``minio.user_manager.create_user`` — MinIO IAM user, policies,
+         home directories, default group memberships (``globalusers``,
+         optionally ``refdataro``).
+      2. ``polaris.user_manager.create_user`` — personal Iceberg catalog +
+         principal + ``catalog_admin`` role + ``{username}_role``.
+      3. ``polaris.group_manager.add_user_to_group`` for each MinIO default
+         group the user joined — keeps the Polaris principal-role bindings in
+         sync with the MinIO membership.
+    """
     app_state = get_app_state(request)
 
+    # 1. MinIO side.
     user_info = await app_state.user_manager.create_user(username=username)
+
+    # 2. Polaris personal assets.
+    await app_state.polaris_user_manager.create_user(username=username)
+
+    # 3. Mirror default-group memberships into Polaris. UserManager.create_user
+    # always adds to GLOBAL_USER_GROUP and best-effort adds to
+    # REFDATA_TENANT_RO_GROUP (skipped silently if absent), so we mirror
+    # whichever the user actually joined per `user_info.groups`.
+    user_groups = set(user_info.groups or ())
+    for group_name in (GLOBAL_USER_GROUP, REFDATA_TENANT_RO_GROUP):
+        if group_name in user_groups:
+            await app_state.polaris_group_manager.add_user_to_group(
+                username, group_name
+            )
 
     response = UserManagementResponse(
         username=user_info.username,
@@ -318,14 +341,26 @@ async def delete_user(
     request: Request,
     authenticated_user=Depends(require_admin),
 ):
-    """Delete a user account."""
+    """Delete a user account.
+
+    Tear-down order:
+      1. Cached MinIO and Polaris credentials (so a later retry after a
+         partial failure doesn't trip on the missing user/principal).
+      2. Polaris user — drops principal role, principal, and personal catalog.
+         Done before MinIO so the Polaris bindings can't reference a
+         deleted MinIO IAM identity.
+      3. MinIO user — IAM, policies, directories, group memberships.
+    """
     app_state = get_app_state(request)
 
-    # Clean up cached credentials before deleting the MinIO user so that
-    # a retry after partial failure doesn't fail on a missing user.
+    # 1. Credentials cache cleanup.
     await app_state.credential_service.delete_credentials(username)
     await app_state.polaris_credential_service.delete_credentials(username)
 
+    # 2. Polaris assets (idempotent / 404-tolerant).
+    await app_state.polaris_user_manager.delete_user(username)
+
+    # 3. MinIO assets.
     success = await app_state.user_manager.delete_resource(username)
     if not success:
         raise UserOperationError(f"Failed to delete user {username}")
@@ -415,8 +450,9 @@ async def create_group(
 ):
     """Create a new group.
 
-    This creates both the main group with read/write access and a read-only group
-    ({group_name}ro) with read-only access to the same shared workspace.
+    Creates the main group and the matching ``{group_name}ro`` read-only group
+    in MinIO IAM, then provisions the matching tenant catalog and writer/
+    reader principal-role bindings in Polaris.
     """
     # Prevent creating groups ending with 'ro' - this suffix is reserved for read-only variants
     if group_name.endswith("ro"):
@@ -429,24 +465,16 @@ async def create_group(
 
     app_state = get_app_state(request)
 
-    # create_group returns a tuple: (main_group, ro_group)
+    # 1. MinIO side. create_group returns a tuple: (main_group, ro_group)
     group_info, ro_group_info = await app_state.group_manager.create_group(
         group_name=group_name,
         creator=authenticated_user.user,
     )
 
-    group_config = app_state.group_manager.config
-    storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{group_name}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
-
-    await app_state.polaris_service.ensure_tenant_catalog(group_name, storage_location)
-
-    # Ensure the creator has a Polaris principal (idempotent — handles pre-Polaris users)
-    await app_state.polaris_service.create_principal(name=authenticated_user.user)
-
-    # The creator should be automatically granted the writer role
-    writer_principal_role = f"{group_name}_member"
-    await app_state.polaris_service.grant_principal_role_to_principal(
-        authenticated_user.user, writer_principal_role
+    # 2. Polaris side. Provisions tenant catalog + writer/reader roles and
+    # binds the creator to both (mirrors MinIO's add-creator-to-both behavior).
+    await app_state.polaris_group_manager.create_group(
+        group_name=group_name, creator=authenticated_user.user
     )
 
     # Ensure tenant metadata row exists for this group
@@ -483,31 +511,11 @@ async def add_group_member(
     request: Request,
     authenticated_user=Depends(require_admin),
 ):
-    """Add a member to a group."""
+    """Add a member to a group (MinIO IAM + matching Polaris role binding)."""
     app_state = get_app_state(request)
-    base_group_name, is_read_only_group = normalize_group_name_for_polaris(group_name)
 
     await app_state.group_manager.add_user_to_group(username, group_name)
-
-    # Ensure tenant catalog exists in Polaris (idempotent — handles pre-Polaris groups)
-    group_config = app_state.group_manager.config
-    storage_location = f"s3a://{group_config.default_bucket}/{group_config.tenant_sql_warehouse_prefix}/{base_group_name}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
-    await app_state.polaris_service.ensure_tenant_catalog(
-        base_group_name, storage_location
-    )
-
-    # Ensure the user has a Polaris principal (idempotent — handles pre-Polaris users)
-    await app_state.polaris_service.create_principal(name=username)
-
-    # Grant the user's principal the correct tenant principal role.
-    principal_role_name = (
-        f"{base_group_name}ro_member"
-        if is_read_only_group
-        else f"{base_group_name}_member"
-    )
-    await app_state.polaris_service.grant_principal_role_to_principal(
-        username, principal_role_name
-    )
+    await app_state.polaris_group_manager.add_user_to_group(username, group_name)
 
     # Get updated group info
     group_info = await app_state.group_manager.get_group_info(group_name)
@@ -540,20 +548,11 @@ async def remove_group_member(
     request: Request,
     authenticated_user=Depends(require_admin),
 ):
-    """Remove a member from a group."""
+    """Remove a member from a group (MinIO IAM + matching Polaris role revoke)."""
     app_state = get_app_state(request)
-    base_group_name, is_read_only_group = normalize_group_name_for_polaris(group_name)
 
     await app_state.group_manager.remove_user_from_group(username, group_name)
-
-    principal_role_name = (
-        f"{base_group_name}ro_member"
-        if is_read_only_group
-        else f"{base_group_name}_member"
-    )
-    await app_state.polaris_service.revoke_principal_role_from_principal(
-        username, principal_role_name
-    )
+    await app_state.polaris_group_manager.remove_user_from_group(username, group_name)
 
     # Get updated group info
     group_info = await app_state.group_manager.get_group_info(group_name)
@@ -585,8 +584,15 @@ async def delete_group(
     request: Request,
     authenticated_user=Depends(require_admin),
 ):
-    """Delete a group and any associated tenant metadata."""
+    """Delete a group and any associated Polaris tenant catalog + metadata.
+
+    Tear-down order: Polaris first (so the catalog and role bindings are gone
+    before MinIO IAM disappears), then MinIO IAM, then tenant metadata.
+    """
     app_state = get_app_state(request)
+
+    # Polaris first — drop catalog + roles. No-op for *ro inputs.
+    await app_state.polaris_group_manager.delete_group(group_name)
 
     success = await app_state.group_manager.delete_resource(group_name)
     if not success:
@@ -699,7 +705,9 @@ class RegeneratePoliciesRequest(BaseModel):
             default_factory=list,
             description=(
                 "Usernames to skip, such as system or service accounts. "
-                "Names that do not exist are silently ignored."
+                "Names that do not exist are silently ignored — verify the "
+                "`users_skipped` field in the response to confirm which "
+                "exclusions actually matched a present user."
             ),
         ),
     ]
@@ -710,7 +718,8 @@ class RegeneratePoliciesRequest(BaseModel):
             description=(
                 "Base group names to skip. The corresponding read-only group "
                 "is also skipped automatically. Names that do not exist are "
-                "silently ignored."
+                "silently ignored — verify the `groups_skipped` field in the "
+                "response to confirm which exclusions actually matched a present group."
             ),
         ),
     ]
@@ -856,28 +865,28 @@ async def ensure_all_polaris_resources(
     request: Request,
     authenticated_user=Depends(require_admin),
 ):
-    """Provision Polaris resources for all existing users and groups."""
+    """Backfill Polaris resources for every existing MinIO user and group.
+
+    Mirrors the per-request orchestration that the create-user / create-group
+    / add-member endpoints do, but applied to every existing MinIO resource.
+    Safe to re-run: every Polaris call here is idempotent.
+    """
     app_state = get_app_state(request)
-    polaris = app_state.polaris_service
+    polaris_user_manager = app_state.polaris_user_manager
+    polaris_group_manager = app_state.polaris_group_manager
     errors: list[MigrationError] = []
     users_provisioned = 0
     groups_provisioned = 0
 
-    # Ensure tenant catalogs for all base groups first
+    # 1. Ensure each base tenant catalog exists.
     all_group_names = await app_state.group_manager.list_resources()
     base_groups = [g for g in all_group_names if not g.endswith("ro")]
-    group_config = app_state.group_manager.config
-
     logger.info(f"Ensuring Polaris tenant catalogs for {len(base_groups)} groups")
 
     for base_group in base_groups:
         try:
-            storage_location = (
-                f"s3a://{group_config.default_bucket}/"
-                f"{group_config.tenant_sql_warehouse_prefix}/"
-                f"{base_group}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
-            )
-            await polaris.ensure_tenant_catalog(base_group, storage_location)
+            # Backfill: ensure the catalog without a "creator" binding.
+            await polaris_group_manager.ensure_catalog(base_group)
             groups_provisioned += 1
         except Exception as e:
             logger.warning(
@@ -889,61 +898,18 @@ async def ensure_all_polaris_resources(
                 )
             )
 
-    # Provision each user: personal catalog + principal + roles + group memberships
+    # 2. For each user: provision personal Polaris assets and mirror their
+    # current MinIO group memberships into Polaris role bindings.
     all_usernames = await app_state.user_manager.list_resources()
-    user_config = app_state.user_manager.config
-
     logger.info(f"Ensuring Polaris resources for {len(all_usernames)} users")
 
     for username in all_usernames:
         try:
-            # Personal catalog
-            catalog_name = f"user_{username}"
-            storage_location = (
-                f"s3a://{user_config.default_bucket}/"
-                f"{user_config.users_sql_warehouse_prefix}/"
-                f"{username}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
-            )
-            await polaris.create_catalog(
-                name=catalog_name, storage_location=storage_location
-            )
+            await polaris_user_manager.create_user(username)
 
-            # Principal
-            await polaris.create_principal(name=username)
-
-            # Catalog role with CATALOG_MANAGE_CONTENT
-            catalog_role = "catalog_admin"
-            await polaris.create_catalog_role(
-                catalog=catalog_name, role_name=catalog_role
-            )
-            await polaris.grant_catalog_privilege(
-                catalog=catalog_name,
-                role_name=catalog_role,
-                privilege="CATALOG_MANAGE_CONTENT",
-            )
-
-            # Principal role wired to catalog role
-            principal_role = f"{username}_role"
-            await polaris.create_principal_role(role_name=principal_role)
-            await polaris.grant_catalog_role_to_principal_role(
-                catalog=catalog_name,
-                catalog_role=catalog_role,
-                principal_role=principal_role,
-            )
-            await polaris.grant_principal_role_to_principal(
-                principal=username, principal_role=principal_role
-            )
-
-            # Grant tenant roles based on group memberships
             user_groups = await app_state.group_manager.get_user_groups(username)
             for group_name in user_groups:
-                base_group, is_ro = normalize_group_name_for_polaris(group_name)
-                principal_role_name = (
-                    f"{base_group}ro_member" if is_ro else f"{base_group}_member"
-                )
-                await polaris.grant_principal_role_to_principal(
-                    username, principal_role_name
-                )
+                await polaris_group_manager.add_user_to_group(username, group_name)
 
             users_provisioned += 1
         except Exception as e:

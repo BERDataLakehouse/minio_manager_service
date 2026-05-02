@@ -21,6 +21,8 @@ from minio.managers.tenant_manager import TenantManager
 from minio.managers.user_manager import UserManager
 from polaris.credential_service import PolarisCredentialService
 from polaris.credential_store import PolarisCredentialStore
+from polaris.managers.group_manager import PolarisGroupManager
+from polaris.managers.user_manager import PolarisUserManager
 from polaris.polaris_service import PolarisService
 from s3.core.distributed_lock import DistributedLockManager
 from s3.core.s3_client import S3Client
@@ -44,12 +46,13 @@ class AppState(NamedTuple):
     policy_manager: PolicyManager
     sharing_manager: SharingManager
     polaris_service: PolarisService
+    polaris_user_manager: PolarisUserManager
+    polaris_group_manager: PolarisGroupManager
     polaris_credential_service: PolarisCredentialService
     credential_service: CredentialService
     tenant_manager: TenantManager
     users_sql_warehouse_base: str
     tenant_sql_warehouse_base: str
-    profile_client: KBaseUserProfileClient
 
 
 class RequestState(NamedTuple):
@@ -143,25 +146,40 @@ async def build_app(app: FastAPI) -> None:
         )
     logger.info("Distributed lock manager initialized and Redis connection verified")
 
-    # Initialize Polaris Service
-    logger.info("Initializing Polaris Service...")
+    # Initialize Polaris service stack. The low-level PolarisService is the
+    # REST client. PolarisUserManager / PolarisGroupManager are the
+    # high-level orchestration layer that mirrors the MinIO managers; the
+    # route layer calls the MinIO manager and the matching Polaris manager
+    # so MinIO ↔ Polaris stay in sync without coupling the manager classes.
+    logger.info("Initializing Polaris stack...")
     polaris_uri = not_falsy(os.getenv("POLARIS_CATALOG_URI"), "POLARIS_CATALOG_URI")
     polaris_cred = not_falsy(os.getenv("POLARIS_CREDENTIAL"), "POLARIS_CREDENTIAL")
     minio_endpoint = str(config.endpoint)
     polaris_service = PolarisService(polaris_uri, polaris_cred, minio_endpoint)
-    logger.info("Polaris Service initialized")
-
-    # Initialize Polaris credential service (coordinates lock + Polaris + DB)
+    users_sql_warehouse_base = (
+        f"s3a://{config.default_bucket}/{config.users_sql_warehouse_prefix}"
+    )
+    tenant_sql_warehouse_base = (
+        f"s3a://{config.default_bucket}/{config.tenant_sql_warehouse_prefix}"
+    )
+    polaris_user_manager = PolarisUserManager(
+        polaris_service=polaris_service,
+        users_sql_warehouse_base=users_sql_warehouse_base,
+    )
+    polaris_group_manager = PolarisGroupManager(
+        polaris_service=polaris_service,
+        tenant_sql_warehouse_base=tenant_sql_warehouse_base,
+    )
     polaris_credential_service = PolarisCredentialService(
         polaris_service=polaris_service,
         credential_store=polaris_credential_store,
         lock_manager=lock_manager,
     )
-    logger.info("Polaris credential service initialized")
+    logger.info("Polaris stack initialized")
 
-    # Initialize all managers with the shared client and polaris hook
-    user_manager = UserManager(minio_client, config, polaris_service=polaris_service)
-    group_manager = GroupManager(minio_client, config, polaris_service=polaris_service)
+    # Initialize MinIO managers (no Polaris coupling — pure MinIO IAM).
+    user_manager = UserManager(minio_client, config)
+    group_manager = GroupManager(minio_client, config)
     policy_manager = PolicyManager(minio_client, config, lock_manager=lock_manager)
     sharing_manager = SharingManager(
         minio_client,
@@ -185,7 +203,6 @@ async def build_app(app: FastAPI) -> None:
     tenant_manager = TenantManager(
         metadata_store=tenant_metadata_store,
         group_manager=group_manager,
-        polaris_service=polaris_service,
         profile_client=profile_client,
         minio_config=config,
     )
@@ -203,13 +220,13 @@ async def build_app(app: FastAPI) -> None:
         policy_manager=policy_manager,
         sharing_manager=sharing_manager,
         polaris_service=polaris_service,
+        polaris_user_manager=polaris_user_manager,
+        polaris_group_manager=polaris_group_manager,
         polaris_credential_service=polaris_credential_service,
         credential_service=credential_service,
         tenant_manager=tenant_manager,
-        # ruff is forcing these long lines, yuck
-        users_sql_warehouse_base=f"s3a://{config.default_bucket}/{config.users_sql_warehouse_prefix}",
-        tenant_sql_warehouse_base=f"s3a://{config.default_bucket}/{config.tenant_sql_warehouse_prefix}",
-        profile_client=profile_client,
+        users_sql_warehouse_base=users_sql_warehouse_base,
+        tenant_sql_warehouse_base=tenant_sql_warehouse_base,
     )
     logger.info("Application state initialized")
 

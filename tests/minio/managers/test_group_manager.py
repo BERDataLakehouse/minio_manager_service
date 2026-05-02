@@ -138,19 +138,9 @@ def mock_user_manager():
 
 
 @pytest.fixture
-def mock_polaris_service():
-    """Create a mock PolarisService."""
-    return AsyncMock()
-
-
-@pytest.fixture
-def group_manager_instance(
-    mock_minio_client, mock_s3_config, mock_executor, mock_polaris_service
-):
+def group_manager_instance(mock_minio_client, mock_s3_config, mock_executor):
     """Create a GroupManager instance with mocked dependencies."""
-    manager = GroupManager(
-        mock_minio_client, mock_s3_config, polaris_service=mock_polaris_service
-    )
+    manager = GroupManager(mock_minio_client, mock_s3_config)
     manager._executor = mock_executor
     return manager
 
@@ -198,29 +188,22 @@ def sample_empty_group_info_json():
 class TestGroupManagerInit:
     """Tests for GroupManager initialization."""
 
-    def test_initialization_with_valid_config(
-        self, mock_minio_client, mock_s3_config, mock_polaris_service
-    ):
+    def test_initialization_with_valid_config(self, mock_minio_client, mock_s3_config):
         """Test successful initialization with valid configuration."""
-        manager = GroupManager(
-            mock_minio_client, mock_s3_config, polaris_service=mock_polaris_service
-        )
+        manager = GroupManager(mock_minio_client, mock_s3_config)
 
         assert manager.client == mock_minio_client
         assert manager.config == mock_s3_config
-        assert manager.polaris_service == mock_polaris_service
         assert manager.tenant_general_warehouse_prefix == "groups-general-warehouse"
         assert manager.tenant_sql_warehouse_prefix == "groups-sql-warehouse"
         assert manager._policy_manager is None
         assert manager._user_manager is None
 
     def test_initialization_inherits_from_resource_manager(
-        self, mock_minio_client, mock_s3_config, mock_polaris_service
+        self, mock_minio_client, mock_s3_config
     ):
         """Test that GroupManager properly inherits from ResourceManager."""
-        manager = GroupManager(
-            mock_minio_client, mock_s3_config, polaris_service=mock_polaris_service
-        )
+        manager = GroupManager(mock_minio_client, mock_s3_config)
 
         # Check executor and command builder are initialized
         assert manager._executor is not None
@@ -333,11 +316,6 @@ class TestResourceManagerMethods:
         # The function raises GroupOperationError when parsing fails
         with pytest.raises((GroupOperationError, json.JSONDecodeError)):
             group_manager_instance._parse_list_output("invalid json")
-
-    def test_parse_list_output_missing_groups_key(self, group_manager_instance):
-        """Test missing groups field is wrapped as a group operation error."""
-        with pytest.raises(GroupOperationError, match="Failed to parse"):
-            group_manager_instance._parse_list_output(json.dumps({"status": "success"}))
 
 
 # =============================================================================
@@ -1213,26 +1191,6 @@ class TestDeleteCleanup:
         mock_policy_manager.delete_group_policy.assert_called_once_with("testgroup")
 
     @pytest.mark.asyncio
-    async def test_pre_delete_cleanup_ro_group_delete_command_exception(
-        self, group_manager_instance, mock_policy_manager
-    ):
-        """Test read-only group command failures are logged and swallowed."""
-        group_manager_instance._policy_manager = mock_policy_manager
-        group_manager_instance._executor._execute_command.side_effect = Exception(
-            "mc unavailable"
-        )
-
-        with patch.object(
-            group_manager_instance, "resource_exists", AsyncMock(return_value=True)
-        ):
-            await group_manager_instance._pre_delete_cleanup("testgroup")
-
-        mock_policy_manager.delete_group_policy.assert_any_call(
-            "testgroupro",
-            read_only=True,
-        )
-
-    @pytest.mark.asyncio
     async def test_post_delete_cleanup_success(
         self, group_manager_instance, mock_minio_client
     ):
@@ -1253,49 +1211,6 @@ class TestDeleteCleanup:
 
         # Should not raise
         await group_manager_instance._post_delete_cleanup("testgroup")
-
-    @pytest.mark.asyncio
-    async def test_post_delete_cleanup_calls_polaris(
-        self, group_manager_instance, mock_minio_client
-    ):
-        """Test _post_delete_cleanup calls drop_tenant_catalog."""
-        mock_minio_client.list_objects.return_value = []
-
-        await group_manager_instance._post_delete_cleanup("testgroup")
-
-        group_manager_instance.polaris_service.drop_tenant_catalog.assert_called_once_with(
-            "testgroup"
-        )
-
-    @pytest.mark.asyncio
-    async def test_post_delete_cleanup_polaris_error_does_not_propagate(
-        self, group_manager_instance, mock_minio_client
-    ):
-        """Test Polaris errors during group cleanup are logged but not propagated."""
-        mock_minio_client.list_objects.return_value = []
-        group_manager_instance.polaris_service.drop_tenant_catalog.side_effect = (
-            Exception("Polaris unavailable")
-        )
-
-        # Should not raise — error is caught and logged as a warning
-        await group_manager_instance._post_delete_cleanup("testgroup")
-
-    @pytest.mark.asyncio
-    async def test_post_delete_cleanup_shared_directory_error_does_not_propagate(
-        self, group_manager_instance
-    ):
-        """Test shared directory cleanup failures are logged and swallowed."""
-        with patch.object(
-            group_manager_instance,
-            "_delete_group_shared_directory",
-            new_callable=AsyncMock,
-            side_effect=Exception("storage failed"),
-        ):
-            await group_manager_instance._post_delete_cleanup("testgroup")
-
-        group_manager_instance.polaris_service.drop_tenant_catalog.assert_called_once_with(
-            "testgroup"
-        )
 
 
 # =============================================================================

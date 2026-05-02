@@ -2,17 +2,16 @@ import json
 import logging
 from typing import List, Optional
 
-from minio.managers.resource_manager import ResourceManager
-from minio.models.command import GroupAction, UserAction
-from polaris.polaris_service import PolarisService
-from s3.core.s3_client import S3Client
-from s3.models.group import GroupModel
-from s3.models.policy import PolicyModel, PolicyType
-from s3.models.s3_config import S3Config
-from s3.utils.validators import validate_group_name, validate_username
 from service.cache import SingleFlightTTLCache
 from service.config import settings
 from service.exceptions import GroupNotFoundError, GroupOperationError
+from s3.core.s3_client import S3Client
+from minio.models.command import GroupAction, UserAction
+from s3.models.group import GroupModel
+from s3.models.s3_config import S3Config
+from s3.models.policy import PolicyModel, PolicyType
+from s3.utils.validators import validate_group_name, validate_username
+from minio.managers.resource_manager import ResourceManager
 
 logger = logging.getLogger(__name__)
 
@@ -27,16 +26,10 @@ _GROUPS_LIST_CACHE_KEY = "__all__"
 class GroupManager(ResourceManager[GroupModel]):
     """GroupManager for basic group operations with patterns and generic CRUD."""
 
-    def __init__(
-        self,
-        client: S3Client,
-        config: S3Config,
-        polaris_service: PolarisService,
-    ):
+    def __init__(self, client: S3Client, config: S3Config):
         super().__init__(client, config)
         self.tenant_general_warehouse_prefix = config.tenant_general_warehouse_prefix
         self.tenant_sql_warehouse_prefix = config.tenant_sql_warehouse_prefix
-        self.polaris_service: PolarisService = polaris_service
 
         # Lazy initialization of dependent managers to avoid circular imports
         self._policy_manager = None
@@ -75,9 +68,7 @@ class GroupManager(ResourceManager[GroupModel]):
         if self._user_manager is None:
             from minio.managers.user_manager import UserManager
 
-            self._user_manager = UserManager(
-                self.client, self.config, polaris_service=self.polaris_service
-            )
+            self._user_manager = UserManager(self.client, self.config)
         return self._user_manager
 
     @property
@@ -295,11 +286,6 @@ class GroupManager(ResourceManager[GroupModel]):
             await self._delete_group_shared_directory(name)
         except Exception as e:
             self.logger.warning(f"Failed to delete group shared directory: {e}")
-
-        try:
-            await self.polaris_service.drop_tenant_catalog(name)
-        except Exception as e:
-            self.logger.warning(f"Failed to drop tenant catalog: {e}")
 
     # === Group-Specific Operations ===
 

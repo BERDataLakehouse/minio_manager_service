@@ -100,6 +100,10 @@ def mock_tenant_manager():
 def mock_app_state(mock_tenant_manager):
     app_state = MagicMock()
     app_state.tenant_manager = mock_tenant_manager
+    # Tenant routes mirror MinIO membership changes into Polaris.
+    app_state.polaris_group_manager = AsyncMock()
+    app_state.polaris_group_manager.add_user_to_group = AsyncMock()
+    app_state.polaris_group_manager.remove_user_from_group = AsyncMock()
     return app_state
 
 

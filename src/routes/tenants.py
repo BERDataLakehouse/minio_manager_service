@@ -133,12 +133,29 @@ async def add_tenant_member(
         Query(description="Permission level for the new member"),
     ] = "read_write",
 ):
+    """Add a user to a tenant — keeps MinIO IAM and Polaris RBAC in sync.
+
+    ``tenant_manager.add_member`` performs the MinIO group move; we then
+    mirror the same writer/reader binding into Polaris so a user shows up
+    in the tenant's catalog as soon as they show up in the MinIO group.
+    """
     await require_steward_or_admin(tenant_name, request, authenticated_user)
     app_state = get_app_state(request)
     token = _extract_token(request)
-    return await app_state.tenant_manager.add_member(
+
+    response = await app_state.tenant_manager.add_member(
         tenant_name, username, permission, token
     )
+
+    # Mirror the MinIO membership change into Polaris.
+    target_group = tenant_name if permission == "read_write" else f"{tenant_name}ro"
+    opposite_group = f"{tenant_name}ro" if permission == "read_write" else tenant_name
+    await app_state.polaris_group_manager.remove_user_from_group(
+        username, opposite_group
+    )
+    await app_state.polaris_group_manager.add_user_to_group(username, target_group)
+
+    return response
 
 
 @router.delete(
@@ -153,10 +170,19 @@ async def remove_tenant_member(
     request: Request,
     authenticated_user: Annotated[KBaseUser, Depends(auth)],
 ):
+    """Remove a user from a tenant — keeps MinIO IAM and Polaris RBAC in sync."""
     await require_steward_or_admin(tenant_name, request, authenticated_user)
     app_state = get_app_state(request)
     await app_state.tenant_manager.remove_member(
         tenant_name, username, authenticated_user
+    )
+
+    # Mirror the MinIO removal into Polaris (revoke both writer and reader
+    # bindings since the user may have been in either MinIO group; revoke
+    # is 404-tolerant so unbound roles are no-ops).
+    await app_state.polaris_group_manager.remove_user_from_group(username, tenant_name)
+    await app_state.polaris_group_manager.remove_user_from_group(
+        username, f"{tenant_name}ro"
     )
 
 
@@ -194,11 +220,16 @@ async def assign_steward(
     request: Request,
     authenticated_user: Annotated[KBaseUser, Depends(require_admin)],
 ):
+    """Assign a steward — also ensures the user has the writer Polaris role."""
     app_state = get_app_state(request)
     token = _extract_token(request)
-    return await app_state.tenant_manager.add_steward(
+    response = await app_state.tenant_manager.add_steward(
         tenant_name, username, authenticated_user.user, token
     )
+    # ``add_steward`` puts the user in the RW MinIO group; mirror that into
+    # Polaris so they get the writer principal-role binding too.
+    await app_state.polaris_group_manager.add_user_to_group(username, tenant_name)
+    return response
 
 
 @router.delete(

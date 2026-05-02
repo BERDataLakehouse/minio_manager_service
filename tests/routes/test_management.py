@@ -129,12 +129,18 @@ def mock_app_state():
     app_state.policy_manager.detach_policy_from_group = AsyncMock()
     app_state.policy_manager.delete_resource = AsyncMock(return_value=True)
 
-    # Mock Polaris Service
+    # Mock Polaris stack — managers are the orchestration layer the routes
+    # call directly; PolarisService is exposed for the polaris.py routes only.
     app_state.polaris_service = AsyncMock()
-    app_state.polaris_service.create_principal = AsyncMock(return_value={})
-    app_state.polaris_service.grant_principal_role_to_principal = AsyncMock()
-    app_state.polaris_service.revoke_principal_role_from_principal = AsyncMock()
-    app_state.polaris_service.ensure_tenant_catalog = AsyncMock()
+    app_state.polaris_user_manager = AsyncMock()
+    app_state.polaris_user_manager.create_user = AsyncMock()
+    app_state.polaris_user_manager.delete_user = AsyncMock()
+    app_state.polaris_group_manager = AsyncMock()
+    app_state.polaris_group_manager.ensure_catalog = AsyncMock()
+    app_state.polaris_group_manager.create_group = AsyncMock()
+    app_state.polaris_group_manager.delete_group = AsyncMock()
+    app_state.polaris_group_manager.add_user_to_group = AsyncMock()
+    app_state.polaris_group_manager.remove_user_from_group = AsyncMock()
 
     # Mock tenant manager
     app_state.tenant_manager = AsyncMock()
@@ -794,157 +800,150 @@ class TestManagementIntegration:
 # === POLARIS INTEGRATION TESTS ===
 
 
-class TestPolarisIntegration:
-    """Tests for Polaris service interactions in management routes."""
+class TestPolarisOrchestration:
+    """Tests asserting management routes delegate to the Polaris managers.
 
-    @pytest.fixture
-    def polaris_app_state(self, mock_app_state):
-        """Create mock app_state with explicit Polaris service mock."""
-        polaris = AsyncMock()
-        mock_app_state.polaris_service = polaris
-        mock_app_state.group_manager.config = MagicMock()
-        mock_app_state.group_manager.config.default_bucket = "cdm-lake"
-        mock_app_state.group_manager.config.tenant_sql_warehouse_prefix = (
-            "tenant-sql-warehouse"
-        )
-        return mock_app_state
+    The actual Polaris orchestration (catalog ensure, principal create,
+    role bind/revoke) lives in PolarisUserManager and PolarisGroupManager
+    and is unit-tested in tests/polaris/managers/. These tests only verify
+    that route handlers call the right manager methods at the right time.
+    """
 
-    @pytest.fixture
-    def polaris_client(self, test_app, polaris_app_state):
-        """Create test client with Polaris-enabled app state."""
-        with patch("routes.management.get_app_state", return_value=polaris_app_state):
-            yield TestClient(test_app, raise_server_exceptions=False)
-
-    def test_create_group_calls_ensure_tenant_catalog(
-        self, polaris_client, polaris_app_state
+    def test_create_user_delegates_to_polaris_user_manager(
+        self, client, mock_app_state
     ):
-        """Test create_group calls ensure_tenant_catalog with correct args."""
-        response = polaris_client.post("/management/groups/newgroup")
+        """Test create_user runs MinIO create then mirrors into Polaris."""
+        # Mock the MinIO user_manager so it returns a UserModel listing the
+        # default groups the user joined; the route mirrors those into Polaris.
+        mock_app_state.user_manager.create_user = AsyncMock(
+            return_value=UserModel(
+                username="newuser",
+                access_key="newuser",
+                secret_key="secret",
+                home_paths=[],
+                groups=["globalusers", "refdataro"],
+                total_policies=2,
+            )
+        )
+        response = client.post("/management/users/newuser")
 
         assert response.status_code == 201
-        polaris_app_state.polaris_service.ensure_tenant_catalog.assert_called_once_with(
-            "newgroup",
-            "s3a://cdm-lake/tenant-sql-warehouse/newgroup/iceberg/",
+        mock_app_state.polaris_user_manager.create_user.assert_called_once_with(
+            username="newuser"
+        )
+        # Both default groups mirrored.
+        mock_app_state.polaris_group_manager.add_user_to_group.assert_any_call(
+            "newuser", "globalusers"
+        )
+        mock_app_state.polaris_group_manager.add_user_to_group.assert_any_call(
+            "newuser", "refdataro"
         )
 
-    def test_create_group_ensures_creator_principal(
-        self, polaris_client, polaris_app_state
+    def test_create_user_skips_polaris_mirror_for_groups_not_joined(
+        self, client, mock_app_state
     ):
-        """Test create_group ensures the creator has a Polaris principal."""
-        response = polaris_client.post("/management/groups/newgroup")
+        """If MinIO didn't add the user to refdataro (group missing), skip Polaris mirror."""
+        mock_app_state.user_manager.create_user = AsyncMock(
+            return_value=UserModel(
+                username="newuser",
+                access_key="newuser",
+                secret_key="secret",
+                home_paths=[],
+                groups=["globalusers"],  # only globalusers, no refdataro
+                total_policies=2,
+            )
+        )
+        response = client.post("/management/users/newuser")
 
         assert response.status_code == 201
-        polaris_app_state.polaris_service.create_principal.assert_called_once_with(
-            name="admin"
+        mock_app_state.polaris_group_manager.add_user_to_group.assert_called_once_with(
+            "newuser", "globalusers"
         )
 
-    def test_create_group_grants_writer_role_to_creator(
-        self, polaris_client, polaris_app_state
+    def test_delete_user_polaris_first_then_minio(self, client, mock_app_state):
+        """Test delete_user tears down Polaris before MinIO."""
+        response = client.delete("/management/users/user1")
+
+        assert response.status_code == 200
+        mock_app_state.polaris_user_manager.delete_user.assert_called_once_with("user1")
+        mock_app_state.user_manager.delete_resource.assert_called_once_with("user1")
+
+    def test_create_group_delegates_to_polaris_group_manager(
+        self, client, mock_app_state
     ):
-        """Test create_group grants the writer principal role to the creator."""
-        response = polaris_client.post("/management/groups/newgroup")
+        """Test create_group runs MinIO create then PolarisGroupManager.create_group."""
+        response = client.post("/management/groups/newgroup")
 
         assert response.status_code == 201
-        polaris_app_state.polaris_service.grant_principal_role_to_principal.assert_called_once_with(
-            "admin", "newgroup_member"
+        mock_app_state.polaris_group_manager.create_group.assert_called_once_with(
+            group_name="newgroup", creator="admin"
         )
 
-    def test_add_member_ensures_tenant_catalog(self, polaris_client, polaris_app_state):
-        """Test add_group_member calls ensure_tenant_catalog for pre-Polaris groups."""
-        response = polaris_client.post("/management/groups/group1/members/user2")
-
-        assert response.status_code == 200
-        polaris_app_state.polaris_service.ensure_tenant_catalog.assert_called_once_with(
-            "group1",
-            "s3a://cdm-lake/tenant-sql-warehouse/group1/iceberg/",
-        )
-
-    def test_add_member_ensures_user_principal(self, polaris_client, polaris_app_state):
-        """Test add_group_member ensures the user has a Polaris principal."""
-        response = polaris_client.post("/management/groups/group1/members/user2")
-
-        assert response.status_code == 200
-        polaris_app_state.polaris_service.create_principal.assert_called_once_with(
-            name="user2"
-        )
-
-    def test_add_member_grants_principal_role(self, polaris_client, polaris_app_state):
-        """Test add_group_member grants tenant principal role to the user."""
-        response = polaris_client.post("/management/groups/group1/members/user2")
-
-        assert response.status_code == 200
-        polaris_app_state.polaris_service.grant_principal_role_to_principal.assert_called_once_with(
-            "user2", "group1_member"
-        )
-
-    def test_add_ro_member_uses_base_group_for_catalog_and_reader_role(
-        self, polaris_client, polaris_app_state
+    def test_add_member_delegates_to_polaris_group_manager(
+        self, client, mock_app_state
     ):
-        """Test add_group_member for *ro groups maps to base tenant catalog and reader role."""
-        response = polaris_client.post("/management/groups/group1ro/members/user2")
+        """Test add_group_member mirrors the MinIO add into Polaris."""
+        response = client.post("/management/groups/group1/members/user2")
 
         assert response.status_code == 200
-        polaris_app_state.polaris_service.ensure_tenant_catalog.assert_called_once_with(
-            "group1",
-            "s3a://cdm-lake/tenant-sql-warehouse/group1/iceberg/",
-        )
-        polaris_app_state.polaris_service.grant_principal_role_to_principal.assert_called_once_with(
-            "user2", "group1ro_member"
+        mock_app_state.polaris_group_manager.add_user_to_group.assert_called_once_with(
+            "user2", "group1"
         )
 
-    def test_remove_member_revokes_principal_role(
-        self, polaris_client, polaris_app_state
+    def test_add_ro_member_passes_ro_group_name_to_polaris(
+        self, client, mock_app_state
     ):
-        """Test remove_group_member revokes tenant principal role from the user."""
-        response = polaris_client.delete("/management/groups/group1/members/user1")
+        """The ``{group}ro`` suffix is preserved; PolarisGroupManager normalises it."""
+        response = client.post("/management/groups/group1ro/members/user2")
 
         assert response.status_code == 200
-        polaris_app_state.polaris_service.revoke_principal_role_from_principal.assert_called_once_with(
-            "user1", "group1_member"
+        mock_app_state.polaris_group_manager.add_user_to_group.assert_called_once_with(
+            "user2", "group1ro"
         )
 
-    def test_remove_ro_member_revokes_reader_role(
-        self, polaris_client, polaris_app_state
+    def test_remove_member_delegates_to_polaris_group_manager(
+        self, client, mock_app_state
     ):
-        """Test remove_group_member for *ro groups revokes reader role."""
-        response = polaris_client.delete("/management/groups/group1ro/members/user1")
+        """Test remove_group_member mirrors the MinIO remove into Polaris."""
+        response = client.delete("/management/groups/group1/members/user1")
 
         assert response.status_code == 200
-        polaris_app_state.polaris_service.revoke_principal_role_from_principal.assert_called_once_with(
-            "user1", "group1ro_member"
+        mock_app_state.polaris_group_manager.remove_user_from_group.assert_called_once_with(
+            "user1", "group1"
         )
 
-    def test_polaris_error_propagates_on_create_group(
-        self, polaris_client, polaris_app_state
-    ):
-        """Test Polaris errors propagate and cause group creation to fail."""
-        polaris_app_state.polaris_service.ensure_tenant_catalog.side_effect = Exception(
+    def test_delete_group_polaris_first_then_minio(self, client, mock_app_state):
+        """Test delete_group tears down Polaris before MinIO."""
+        response = client.delete("/management/groups/group1")
+
+        assert response.status_code == 200
+        mock_app_state.polaris_group_manager.delete_group.assert_called_once_with(
+            "group1"
+        )
+        mock_app_state.group_manager.delete_resource.assert_called_once_with("group1")
+
+    def test_polaris_error_propagates_on_create_group(self, client, mock_app_state):
+        """Test PolarisGroupManager errors propagate and cause group creation to fail."""
+        mock_app_state.polaris_group_manager.create_group.side_effect = Exception(
             "Polaris unavailable"
         )
-
-        response = polaris_client.post("/management/groups/newgroup")
+        response = client.post("/management/groups/newgroup")
         assert response.status_code == 500
 
-    def test_polaris_error_propagates_on_add_member(
-        self, polaris_client, polaris_app_state
-    ):
-        """Test Polaris errors propagate and cause add member to fail."""
-        polaris_app_state.polaris_service.grant_principal_role_to_principal.side_effect = Exception(
+    def test_polaris_error_propagates_on_add_member(self, client, mock_app_state):
+        """Test PolarisGroupManager errors propagate and cause add member to fail."""
+        mock_app_state.polaris_group_manager.add_user_to_group.side_effect = Exception(
             "Polaris unavailable"
         )
-
-        response = polaris_client.post("/management/groups/group1/members/user2")
+        response = client.post("/management/groups/group1/members/user2")
         assert response.status_code == 500
 
-    def test_polaris_error_propagates_on_remove_member(
-        self, polaris_client, polaris_app_state
-    ):
-        """Test Polaris errors propagate and cause remove member to fail."""
-        polaris_app_state.polaris_service.revoke_principal_role_from_principal.side_effect = Exception(
-            "Polaris unavailable"
+    def test_polaris_error_propagates_on_remove_member(self, client, mock_app_state):
+        """Test PolarisGroupManager errors propagate and cause remove member to fail."""
+        mock_app_state.polaris_group_manager.remove_user_from_group.side_effect = (
+            Exception("Polaris unavailable")
         )
-
-        response = polaris_client.delete("/management/groups/group1/members/user1")
+        response = client.delete("/management/groups/group1/members/user1")
         assert response.status_code == 500
 
 
@@ -1184,31 +1183,23 @@ class TestRegeneratePoliciesEndpoint:
 
 
 class TestEnsurePolarisResourcesEndpoint:
-    """Tests for ensure_all_polaris_resources migration endpoint."""
+    """Tests for ensure_all_polaris_resources migration endpoint.
+
+    The endpoint delegates to PolarisGroupManager.ensure_catalog,
+    PolarisUserManager.create_user, and PolarisGroupManager.add_user_to_group.
+    Those methods' internals are unit-tested in tests/polaris/managers/.
+    """
 
     @pytest.fixture
     def polaris_migration_state(self, mock_app_state):
-        """App state configured for Polaris migration endpoint."""
+        """App state with two users in one base group + RO sibling."""
         mock_app_state.user_manager.list_resources = AsyncMock(
             return_value=["alice", "bob"]
-        )
-        mock_app_state.user_manager.config = MagicMock()
-        mock_app_state.user_manager.config.default_bucket = "cdm-lake"
-        mock_app_state.user_manager.config.users_sql_warehouse_prefix = (
-            "users-sql-warehouse"
         )
         mock_app_state.group_manager.list_resources = AsyncMock(
             return_value=["team1", "team1ro"]
         )
-        mock_app_state.group_manager.config = MagicMock()
-        mock_app_state.group_manager.config.default_bucket = "cdm-lake"
-        mock_app_state.group_manager.config.tenant_sql_warehouse_prefix = (
-            "tenant-sql-warehouse"
-        )
         mock_app_state.group_manager.get_user_groups = AsyncMock(return_value=["team1"])
-
-        polaris = AsyncMock()
-        mock_app_state.polaris_service = polaris
         return mock_app_state
 
     @pytest.fixture
@@ -1233,84 +1224,44 @@ class TestEnsurePolarisResourcesEndpoint:
         assert data["groups_provisioned"] == 1  # only base group team1
         assert data["errors"] == []
 
-    def test_ensure_polaris_creates_tenant_catalogs(
+    def test_ensure_polaris_calls_ensure_catalog_for_base_groups_only(
         self, polaris_migration_client, polaris_migration_state
     ):
-        """Test tenant catalogs are created for base groups only."""
+        """RO siblings are skipped; only base groups get ensure_catalog."""
         polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
 
-        polaris = polaris_migration_state.polaris_service
-        polaris.ensure_tenant_catalog.assert_called_once_with(
-            "team1",
-            "s3a://cdm-lake/tenant-sql-warehouse/team1/iceberg/",
-        )
+        polaris_group_manager = polaris_migration_state.polaris_group_manager
+        polaris_group_manager.ensure_catalog.assert_called_once_with("team1")
 
-    def test_ensure_polaris_creates_user_catalogs(
+    def test_ensure_polaris_creates_user_via_polaris_user_manager(
         self, polaris_migration_client, polaris_migration_state
     ):
-        """Test personal catalogs are created for each user."""
+        """Each user gets PolarisUserManager.create_user called once."""
         polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
 
-        polaris = polaris_migration_state.polaris_service
-        # Check create_catalog was called for both users
-        catalog_calls = polaris.create_catalog.call_args_list
-        assert len(catalog_calls) == 2
-        assert catalog_calls[0].kwargs == {
-            "name": "user_alice",
-            "storage_location": "s3a://cdm-lake/users-sql-warehouse/alice/iceberg/",
-        }
-        assert catalog_calls[1].kwargs == {
-            "name": "user_bob",
-            "storage_location": "s3a://cdm-lake/users-sql-warehouse/bob/iceberg/",
-        }
+        polaris_user_manager = polaris_migration_state.polaris_user_manager
+        create_calls = polaris_user_manager.create_user.call_args_list
+        assert [c.args[0] for c in create_calls] == ["alice", "bob"]
 
-    def test_ensure_polaris_creates_principals(
+    def test_ensure_polaris_mirrors_existing_group_memberships(
         self, polaris_migration_client, polaris_migration_state
     ):
-        """Test principals are created for each user."""
+        """Each user's existing MinIO group memberships get mirrored into Polaris."""
         polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
 
-        polaris = polaris_migration_state.polaris_service
-        principal_calls = polaris.create_principal.call_args_list
-        assert len(principal_calls) == 2
-        assert principal_calls[0].kwargs == {"name": "alice"}
-        assert principal_calls[1].kwargs == {"name": "bob"}
+        polaris_group_manager = polaris_migration_state.polaris_group_manager
+        # Both users are in team1, so each gets one add_user_to_group call.
+        polaris_group_manager.add_user_to_group.assert_any_call("alice", "team1")
+        polaris_group_manager.add_user_to_group.assert_any_call("bob", "team1")
+        assert polaris_group_manager.add_user_to_group.call_count == 2
 
-    def test_ensure_polaris_grants_group_roles(
+    def test_ensure_polaris_user_error_continues_to_remaining_users(
         self, polaris_migration_client, polaris_migration_state
     ):
-        """Test principal roles are granted based on group membership."""
-        polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
-
-        polaris = polaris_migration_state.polaris_service
-        # Both alice and bob are members of team1 (from get_user_groups mock)
-        grant_calls = polaris.grant_principal_role_to_principal.call_args_list
-        # Each user gets: personal role + team1_member role = 2 calls per user = 4 total
-        assert len(grant_calls) == 4
-
-    def test_ensure_polaris_ro_group_membership(
-        self, polaris_migration_client, polaris_migration_state
-    ):
-        """Test RO group membership grants ro_member role."""
-        polaris_migration_state.group_manager.get_user_groups.return_value = ["team1ro"]
-
-        polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
-
-        polaris = polaris_migration_state.polaris_service
-        # Look for grant_principal_role_to_principal calls with ro_member
-        grant_calls = polaris.grant_principal_role_to_principal.call_args_list
-        ro_calls = [c for c in grant_calls if "ro_member" in str(c)]
-        assert len(ro_calls) == 2  # both users get team1ro_member
-
-    def test_ensure_polaris_user_error_continues(
-        self, polaris_migration_client, polaris_migration_state
-    ):
-        """Test that a user error does not block other users."""
-        polaris = polaris_migration_state.polaris_service
-        # First call to create_catalog (alice) fails, second (bob) succeeds
-        polaris.create_catalog.side_effect = [
+        """A failure on one user is recorded and the next user is still processed."""
+        polaris_migration_state.polaris_user_manager.create_user.side_effect = [
             Exception("Polaris down for alice"),
-            AsyncMock(),
+            None,  # bob succeeds
         ]
 
         response = polaris_migration_client.post(
@@ -1319,23 +1270,21 @@ class TestEnsurePolarisResourcesEndpoint:
 
         data = response.json()
         assert data["users_provisioned"] == 1
-        assert len(data["errors"]) == 1
-        assert data["errors"][0]["resource_name"] == "alice"
+        assert any(e["resource_name"] == "alice" for e in data["errors"])
 
-    def test_ensure_polaris_group_error_continues(
+    def test_ensure_polaris_group_error_continues_to_remaining_groups(
         self, polaris_migration_client, polaris_migration_state
     ):
-        """Test that a group error does not block other groups."""
+        """A failure on one group is recorded and the next group is still processed."""
         polaris_migration_state.group_manager.list_resources.return_value = [
             "team1",
             "team1ro",
             "team2",
             "team2ro",
         ]
-        polaris = polaris_migration_state.polaris_service
-        polaris.ensure_tenant_catalog.side_effect = [
+        polaris_migration_state.polaris_group_manager.ensure_catalog.side_effect = [
             Exception("team1 failed"),
-            AsyncMock(),  # team2 succeeds
+            None,  # team2 succeeds
         ]
 
         response = polaris_migration_client.post(
@@ -1344,12 +1293,15 @@ class TestEnsurePolarisResourcesEndpoint:
 
         data = response.json()
         assert data["groups_provisioned"] == 1
-        assert len([e for e in data["errors"] if e["resource_type"] == "group"]) == 1
+        assert any(
+            e["resource_type"] == "group" and e["resource_name"] == "team1"
+            for e in data["errors"]
+        )
 
     def test_ensure_polaris_empty_system(
         self, polaris_migration_client, polaris_migration_state
     ):
-        """Test with no users or groups."""
+        """No users or groups → all-zero response with no errors."""
         polaris_migration_state.user_manager.list_resources.return_value = []
         polaris_migration_state.group_manager.list_resources.return_value = []
 

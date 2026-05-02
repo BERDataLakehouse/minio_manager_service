@@ -34,10 +34,11 @@ class TestAppStateNamedTuple:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             polaris_service=MagicMock(),
+            polaris_user_manager=MagicMock(),
+            polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
-            profile_client=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
         )
@@ -46,7 +47,6 @@ class TestAppStateNamedTuple:
         assert state.polaris_credential_service is not None
         assert state.credential_service is not None
         assert state.tenant_manager is not None
-        assert state.profile_client is not None
 
     def test_app_state_with_polaris(self):
         """Test AppState with PolarisService."""
@@ -58,10 +58,11 @@ class TestAppStateNamedTuple:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             polaris_service=polaris,
+            polaris_user_manager=MagicMock(),
+            polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
-            profile_client=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
         )
@@ -296,10 +297,11 @@ class TestDestroyAppState:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             polaris_service=mock_polaris,
+            polaris_user_manager=MagicMock(),
+            polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
-            profile_client=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
         )
@@ -341,10 +343,11 @@ class TestDestroyAppState:
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
             polaris_service=mock_polaris,
+            polaris_user_manager=MagicMock(),
+            polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
             credential_service=MagicMock(),
             tenant_manager=MagicMock(),
-            profile_client=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
         )
