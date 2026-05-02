@@ -121,6 +121,23 @@ class TestPolarisServiceInit:
         assert svc.client_id == "root"
         assert svc.client_secret == "sec:ret"
 
+    def test_init_default_realm_and_region(self):
+        """Test init defaults the Polaris realm and storage region."""
+        svc = PolarisService("http://polaris:8181", "root:secret")
+        assert svc._polaris_realm == "POLARIS"
+        assert svc._storage_region == "us-east-1"
+
+    def test_init_with_custom_realm_and_region(self):
+        """Test init accepts kw-only overrides for realm and storage region."""
+        svc = PolarisService(
+            "http://polaris:8181",
+            "root:secret",
+            polaris_realm="MYREALM",
+            storage_region="us-west-2",
+        )
+        assert svc._polaris_realm == "MYREALM"
+        assert svc._storage_region == "us-west-2"
+
 
 # === SESSION LIFECYCLE TESTS ===
 
@@ -197,6 +214,97 @@ class TestGetToken:
 
         assert token == "cached-token"
         mock_session.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_token_uses_configured_realm(self, mock_session):
+        """Test the OAuth POST sends the configured Polaris-Realm header."""
+        svc = PolarisService(
+            "http://polaris:8181", "root:secret", polaris_realm="MYREALM"
+        )
+        token_resp = _make_response(json_data={"access_token": "tok"})
+        mock_session.post = MagicMock(return_value=token_resp)
+
+        await svc._get_token(mock_session)
+
+        call_kwargs = mock_session.post.call_args.kwargs
+        assert call_kwargs["headers"]["Polaris-Realm"] == "MYREALM"
+
+    @pytest.mark.asyncio
+    async def test_get_token_oauth_http_error_wrapped(self, polaris_service):
+        """Test OAuth POST returning a 4xx is wrapped as PolarisOperationError."""
+        body = json.dumps({"error": {"message": "bad credentials"}})
+        resp = _make_error_response(status=401, body_text=body, reason="Unauthorized")
+
+        session = AsyncMock()
+        session.post = MagicMock(return_value=resp)
+        session.closed = False
+
+        with pytest.raises(PolarisOperationError) as exc_info:
+            await polaris_service._get_token(session)
+
+        assert exc_info.value.status == 401
+        assert "bad credentials" in str(exc_info.value)
+        # Token cache stays empty when OAuth fails.
+        assert polaris_service._token is None
+
+    @pytest.mark.asyncio
+    async def test_get_token_oauth_network_error_wrapped(self, polaris_service):
+        """Test OAuth POST raising aiohttp.ClientError is wrapped as PolarisOperationError."""
+        session = AsyncMock()
+        session.post = MagicMock(
+            side_effect=aiohttp.ClientConnectionError("polaris unreachable")
+        )
+        session.closed = False
+
+        with pytest.raises(PolarisOperationError) as exc_info:
+            await polaris_service._get_token(session)
+
+        assert "polaris unreachable" in str(exc_info.value)
+        # Network failures don't have an HTTP status.
+        assert exc_info.value.status is None
+
+    @pytest.mark.asyncio
+    async def test_get_token_concurrent_calls_single_flight(self, polaris_service):
+        """Test concurrent _get_token callers issue exactly one OAuth POST."""
+        import asyncio as _asyncio
+
+        # Use an event so multiple coroutines pile up on the lock before the
+        # first one's POST completes — proves the second waiter sees the
+        # populated token and skips its own POST.
+        gate = _asyncio.Event()
+        post_count = 0
+
+        async def slow_json():
+            await gate.wait()
+            return {"access_token": "tok"}
+
+        def make_resp():
+            nonlocal post_count
+            post_count += 1
+            r = AsyncMock()
+            r.status = 200
+            r.headers = {"Content-Type": "application/json"}
+            r.json = AsyncMock(side_effect=slow_json)
+            r.raise_for_status = MagicMock()
+            r.__aenter__ = AsyncMock(return_value=r)
+            r.__aexit__ = AsyncMock(return_value=None)
+            return r
+
+        session = AsyncMock()
+        session.post = MagicMock(side_effect=lambda *a, **kw: make_resp())
+        session.closed = False
+
+        # Launch two concurrent fetches; one must wait on the lock.
+        task1 = _asyncio.create_task(polaris_service._get_token(session))
+        task2 = _asyncio.create_task(polaris_service._get_token(session))
+        # Yield so both tasks reach the lock / POST.
+        await _asyncio.sleep(0)
+        gate.set()
+        results = await _asyncio.gather(task1, task2)
+
+        assert results == ["tok", "tok"]
+        # Single-flight: only the first holder of the lock posted.
+        assert post_count == 1
 
 
 # === REQUEST TESTS ===
@@ -277,33 +385,78 @@ class TestRequest:
             )
 
     @pytest.mark.asyncio
-    async def test_request_401_clears_token_cache(self, polaris_service):
-        """Test 401 response clears the cached token."""
+    async def test_request_401_clears_token_and_retries_then_raises(
+        self, polaris_service
+    ):
+        """Test 401 clears the cached token and retries once (both attempts fail)."""
         polaris_service._token = "stale-token"
 
-        error = aiohttp.ClientResponseError(
-            request_info=MagicMock(),
-            history=(),
-            status=401,
-            message="Unauthorized",
-        )
-        resp = AsyncMock()
-        resp.__aenter__ = AsyncMock(return_value=resp)
-        resp.__aexit__ = AsyncMock(return_value=None)
-        resp.status = 401
-        resp.raise_for_status = MagicMock(side_effect=error)
-        resp.headers = {"Content-Type": "application/json"}
-
+        # Both attempts return 401, so the second 401 should propagate.
+        resp = _make_error_response(status=401, body_text="", reason="Unauthorized")
         session = AsyncMock()
         session.request = MagicMock(return_value=resp)
         session.closed = False
-
+        # The retry path clears the token and re-fetches one before retrying.
+        token_resp = _make_response(json_data={"access_token": "fresh-token"})
+        session.post = MagicMock(return_value=token_resp)
         polaris_service._session = session
 
-        with pytest.raises(PolarisOperationError):
+        with pytest.raises(PolarisOperationError) as exc_info:
             await polaris_service._request("GET", "/catalogs")
 
+        assert exc_info.value.status == 401
+        # Second 401 cleared the token again.
         assert polaris_service._token is None
+        # First attempt + one retry == two HTTP calls.
+        assert session.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_request_401_retries_with_fresh_token_and_succeeds(
+        self, polaris_service
+    ):
+        """Test 401 followed by a successful retry returns the second response."""
+        polaris_service._token = "stale-token"
+
+        # First call: 401. Second call: 200 with JSON.
+        first_resp = _make_error_response(
+            status=401, body_text="", reason="Unauthorized"
+        )
+        second_resp = _make_response(json_data={"name": "ok"})
+
+        session = AsyncMock()
+        session.request = MagicMock(side_effect=[first_resp, second_resp])
+        session.closed = False
+        # Token POST for the post-401 refresh.
+        token_resp = _make_response(json_data={"access_token": "fresh-token"})
+        session.post = MagicMock(return_value=token_resp)
+        polaris_service._session = session
+
+        result = await polaris_service._request("GET", "/catalogs")
+
+        assert result == {"name": "ok"}
+        assert polaris_service._token == "fresh-token"
+        assert session.request.call_count == 2
+        # OAuth POST happened exactly once (after the 401 cleared the token).
+        assert session.post.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_request_non_401_error_is_not_retried(self, polaris_service):
+        """Test non-401 errors (e.g., 500) raise immediately without a retry."""
+        polaris_service._token = "preloaded-token"
+
+        resp = _make_error_response(status=500, body_text="boom", reason="Server Error")
+        session = AsyncMock()
+        session.request = MagicMock(return_value=resp)
+        session.closed = False
+        polaris_service._session = session
+
+        with pytest.raises(PolarisOperationError) as exc_info:
+            await polaris_service._request("GET", "/catalogs")
+
+        assert exc_info.value.status == 500
+        assert session.request.call_count == 1
+        # 500 doesn't clear the token cache.
+        assert polaris_service._token == "preloaded-token"
 
 
 # === CATALOG TESTS ===
@@ -380,6 +533,26 @@ class TestCreateCatalog:
             assert "endpoint" not in storage_config
             assert storage_config["storageType"] == "S3"
             assert storage_config["allowedLocations"] == ["s3://bucket/path/"]
+
+    @pytest.mark.asyncio
+    async def test_create_catalog_uses_configured_storage_region(self):
+        """Test storageConfigInfo.region honours the constructor-provided region."""
+        svc = PolarisService(
+            "http://polaris:8181",
+            "root:secret",
+            "http://minio:9002",
+            storage_region="eu-west-1",
+        )
+
+        with patch.object(svc, "_request", new_callable=AsyncMock) as mock_req:
+            mock_req.return_value = {}
+
+            await svc.create_catalog(name="test", storage_location="s3://bucket/path/")
+
+            storage_config = mock_req.call_args[1]["json"]["catalog"][
+                "storageConfigInfo"
+            ]
+            assert storage_config["region"] == "eu-west-1"
 
     @pytest.mark.asyncio
     async def test_create_catalog_conflict_returns_existing(self, polaris_service):
@@ -490,13 +663,9 @@ class TestCredentials:
             assert result["credentials"]["clientId"] == "cid"
             assert result["credentials"]["clientSecret"] == "csec"
 
-    @pytest.mark.asyncio
-    async def test_rotate_is_alias_for_reset(self, polaris_service):
-        """Test rotate_principal_credentials is an alias for reset."""
-        assert (
-            polaris_service.rotate_principal_credentials
-            == polaris_service.reset_principal_credentials
-        )
+    def test_rotate_alias_removed(self, polaris_service):
+        """Test legacy rotate_principal_credentials alias has been removed."""
+        assert not hasattr(polaris_service, "rotate_principal_credentials")
 
 
 # === CATALOG ROLE TESTS ===
@@ -523,7 +692,7 @@ class TestCatalogRoles:
 
     @pytest.mark.asyncio
     async def test_create_catalog_role_conflict(self, polaris_service):
-        """Test 409 conflict falls back to GET existing role."""
+        """Test 409 conflict falls back to GET existing role via get_catalog_role."""
         conflict = PolarisOperationError("Conflict", status=409)
 
         with patch.object(
@@ -538,6 +707,27 @@ class TestCatalogRoles:
                 "user_tgu2", "catalog_admin"
             )
             assert result == {"catalogRole": {"name": "catalog_admin"}}
+            # Second call hits the get_catalog_role helper path.
+            mock_req.assert_any_call(
+                "GET", "/catalogs/user_tgu2/catalog-roles/catalog_admin"
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_catalog_role(self, polaris_service):
+        """Test get_catalog_role returns the named role."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = {"catalogRole": {"name": "tenant_writer"}}
+
+            result = await polaris_service.get_catalog_role(
+                "tenant_foo", "tenant_writer"
+            )
+
+            mock_req.assert_called_once_with(
+                "GET", "/catalogs/tenant_foo/catalog-roles/tenant_writer"
+            )
+            assert result["catalogRole"]["name"] == "tenant_writer"
 
     @pytest.mark.asyncio
     async def test_list_catalog_roles(self, polaris_service):
@@ -1390,6 +1580,41 @@ class TestDeletions:
             mock_del_catalog_roles.assert_called_once_with("tenant_globalusers")
             mock_del_cat.assert_called_once_with("tenant_globalusers")
 
+    @pytest.mark.asyncio
+    async def test_drop_tenant_catalog_continues_on_per_step_failure(
+        self, polaris_service
+    ):
+        """Test drop_tenant_catalog logs and continues when an early step fails."""
+        with (
+            patch.object(
+                polaris_service,
+                "delete_principal_role",
+                new_callable=AsyncMock,
+                # First call (writer) fails, second call (reader) succeeds.
+                side_effect=[PolarisOperationError("boom", status=500), None],
+            ) as mock_del_role,
+            patch.object(
+                polaris_service,
+                "delete_all_namespaces",
+                new_callable=AsyncMock,
+                side_effect=PolarisOperationError("forbidden", status=403),
+            ) as mock_del_namespaces,
+            patch.object(
+                polaris_service, "delete_all_catalog_roles", new_callable=AsyncMock
+            ) as mock_del_catalog_roles,
+            patch.object(
+                polaris_service, "delete_catalog", new_callable=AsyncMock
+            ) as mock_del_cat,
+        ):
+            # Should NOT raise — best-effort teardown swallows per-step errors.
+            await polaris_service.drop_tenant_catalog("globalusers")
+
+            assert mock_del_role.call_count == 2
+            mock_del_namespaces.assert_called_once_with("tenant_globalusers")
+            # Subsequent steps still ran despite earlier failures.
+            mock_del_catalog_roles.assert_called_once_with("tenant_globalusers")
+            mock_del_cat.assert_called_once_with("tenant_globalusers")
+
 
 # === ENSURE TENANT CATALOG TESTS ===
 
@@ -1705,22 +1930,23 @@ class TestRevokeNonNotFoundError:
 # === DELETION NON-404 ERROR TESTS (lines 423, 430-434, 441-447) ===
 
 
-class TestDeletionNonNotFoundErrors:
-    """Tests for delete methods handling non-404 errors (logs warning, doesn't raise)."""
+class TestDeletionErrorBehavior:
+    """Tests for delete-method error semantics: 404 ignored, all others re-raised."""
 
     @pytest.mark.asyncio
-    async def test_delete_principal_non_404_logs_warning(self, polaris_service):
-        """Test delete_principal with non-404 error logs warning (line 423)."""
+    async def test_delete_principal_non_404_raises(self, polaris_service):
+        """Test delete_principal re-raises non-404 errors."""
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
             mock_req.side_effect = PolarisOperationError("Forbidden", status=403)
-            # Should not raise — just logs warning
-            await polaris_service.delete_principal("testuser")
+            with pytest.raises(PolarisOperationError) as exc_info:
+                await polaris_service.delete_principal("testuser")
+            assert exc_info.value.status == 403
 
     @pytest.mark.asyncio
     async def test_delete_catalog_not_found(self, polaris_service):
-        """Test delete_catalog with 404 logs info (lines 430-432)."""
+        """Test delete_catalog with 404 is a no-op (idempotent)."""
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
@@ -1728,17 +1954,19 @@ class TestDeletionNonNotFoundErrors:
             await polaris_service.delete_catalog("ghost_catalog")
 
     @pytest.mark.asyncio
-    async def test_delete_catalog_non_404_logs_warning(self, polaris_service):
-        """Test delete_catalog with non-404 error logs warning (lines 433-434)."""
+    async def test_delete_catalog_non_404_raises(self, polaris_service):
+        """Test delete_catalog re-raises non-404 errors."""
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
             mock_req.side_effect = PolarisOperationError("Forbidden", status=403)
-            await polaris_service.delete_catalog("tenant_foo")
+            with pytest.raises(PolarisOperationError) as exc_info:
+                await polaris_service.delete_catalog("tenant_foo")
+            assert exc_info.value.status == 403
 
     @pytest.mark.asyncio
     async def test_delete_principal_role_not_found(self, polaris_service):
-        """Test delete_principal_role with 404 logs info (lines 441-445)."""
+        """Test delete_principal_role with 404 is a no-op (idempotent)."""
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
@@ -1746,10 +1974,12 @@ class TestDeletionNonNotFoundErrors:
             await polaris_service.delete_principal_role("ghost_role")
 
     @pytest.mark.asyncio
-    async def test_delete_principal_role_non_404_logs_warning(self, polaris_service):
-        """Test delete_principal_role with non-404 error logs warning (lines 446-447)."""
+    async def test_delete_principal_role_non_404_raises(self, polaris_service):
+        """Test delete_principal_role re-raises non-404 errors."""
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
             mock_req.side_effect = PolarisOperationError("Server Error", status=500)
-            await polaris_service.delete_principal_role("some_role")
+            with pytest.raises(PolarisOperationError) as exc_info:
+                await polaris_service.delete_principal_role("some_role")
+            assert exc_info.value.status == 500
