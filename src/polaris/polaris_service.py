@@ -15,6 +15,13 @@ from urllib.parse import quote
 
 import aiohttp
 
+from polaris.constants import (
+    tenant_catalog_name,
+    tenant_reader_catalog_role,
+    tenant_reader_principal_role,
+    tenant_writer_catalog_role,
+    tenant_writer_principal_role,
+)
 from service.exceptions import PolarisOperationError
 
 logger = logging.getLogger(__name__)
@@ -509,31 +516,31 @@ class PolarisService:
             group_name: The MinIO group name (e.g., "globalusers")
             storage_location: S3 storage path for the catalog
         """
-        tenant_name = f"tenant_{group_name}"
+        tenant_name = tenant_catalog_name(group_name)
 
         # Create catalog (idempotent)
         await self.create_catalog(tenant_name, storage_location)
 
         # Writer role: CATALOG_MANAGE_CONTENT
-        writer_role_name = f"{group_name}_writer"
+        writer_role_name = tenant_writer_catalog_role(group_name)
         await self.create_catalog_role(tenant_name, writer_role_name)
         await self.grant_catalog_privilege(
             tenant_name, writer_role_name, "CATALOG_MANAGE_CONTENT"
         )
 
-        writer_principal_role = f"{group_name}_member"
+        writer_principal_role = tenant_writer_principal_role(group_name)
         await self.create_principal_role(writer_principal_role)
         await self.grant_catalog_role_to_principal_role(
             tenant_name, writer_role_name, writer_principal_role
         )
 
         # Reader role: read data + list namespaces/tables (but no create/write/drop)
-        reader_role_name = f"{group_name}_reader"
+        reader_role_name = tenant_reader_catalog_role(group_name)
         await self.create_catalog_role(tenant_name, reader_role_name)
         for privilege in ["TABLE_READ_DATA", "TABLE_LIST", "NAMESPACE_LIST"]:
             await self.grant_catalog_privilege(tenant_name, reader_role_name, privilege)
 
-        reader_principal_role = f"{group_name}ro_member"
+        reader_principal_role = tenant_reader_principal_role(group_name)
         await self.create_principal_role(reader_principal_role)
         await self.grant_catalog_role_to_principal_role(
             tenant_name, reader_role_name, reader_principal_role
@@ -679,9 +686,9 @@ class PolarisService:
             group_name: The MinIO group name corresponding to the catalog
         """
         # Roles and catalogs that were created in `ensure_tenant_catalog`
-        tenant_name = f"tenant_{group_name}"
-        writer_principal_role = f"{group_name}_member"
-        reader_principal_role = f"{group_name}ro_member"
+        tenant_name = tenant_catalog_name(group_name)
+        writer_principal_role = tenant_writer_principal_role(group_name)
+        reader_principal_role = tenant_reader_principal_role(group_name)
 
         await self._safe_delete(
             f"principal role {writer_principal_role}",
