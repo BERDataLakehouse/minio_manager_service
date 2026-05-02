@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -97,10 +97,26 @@ def mock_profile_client():
 
 
 @pytest.fixture
-def manager(mock_metadata_store, mock_group_manager, mock_profile_client):
+def mock_polaris_service():
+    polaris = AsyncMock()
+    polaris.ensure_tenant_catalog = AsyncMock()
+    polaris.create_principal = AsyncMock()
+    polaris.grant_principal_role_to_principal = AsyncMock()
+    polaris.revoke_principal_role_from_principal = AsyncMock()
+    return polaris
+
+
+@pytest.fixture
+def manager(
+    mock_metadata_store,
+    mock_group_manager,
+    mock_polaris_service,
+    mock_profile_client,
+):
     return TenantManager(
         metadata_store=mock_metadata_store,
         group_manager=mock_group_manager,
+        polaris_service=mock_polaris_service,
         profile_client=mock_profile_client,
         minio_config=_make_config(),
     )
@@ -425,21 +441,45 @@ class TestGetTenantMembers:
 
 class TestAddMember:
     @pytest.mark.asyncio
-    async def test_add_rw_member(self, manager, mock_group_manager):
+    async def test_add_rw_member(
+        self, manager, mock_group_manager, mock_polaris_service
+    ):
         result = await manager.add_member("t1", "charlie", "read_write", "token")
         assert result.access_level == "read_write"
         mock_group_manager.add_user_to_group.assert_called_once_with("charlie", "t1")
         mock_group_manager.remove_user_from_group.assert_called_once_with(
             "charlie", "t1ro"
         )
+        mock_polaris_service.revoke_principal_role_from_principal.assert_called_once_with(
+            "charlie", "t1ro_member"
+        )
+        mock_polaris_service.ensure_tenant_catalog.assert_called_once_with(
+            "t1", "s3a://cdm-lake/tenant-sql-warehouse/t1/iceberg/"
+        )
+        mock_polaris_service.create_principal.assert_called_once_with(name="charlie")
+        mock_polaris_service.grant_principal_role_to_principal.assert_called_once_with(
+            "charlie", "t1_member"
+        )
 
     @pytest.mark.asyncio
-    async def test_add_ro_member(self, manager, mock_group_manager):
+    async def test_add_ro_member(
+        self, manager, mock_group_manager, mock_polaris_service
+    ):
         result = await manager.add_member("t1", "charlie", "read_only", "token")
         assert result.access_level == "read_only"
         mock_group_manager.add_user_to_group.assert_called_once_with("charlie", "t1ro")
         mock_group_manager.remove_user_from_group.assert_called_once_with(
             "charlie", "t1"
+        )
+        mock_polaris_service.revoke_principal_role_from_principal.assert_called_once_with(
+            "charlie", "t1_member"
+        )
+        mock_polaris_service.ensure_tenant_catalog.assert_called_once_with(
+            "t1", "s3a://cdm-lake/tenant-sql-warehouse/t1/iceberg/"
+        )
+        mock_polaris_service.create_principal.assert_called_once_with(name="charlie")
+        mock_polaris_service.grant_principal_role_to_principal.assert_called_once_with(
+            "charlie", "t1ro_member"
         )
 
     @pytest.mark.asyncio
@@ -483,9 +523,14 @@ class TestAddMember:
 
 class TestRemoveMember:
     @pytest.mark.asyncio
-    async def test_admin_removes_member(self, manager, mock_group_manager):
+    async def test_admin_removes_member(
+        self, manager, mock_group_manager, mock_polaris_service
+    ):
         await manager.remove_member("t1", "bob", ADMIN)
         assert mock_group_manager.remove_user_from_group.call_count == 2  # RW + RO
+        mock_polaris_service.revoke_principal_role_from_principal.assert_has_calls(
+            [call("bob", "t1_member"), call("bob", "t1ro_member")]
+        )
 
     @pytest.mark.asyncio
     async def test_steward_cannot_remove_self(self, manager):
@@ -507,11 +552,16 @@ class TestRemoveMember:
         mock_metadata_store.remove_steward.assert_called_once_with("t1", "bob")
 
     @pytest.mark.asyncio
-    async def test_remove_swallows_group_errors(self, manager, mock_group_manager):
+    async def test_remove_swallows_group_errors(
+        self, manager, mock_group_manager, mock_polaris_service
+    ):
         mock_group_manager.remove_user_from_group.side_effect = GroupOperationError(
             "Not in group"
         )
         await manager.remove_member("t1", "bob", ADMIN)  # Should not raise
+        mock_polaris_service.revoke_principal_role_from_principal.assert_has_calls(
+            [call("bob", "t1_member"), call("bob", "t1ro_member")]
+        )
 
 
 # ── update_metadata ──────────────────────────────────────────────────────
@@ -676,10 +726,18 @@ class TestGetStewards:
 
 class TestAddSteward:
     @pytest.mark.asyncio
-    async def test_add_success(self, manager, mock_group_manager):
+    async def test_add_success(self, manager, mock_group_manager, mock_polaris_service):
         result = await manager.add_steward("t1", "alice", "admin", "token")
         assert result.username == "alice"
         mock_group_manager.add_user_to_group.assert_called_once_with("alice", "t1")
+        mock_group_manager.remove_user_from_group.assert_not_called()
+        mock_polaris_service.ensure_tenant_catalog.assert_called_once_with(
+            "t1", "s3a://cdm-lake/tenant-sql-warehouse/t1/iceberg/"
+        )
+        mock_polaris_service.create_principal.assert_called_once_with(name="alice")
+        mock_polaris_service.grant_principal_role_to_principal.assert_called_once_with(
+            "alice", "t1_member"
+        )
 
     @pytest.mark.asyncio
     async def test_add_calls_add_user_unconditionally(

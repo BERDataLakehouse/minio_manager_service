@@ -1,18 +1,18 @@
 """Tests for the routes.polaris module."""
 
 import os
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from routes.polaris import router
+from polaris.credential_store import PolarisCredentialRecord
 from service import app_state
 from service.dependencies import auth
 from service.exception_handlers import universal_error_handler
 from service.kb_auth import AdminPermission, KBaseUser
-from routes.polaris import router
 
 
 # === FIXTURES ===
@@ -68,14 +68,14 @@ def mock_app_state_obj(mock_polaris_service):
     state.polaris_service = mock_polaris_service
     state.polaris_credential_service = AsyncMock()
     state.polaris_credential_service.get_or_create = AsyncMock(
-        return_value=SimpleNamespace(
+        return_value=PolarisCredentialRecord(
             client_id="test-client-id",
             client_secret="test-client-secret",
             personal_catalog="user_testuser",
         )
     )
     state.polaris_credential_service.rotate = AsyncMock(
-        return_value=SimpleNamespace(
+        return_value=PolarisCredentialRecord(
             client_id="rotated-client-id",
             client_secret="rotated-client-secret",
             personal_catalog="user_testuser",
