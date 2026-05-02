@@ -690,33 +690,36 @@ class PolarisService:
         writer_principal_role = tenant_writer_principal_role(group_name)
         reader_principal_role = tenant_reader_principal_role(group_name)
 
-        await self._safe_delete(
+        await self.safe_delete(
             f"principal role {writer_principal_role}",
             self.delete_principal_role(writer_principal_role),
         )
-        await self._safe_delete(
+        await self.safe_delete(
             f"principal role {reader_principal_role}",
             self.delete_principal_role(reader_principal_role),
         )
-        await self._safe_delete(
+        await self.safe_delete(
             f"namespaces in {tenant_name}",
             self.delete_all_namespaces(tenant_name),
         )
-        await self._safe_delete(
+        await self.safe_delete(
             f"catalog roles in {tenant_name}",
             self.delete_all_catalog_roles(tenant_name),
         )
-        await self._safe_delete(
+        await self.safe_delete(
             f"catalog {tenant_name}",
             self.delete_catalog(tenant_name),
         )
 
     @staticmethod
-    async def _safe_delete(description: str, action: Awaitable[None]) -> None:
+    async def safe_delete(description: str, action: Awaitable[None]) -> None:
         """Await ``action`` and swallow PolarisOperationError with a warning.
 
-        Used by best-effort orchestrators (e.g. ``drop_tenant_catalog``) where
-        an early failure must not block subsequent cleanup steps.
+        Public so other Polaris orchestrators (e.g. PolarisUserManager) can
+        share the same log format and contract as PolarisService's own
+        best-effort teardowns (``drop_tenant_catalog``). Threading every
+        best-effort delete through this single helper keeps the warning
+        prefix consistent for log aggregators / metrics.
         """
         try:
             await action

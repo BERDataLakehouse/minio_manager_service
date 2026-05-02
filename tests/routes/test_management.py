@@ -1222,6 +1222,10 @@ class TestEnsurePolarisResourcesEndpoint:
         data = response.json()
         assert data["users_provisioned"] == 2
         assert data["groups_provisioned"] == 1  # only base group team1
+        # Per-resource lists let operators verify exactly which resources
+        # completed (counts alone don't say which).
+        assert data["provisioned_users"] == ["alice", "bob"]
+        assert data["provisioned_groups"] == ["team1"]
         assert data["errors"] == []
 
     def test_ensure_polaris_calls_ensure_catalog_for_base_groups_only(
@@ -1293,6 +1297,10 @@ class TestEnsurePolarisResourcesEndpoint:
 
         data = response.json()
         assert data["groups_provisioned"] == 1
+        # The successful group surfaces in provisioned_groups; the failed one
+        # surfaces in errors. Operators can diff these to see exactly which
+        # backfilled.
+        assert data["provisioned_groups"] == ["team2"]
         assert any(
             e["resource_type"] == "group" and e["resource_name"] == "team1"
             for e in data["errors"]
@@ -1486,6 +1494,8 @@ class TestMigrationResponseModels:
         response = EnsurePolarisResponse(
             users_provisioned=10,
             groups_provisioned=4,
+            provisioned_users=["alice", "bob"],
+            provisioned_groups=["team1", "team2"],
             users_skipped=["sysuser"],
             groups_skipped=["legacy"],
             errors=[
@@ -1497,6 +1507,8 @@ class TestMigrationResponseModels:
             timestamp=datetime.now(),
         )
         assert response.users_provisioned == 10
+        assert response.provisioned_users == ["alice", "bob"]
+        assert response.provisioned_groups == ["team1", "team2"]
         assert response.users_skipped == ["sysuser"]
         assert response.groups_skipped == ["legacy"]
         assert len(response.errors) == 1

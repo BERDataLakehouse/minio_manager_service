@@ -10,7 +10,25 @@ from service.exceptions import PolarisOperationError
 
 @pytest.fixture
 def polaris_service():
+    """Mock PolarisService whose safe_delete actually awaits its action.
+
+    Default: get_principal_roles_for_principal returns [] so delete_user's
+    defensive revoke loop is a no-op unless a test sets it explicitly.
+    """
     svc = AsyncMock()
+    svc.get_principal_roles_for_principal = AsyncMock(return_value=[])
+
+    async def _safe_delete(description, action):
+        # Real safe_delete swallows PolarisOperationError; mimic that here so
+        # tests can wire side_effect on the underlying delete_* methods.
+        from service.exceptions import PolarisOperationError
+
+        try:
+            await action
+        except PolarisOperationError:
+            pass
+
+    svc.safe_delete = AsyncMock(side_effect=_safe_delete)
     return svc
 
 
@@ -148,3 +166,73 @@ class TestDeleteUser:
 
         # Should NOT raise
         await manager.delete_user("alice")
+
+    @pytest.mark.asyncio
+    async def test_delete_user_revokes_tenant_role_bindings_first(
+        self, manager, polaris_service
+    ):
+        """Tenant role bindings are revoked before delete_principal.
+
+        Defensive: avoids orphan bindings if the configured Polaris version
+        doesn't auto-cascade on delete_principal.
+        """
+        polaris_service.get_principal_roles_for_principal.return_value = [
+            "team1_member",
+            "team2ro_member",
+            "alice_role",  # personal role appears here too — fine
+        ]
+
+        await manager.delete_user("alice")
+
+        # Each tenant role binding got revoked (and the personal one too —
+        # the role itself is dropped by delete_principal_role afterwards).
+        revoke_calls = (
+            polaris_service.revoke_principal_role_from_principal.call_args_list
+        )
+        assert [c.args for c in revoke_calls] == [
+            ("alice", "team1_member"),
+            ("alice", "team2ro_member"),
+            ("alice", "alice_role"),
+        ]
+        # Then the standard cleanup runs.
+        polaris_service.delete_principal_role.assert_called_once_with("alice_role")
+        polaris_service.delete_principal.assert_called_once_with("alice")
+        polaris_service.delete_catalog.assert_called_once_with("user_alice")
+
+    @pytest.mark.asyncio
+    async def test_delete_user_continues_when_listing_bindings_fails(
+        self, manager, polaris_service
+    ):
+        """If we can't list bindings, fall back to delete-and-hope-it-cascades."""
+        polaris_service.get_principal_roles_for_principal.side_effect = (
+            PolarisOperationError("forbidden", status=403)
+        )
+
+        # Should NOT raise; cleanup still runs without the defensive revoke.
+        await manager.delete_user("alice")
+
+        polaris_service.revoke_principal_role_from_principal.assert_not_called()
+        polaris_service.delete_principal_role.assert_called_once_with("alice_role")
+        polaris_service.delete_principal.assert_called_once_with("alice")
+        polaris_service.delete_catalog.assert_called_once_with("user_alice")
+
+    @pytest.mark.asyncio
+    async def test_delete_user_continues_after_individual_revoke_failure(
+        self, manager, polaris_service
+    ):
+        """One failed revoke doesn't block the remaining revokes or the
+        downstream principal/catalog delete."""
+        polaris_service.get_principal_roles_for_principal.return_value = [
+            "team1_member",
+            "team2_member",
+        ]
+        polaris_service.revoke_principal_role_from_principal.side_effect = [
+            PolarisOperationError("boom", status=500),
+            None,
+        ]
+
+        await manager.delete_user("alice")
+
+        assert polaris_service.revoke_principal_role_from_principal.call_count == 2
+        polaris_service.delete_principal.assert_called_once()
+        polaris_service.delete_catalog.assert_called_once()

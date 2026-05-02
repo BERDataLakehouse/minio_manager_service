@@ -775,6 +775,28 @@ class EnsurePolarisResponse(BaseModel):
     groups_provisioned: Annotated[
         int, Field(description="Number of tenant catalogs ensured", ge=0)
     ]
+    provisioned_users: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description=(
+                "Sorted list of usernames that were successfully processed. "
+                "Operators can grep this against `errors` to verify "
+                "exactly which users completed."
+            ),
+        ),
+    ]
+    provisioned_groups: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description=(
+                "Sorted list of base group names whose tenant catalog was "
+                "successfully ensured. Useful for confirming which tenants "
+                "are now Polaris-backed after a backfill."
+            ),
+        ),
+    ]
     users_skipped: Annotated[
         list[str],
         Field(
@@ -799,10 +821,18 @@ class EnsurePolarisResponse(BaseModel):
     response_model=RegeneratePoliciesResponse,
     summary="Regenerate all IAM policies",
     description=(
-        "Force-regenerate HOME policies for all users and groups from the current template. "
-        "This updates pre-existing policies to include new path statements (e.g., Iceberg paths). "
-        "Each regeneration is independent — errors do not block others. "
-        "Callers may pass `exclude_users` / `exclude_groups` to skip system or service accounts."
+        "**Write operation.** Force-regenerates HOME policies for every user "
+        "and every base group (RW + RO) in the system from the current "
+        "template, replacing the previously stored policy in MinIO IAM. "
+        "Use this to roll out a template change — e.g., adding the Iceberg "
+        "sub-path statement so existing policies grant access to the new "
+        "Polaris-managed prefix. Re-running the endpoint is idempotent: it "
+        "always overwrites with the current template. Each regeneration is "
+        "independent — per-resource errors do not block the others. "
+        "Callers may pass `exclude_users` / `exclude_groups` to skip system "
+        "or service accounts; verify `users_skipped` / `groups_skipped` in "
+        "the response to confirm which exclusions actually matched a "
+        "present resource."
     ),
 )
 async def regenerate_all_policies(
@@ -932,8 +962,8 @@ async def ensure_all_polaris_resources(
     polaris_user_manager = app_state.polaris_user_manager
     polaris_group_manager = app_state.polaris_group_manager
     errors: list[MigrationError] = []
-    users_provisioned = 0
-    groups_provisioned = 0
+    provisioned_users: list[str] = []
+    provisioned_groups: list[str] = []
 
     exclude_users = set(payload.exclude_users)
     exclude_groups = set(payload.exclude_groups)
@@ -954,7 +984,7 @@ async def ensure_all_polaris_resources(
         try:
             # Backfill: ensure the catalog without a "creator" binding.
             await polaris_group_manager.ensure_catalog(base_group)
-            groups_provisioned += 1
+            provisioned_groups.append(base_group)
         except Exception as e:
             logger.warning(
                 f"Failed to ensure tenant catalog for group {base_group}: {e}"
@@ -995,7 +1025,7 @@ async def ensure_all_polaris_resources(
                 group_name = f"{base_group}ro" if is_ro else base_group
                 await polaris_group_manager.add_user_to_group(username, group_name)
 
-            users_provisioned += 1
+            provisioned_users.append(username)
         except Exception as e:
             logger.warning(f"Failed to provision Polaris for user {username}: {e}")
             errors.append(
@@ -1006,14 +1036,16 @@ async def ensure_all_polaris_resources(
 
     logger.info(
         f"Admin {authenticated_user.user} ensured Polaris resources: "
-        f"{users_provisioned} users, {groups_provisioned} groups, "
+        f"{len(provisioned_users)} users, {len(provisioned_groups)} groups, "
         f"{len(skipped_users)} users skipped, {len(skipped_groups)} groups skipped, "
         f"{len(errors)} errors"
     )
 
     return EnsurePolarisResponse(
-        users_provisioned=users_provisioned,
-        groups_provisioned=groups_provisioned,
+        users_provisioned=len(provisioned_users),
+        groups_provisioned=len(provisioned_groups),
+        provisioned_users=sorted(provisioned_users),
+        provisioned_groups=sorted(provisioned_groups),
         users_skipped=skipped_users,
         groups_skipped=skipped_groups,
         errors=errors,

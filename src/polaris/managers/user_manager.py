@@ -100,43 +100,60 @@ class PolarisUserManager:
     async def delete_user(self, username: str) -> None:
         """Tear down a user's personal Polaris assets in reverse creation order.
 
-        Each step is best-effort and 404-tolerant: a partial failure in one
-        step does not block the others. Tenant role bindings (catalog
-        memberships from group membership) are cleaned up separately by
-        :meth:`PolarisGroupManager.remove_user_from_group` on each group
-        before this call.
+        Each step is best-effort and 404-tolerant — partial failures are
+        logged via :meth:`PolarisService.safe_delete` (shared format with
+        ``drop_tenant_catalog`` so log aggregators see one prefix) and do not
+        block later steps.
+
+        Tenant role bindings (memberships from group membership) are revoked
+        first defensively in case the configured Polaris version doesn't
+        auto-cascade on ``delete_principal``. Then we delete the personal
+        principal role, the principal itself, and the personal catalog.
         """
-        principal_role = personal_principal_role(username)
         catalog_name = personal_catalog_name(username)
+        user_principal_role = personal_principal_role(username)
 
-        # Reverse-create order. Each delete here is already 404-tolerant in
-        # PolarisService and re-raises only on non-404 errors; we additionally
-        # log+continue here so a single failure doesn't strand later cleanup.
+        # 1. Revoke every principal-role binding the user holds before
+        # deleting the principal. Polaris versions vary on whether
+        # delete_principal cascades to remove its bindings; revoking
+        # explicitly first means we never leave orphan bindings pointing
+        # at a deleted principal regardless of server behavior. The
+        # personal {username}_role binding is included here too — that's
+        # fine, the role itself is dropped in step 2.
         try:
-            await self._polaris.delete_principal_role(principal_role)
-        except Exception as e:
-            logger.warning(
-                "Failed to delete Polaris principal role %s: %s; continuing.",
-                principal_role,
-                e,
+            bound_roles = await self._polaris.get_principal_roles_for_principal(
+                username
             )
-
-        try:
-            await self._polaris.delete_principal(username)
         except Exception as e:
+            # If we can't list bindings, fall back to the original
+            # delete-and-hope-it-cascades flow rather than aborting the
+            # whole teardown.
             logger.warning(
-                "Failed to delete Polaris principal %s: %s; continuing.",
+                "Could not list Polaris principal roles for %s: %s; "
+                "skipping defensive revoke and proceeding to delete.",
                 username,
                 e,
             )
+            bound_roles = []
 
-        try:
-            await self._polaris.delete_catalog(catalog_name)
-        except Exception as e:
-            logger.warning(
-                "Failed to delete Polaris catalog %s: %s; continuing.",
-                catalog_name,
-                e,
+        for role in bound_roles:
+            await self._polaris.safe_delete(
+                f"binding {username} -> {role}",
+                self._polaris.revoke_principal_role_from_principal(username, role),
             )
+
+        # 2. Reverse-create order on the personal assets.
+        await self._polaris.safe_delete(
+            f"principal role {user_principal_role}",
+            self._polaris.delete_principal_role(user_principal_role),
+        )
+        await self._polaris.safe_delete(
+            f"principal {username}",
+            self._polaris.delete_principal(username),
+        )
+        await self._polaris.safe_delete(
+            f"catalog {catalog_name}",
+            self._polaris.delete_catalog(catalog_name),
+        )
 
         logger.info("Deleted Polaris assets for user %s", username)
