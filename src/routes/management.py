@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from minio.managers.user_manager import GLOBAL_USER_GROUP, REFDATA_TENANT_RO_GROUP
+from polaris.constants import normalize_group_name_for_polaris
 from s3.models.user import UserModel
 from s3.utils.validators import validate_group_name
 from service.app_state import get_app_state
@@ -725,6 +726,44 @@ class RegeneratePoliciesRequest(BaseModel):
     ]
 
 
+class EnsurePolarisRequest(BaseModel):
+    """Request model for bulk Polaris resource provisioning.
+
+    Mirrors :class:`RegeneratePoliciesRequest` so an operator can pass the
+    same exclusion list to both migration endpoints (e.g., to skip the same
+    set of system / service accounts when running a backfill).
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    exclude_users: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description=(
+                "Usernames to skip, such as system or service accounts. "
+                "Names that do not exist are silently ignored — verify the "
+                "`users_skipped` field in the response to confirm which "
+                "exclusions actually matched a present user."
+            ),
+        ),
+    ]
+    exclude_groups: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description=(
+                "Base group names to skip. The corresponding read-only group "
+                "is also skipped automatically (no tenant catalog ensured, no "
+                "role bindings granted for excluded groups even on users that "
+                "are members). Names that do not exist are silently ignored — "
+                "verify the `groups_skipped` field in the response to confirm "
+                "which exclusions actually matched a present group."
+            ),
+        ),
+    ]
+
+
 class EnsurePolarisResponse(BaseModel):
     """Response model for bulk Polaris resource provisioning."""
 
@@ -735,6 +774,20 @@ class EnsurePolarisResponse(BaseModel):
     ]
     groups_provisioned: Annotated[
         int, Field(description="Number of tenant catalogs ensured", ge=0)
+    ]
+    users_skipped: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description="Usernames excluded by the caller that exist in the system",
+        ),
+    ]
+    groups_skipped: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description="Base group names excluded by the caller that exist in the system",
+        ),
     ]
     errors: Annotated[list[MigrationError], Field(description="Errors encountered")]
     performed_by: Annotated[str, Field(description="Admin who performed the operation")]
@@ -858,18 +911,22 @@ async def regenerate_all_policies(
     description=(
         "Ensure all users have Polaris principals, personal catalogs, and roles. "
         "Ensure all groups have tenant catalogs. Grant correct principal roles "
-        "based on group memberships. All operations are idempotent."
+        "based on group memberships. All operations are idempotent. "
+        "Callers may pass `exclude_users` / `exclude_groups` to skip system or "
+        "service accounts and groups that should not be backfilled."
     ),
 )
 async def ensure_all_polaris_resources(
     request: Request,
+    payload: EnsurePolarisRequest = EnsurePolarisRequest(),
     authenticated_user=Depends(require_admin),
 ):
     """Backfill Polaris resources for every existing MinIO user and group.
 
     Mirrors the per-request orchestration that the create-user / create-group
     / add-member endpoints do, but applied to every existing MinIO resource.
-    Safe to re-run: every Polaris call here is idempotent.
+    Safe to re-run: every Polaris call here is idempotent. Caller-supplied
+    exclusion lists honour the same convention as ``regenerate-policies``.
     """
     app_state = get_app_state(request)
     polaris_user_manager = app_state.polaris_user_manager
@@ -878,12 +935,22 @@ async def ensure_all_polaris_resources(
     users_provisioned = 0
     groups_provisioned = 0
 
-    # 1. Ensure each base tenant catalog exists.
+    exclude_users = set(payload.exclude_users)
+    exclude_groups = set(payload.exclude_groups)
+
+    # 1. Ensure each base tenant catalog exists. Excluded base groups are
+    # skipped entirely — no catalog is provisioned and no user role bindings
+    # for that base get mirrored either (see step 2).
     all_group_names = await app_state.group_manager.list_resources()
     base_groups = [g for g in all_group_names if not g.endswith("ro")]
-    logger.info(f"Ensuring Polaris tenant catalogs for {len(base_groups)} groups")
+    target_base_groups = [g for g in base_groups if g not in exclude_groups]
+    skipped_groups = sorted(set(base_groups) & exclude_groups)
+    logger.info(
+        f"Ensuring Polaris tenant catalogs for {len(target_base_groups)} groups "
+        f"(skipped {len(skipped_groups)} excluded base groups)"
+    )
 
-    for base_group in base_groups:
+    for base_group in target_base_groups:
         try:
             # Backfill: ensure the catalog without a "creator" binding.
             await polaris_group_manager.ensure_catalog(base_group)
@@ -899,16 +966,30 @@ async def ensure_all_polaris_resources(
             )
 
     # 2. For each user: provision personal Polaris assets and mirror their
-    # current MinIO group memberships into Polaris role bindings.
+    # current MinIO group memberships into Polaris role bindings. Excluded
+    # users are skipped entirely; excluded base groups are skipped per-user
+    # too so we don't grant a role on a catalog we deliberately didn't
+    # provision in step 1.
     all_usernames = await app_state.user_manager.list_resources()
-    logger.info(f"Ensuring Polaris resources for {len(all_usernames)} users")
+    target_usernames = [u for u in all_usernames if u not in exclude_users]
+    skipped_users = sorted(set(all_usernames) & exclude_users)
+    logger.info(
+        f"Ensuring Polaris resources for {len(target_usernames)} users "
+        f"(skipped {len(skipped_users)} excluded users)"
+    )
 
-    for username in all_usernames:
+    for username in target_usernames:
         try:
             await polaris_user_manager.create_user(username)
 
             user_groups = await app_state.group_manager.get_user_groups(username)
             for group_name in user_groups:
+                # Skip role bindings whose base group was excluded so this
+                # endpoint's exclusion semantics are consistent across both
+                # phases.
+                base_group, _ = normalize_group_name_for_polaris(group_name)
+                if base_group in exclude_groups:
+                    continue
                 await polaris_group_manager.add_user_to_group(username, group_name)
 
             users_provisioned += 1
@@ -922,12 +1003,16 @@ async def ensure_all_polaris_resources(
 
     logger.info(
         f"Admin {authenticated_user.user} ensured Polaris resources: "
-        f"{users_provisioned} users, {groups_provisioned} groups, {len(errors)} errors"
+        f"{users_provisioned} users, {groups_provisioned} groups, "
+        f"{len(skipped_users)} users skipped, {len(skipped_groups)} groups skipped, "
+        f"{len(errors)} errors"
     )
 
     return EnsurePolarisResponse(
         users_provisioned=users_provisioned,
         groups_provisioned=groups_provisioned,
+        users_skipped=skipped_users,
+        groups_skipped=skipped_groups,
         errors=errors,
         performed_by=authenticated_user.user,
         timestamp=datetime.now(),

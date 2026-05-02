@@ -1314,6 +1314,127 @@ class TestEnsurePolarisResourcesEndpoint:
         assert data["groups_provisioned"] == 0
         assert data["errors"] == []
 
+    # ── exclusion semantics (mirror regenerate-policies) ──────────────────
+
+    def test_ensure_polaris_empty_body_behaves_like_no_body(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Posting an empty JSON body works the same as posting no body at all."""
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources",
+            json={"exclude_users": [], "exclude_groups": []},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_provisioned"] == 2
+        assert data["groups_provisioned"] == 1
+        assert data["users_skipped"] == []
+        assert data["groups_skipped"] == []
+
+    def test_ensure_polaris_excludes_users(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """exclude_users skips matching users entirely (no Polaris user calls)."""
+        polaris_user_manager = polaris_migration_state.polaris_user_manager
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources",
+            json={"exclude_users": ["alice"]},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_provisioned"] == 1  # only bob
+        assert data["users_skipped"] == ["alice"]
+        # alice was never sent to PolarisUserManager.create_user
+        create_calls = polaris_user_manager.create_user.call_args_list
+        assert [c.args[0] for c in create_calls] == ["bob"]
+
+    def test_ensure_polaris_excludes_unknown_users_silently(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Excluding a non-existent user is silent — only present users surface in users_skipped."""
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources",
+            json={"exclude_users": ["nobody", "alice"]},
+        )
+
+        data = response.json()
+        # "nobody" doesn't exist; only "alice" is reported as actually skipped.
+        assert data["users_skipped"] == ["alice"]
+        assert data["users_provisioned"] == 1
+
+    def test_ensure_polaris_excludes_groups_skips_catalog_and_role_bindings(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """exclude_groups skips both ensure_catalog AND per-user role bindings on that base."""
+        polaris_group_manager = polaris_migration_state.polaris_group_manager
+        # Add a second base group so we can verify only team1 is skipped.
+        polaris_migration_state.group_manager.list_resources.return_value = [
+            "team1",
+            "team1ro",
+            "team2",
+            "team2ro",
+        ]
+        # Both users belong to team1 (the excluded one) AND team2.
+        polaris_migration_state.group_manager.get_user_groups.return_value = [
+            "team1",
+            "team2",
+        ]
+
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources",
+            json={"exclude_groups": ["team1"]},
+        )
+
+        data = response.json()
+        assert data["groups_skipped"] == ["team1"]
+        assert data["groups_provisioned"] == 1  # only team2
+
+        # ensure_catalog called only for team2.
+        ensure_calls = polaris_group_manager.ensure_catalog.call_args_list
+        assert [c.args[0] for c in ensure_calls] == ["team2"]
+
+        # No add_user_to_group call targeted team1 (or team1ro by extension —
+        # iteration only sees team1 here per the mock, but the base-group
+        # filter would catch team1ro too in real data).
+        add_calls = polaris_group_manager.add_user_to_group.call_args_list
+        assert all(c.args[1] != "team1" for c in add_calls)
+        # Each user still got the team2 binding mirrored.
+        assert any(c.args == ("alice", "team2") for c in add_calls)
+        assert any(c.args == ("bob", "team2") for c in add_calls)
+
+    def test_ensure_polaris_excludes_groups_skips_ro_sibling_bindings(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """A user who's only in team1ro doesn't get the reader binding when team1 is excluded."""
+        polaris_group_manager = polaris_migration_state.polaris_group_manager
+        polaris_migration_state.group_manager.get_user_groups.return_value = ["team1ro"]
+
+        polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources",
+            json={"exclude_groups": ["team1"]},
+        )
+
+        # No add_user_to_group calls at all — team1ro normalises to base team1
+        # which is excluded.
+        polaris_group_manager.add_user_to_group.assert_not_called()
+
+    def test_ensure_polaris_excludes_users_and_groups_combined(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Combining exclude_users and exclude_groups behaves as the union of both filters."""
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources",
+            json={"exclude_users": ["alice"], "exclude_groups": ["team1"]},
+        )
+
+        data = response.json()
+        assert data["users_skipped"] == ["alice"]
+        assert data["groups_skipped"] == ["team1"]
+        assert data["users_provisioned"] == 1  # only bob
+        assert data["groups_provisioned"] == 0  # team1 was the only base group
+
 
 class TestMigrationResponseModels:
     """Tests for migration response model validation."""
@@ -1340,6 +1461,8 @@ class TestMigrationResponseModels:
         response = EnsurePolarisResponse(
             users_provisioned=10,
             groups_provisioned=4,
+            users_skipped=["sysuser"],
+            groups_skipped=["legacy"],
             errors=[
                 MigrationError(
                     resource_type="user", resource_name="bob", error="timeout"
@@ -1349,6 +1472,8 @@ class TestMigrationResponseModels:
             timestamp=datetime.now(),
         )
         assert response.users_provisioned == 10
+        assert response.users_skipped == ["sysuser"]
+        assert response.groups_skipped == ["legacy"]
         assert len(response.errors) == 1
 
 
