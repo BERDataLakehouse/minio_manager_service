@@ -26,6 +26,15 @@ class Settings(BaseModel):
         default=os.getenv("LOG_LEVEL", "INFO"),
         description="Logging level for the application",
     )
+    read_cache_ttl_seconds: float = Field(
+        default=float(os.getenv("READ_CACHE_TTL_SECONDS", "60.0")),
+        description=(
+            "TTL (seconds) for per-replica read-side caches that front the "
+            "GroupManager and TenantMetadataStore lookups. Bounds staleness "
+            "for cross-pod / external mutations; in-pod mutations invalidate "
+            "explicitly so this acts only as a backstop."
+        ),
+    )
 
     @field_validator("service_root_path", mode="before")
     @classmethod

@@ -43,7 +43,11 @@ class MinIOCommandBuilder:
 
     # User Management Commands
     def build_user_command(
-        self, action: UserAction, username: str, password: Optional[str] = None
+        self,
+        action: UserAction,
+        username: str,
+        password: Optional[str] = None,
+        json_format: bool = False,
     ) -> List[str]:
         """Build user management command.
 
@@ -51,6 +55,7 @@ class MinIOCommandBuilder:
             action: User action to perform
             username: Username
             password: Password (for add/update actions)
+            json_format: Whether to use JSON format. Only takes effect for INFO.
 
         Returns:
             Command arguments list
@@ -59,6 +64,8 @@ class MinIOCommandBuilder:
         cmd = ["admin", AdminCommand.USER.value, action.value, self.alias, username]
         if password and action in (UserAction.ADD,):
             cmd.append(password)
+        if json_format and action == UserAction.INFO:
+            cmd.append("--json")
         return cmd
 
     def build_user_list_command(self, json_format: bool = True) -> List[str]:
