@@ -1090,6 +1090,7 @@ class TestRegeneratePoliciesEndpoint:
         assert data["groups_updated"] == 0
         assert data["errors"] == []
 
+
 class TestEnsurePolarisResourcesEndpoint:
     """Tests for ensure_all_polaris_resources migration endpoint."""
 

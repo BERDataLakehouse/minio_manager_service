@@ -731,7 +731,9 @@ async def regenerate_all_policies(
 
     # Filter to base groups only (exclude *ro groups)
     base_groups = [g for g in all_group_names if not g.endswith("ro")]
-    logger.info(f"Regenerating HOME policies for {len(base_groups)} base groups (RW + RO)")
+    logger.info(
+        f"Regenerating HOME policies for {len(base_groups)} base groups (RW + RO)"
+    )
 
     for base_group in base_groups:
         # Regenerate RW policy
