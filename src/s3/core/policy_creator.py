@@ -9,7 +9,8 @@ POLICY TYPES CREATED:
 1. USER HOME POLICIES (PolicyType.USER_HOME):
    - Policy Name: <USER_HOME_POLICY_PREFIX><username>
    - Grants ADMIN access to user's personal warehouses:
-     * s3a://{bucket}/users-sql-warehouse/{username}/ (for Spark tables)
+     * s3a://{bucket}/users-sql-warehouse/{username}/u_{username}__* (Spark tables, governance-enforced)
+     * s3a://{bucket}/users-sql-warehouse/{username}/iceberg/ (Iceberg tables via Polaris catalog)
      * s3a://{bucket}/users-general-warehouse/{username}/ (for general files)
    - Includes full read/write/delete permissions for user's personal workspace
    - Enables directory listing and bucket location access
@@ -27,7 +28,8 @@ POLICY TYPES CREATED:
 3. GROUP POLICIES (PolicyType.GROUP_HOME):
    - Policy Name: <GROUP_POLICY_PREFIX><groupname>
    - Grants WRITE access to group's shared workspaces:
-     * s3a://{bucket}/tenant-sql-warehouse/{groupname}/ (for Spark tables)
+     * s3a://{bucket}/tenant-sql-warehouse/{groupname}/{groupname}_* (Spark tables, governance-enforced)
+     * s3a://{bucket}/tenant-sql-warehouse/{groupname}/iceberg/ (Iceberg tables via Polaris catalog)
      * s3a://{bucket}/tenant-general-warehouse/{groupname}/ (for general files)
    - Enables collaborative access for group members
    - Members inherit group permissions through policy attachment
@@ -61,6 +63,13 @@ from s3.utils.governance import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Subdirectory appended to SQL warehouse paths for Iceberg catalog storage.
+# Each user/tenant Iceberg catalog stores data under <warehouse_path>/<name>/iceberg/.
+# This path has its own IAM statement separate from the u_{username}__* / {group}_*
+# governed SQL warehouse path, since Iceberg uses catalog-level isolation (Polaris)
+# instead of prefix-based governance.
+ICEBERG_STORAGE_SUBDIRECTORY = "iceberg"
 
 # Mapping from policy actions to their corresponding sections
 _POLICY_ACTION_TO_POLICY_SECTION = {
@@ -135,10 +144,14 @@ class PolicyCreator:
         self.user_sql_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.users_sql_warehouse_prefix}/{self.path_target}"
         # user warehouse for general files
         self.user_general_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.users_general_warehouse_prefix}/{self.path_target}"
+        # user warehouse for Iceberg tables (Polaris provides catalog-level isolation)
+        self.user_iceberg_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.users_sql_warehouse_prefix}/{self.path_target}/{ICEBERG_STORAGE_SUBDIRECTORY}"
         # tenant warehouse for spark tables
         self.tenant_sql_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.tenant_sql_warehouse_prefix}/{self.path_target}"
         # tenant warehouse for general files
         self.tenant_general_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.tenant_general_warehouse_prefix}/{self.path_target}"
+        # tenant warehouse for Iceberg tables (Polaris provides catalog-level isolation)
+        self.tenant_iceberg_warehouse_path = f"s3a://{self.config.default_bucket}/{self.config.tenant_sql_warehouse_prefix}/{self.path_target}/{ICEBERG_STORAGE_SUBDIRECTORY}"
 
         # Internal section management with Dict[PolicySectionType, List[PolicyStatement]]
         self._sections: Dict[PolicySectionType, List[PolicyStatement]] = {
@@ -343,6 +356,14 @@ class PolicyCreator:
             PolicyPermissionLevel.ADMIN,
         )
 
+        # Add access to user's Iceberg catalog path under SQL warehouse.
+        # Iceberg uses Polaris for catalog-level isolation, so no governance prefix needed.
+        self._add_path_access_via_builder(
+            self.config.default_bucket,
+            self.user_iceberg_warehouse_path,
+            PolicyPermissionLevel.ADMIN,
+        )
+
         # Add access to user's general warehouse (no naming restrictions for general files)
         self._add_path_access_via_builder(
             self.config.default_bucket,
@@ -385,6 +406,14 @@ class PolicyCreator:
         self._add_path_access_via_builder(
             self.config.default_bucket,
             tenant_sql_warehouse_governed_path,
+            permission,
+        )
+
+        # Add access to group's Iceberg catalog path under SQL warehouse.
+        # Iceberg uses Polaris for catalog-level isolation, so no governance prefix needed.
+        self._add_path_access_via_builder(
+            self.config.default_bucket,
+            self.tenant_iceberg_warehouse_path,
             permission,
         )
 

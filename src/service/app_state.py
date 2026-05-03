@@ -16,11 +16,12 @@ from credentials.s3_service import S3CredentialService
 from credentials.s3_store import S3CredentialStore
 from s3.core.distributed_lock import DistributedLockManager
 from s3.core.s3_client import S3Client
-from minio.managers.group_manager import GroupManager
-from minio.managers.policy_manager import PolicyManager
-from minio.managers.sharing_manager import SharingManager
-from minio.managers.tenant_manager import TenantManager
-from minio.managers.user_manager import UserManager
+from s3.core.s3_iam_client import S3IAMClient
+from s3.managers.group_manager import GroupManager
+from s3.managers.policy_manager import PolicyManager
+from s3.managers.sharing_manager import SharingManager
+from s3.managers.tenant_manager import TenantManager
+from s3.managers.user_manager import UserManager
 from s3.models.s3_config import S3Config
 from service.arg_checkers import not_falsy
 from service.database import DatabasePool, run_migrations
@@ -117,8 +118,16 @@ async def build_app(app: FastAPI) -> None:
         secret_key=not_falsy(os.getenv("MINIO_ROOT_PASSWORD"), "MINIO_ROOT_PASSWORD"),
     )
 
-    minio_client = await S3Client.create(config)
+    s3_client = await S3Client.create(config)
     logger.info("S3 client session initialized")
+
+    iam_client = await S3IAMClient.create(
+        endpoint_url=str(config.endpoint),
+        access_key=config.access_key,
+        secret_key=config.secret_key,
+        path_prefix=os.getenv("MMS_IAM_PATH_PREFIX", "/data_governance_service"),
+    )
+    logger.info("IAM client initialized")
 
     # Initialize distributed lock manager
     logger.info("Initializing distributed lock manager...")
@@ -131,13 +140,13 @@ async def build_app(app: FastAPI) -> None:
         )
     logger.info("Distributed lock manager initialized and Redis connection verified")
 
-    # Initialize all managers with the shared client
-    user_manager = UserManager(minio_client, config)
-    group_manager = GroupManager(minio_client, config)
-    policy_manager = PolicyManager(minio_client, config, lock_manager=lock_manager)
+    # Initialize all managers with the shared clients
+    policy_manager = PolicyManager(iam_client, config, lock_manager=lock_manager)
+    group_manager = GroupManager(iam_client, s3_client, policy_manager, config)
+    user_manager = UserManager(
+        iam_client, s3_client, policy_manager, group_manager, config
+    )
     sharing_manager = SharingManager(
-        minio_client,
-        config,
         policy_manager=policy_manager,
         user_manager=user_manager,
         group_manager=group_manager,
@@ -158,12 +167,13 @@ async def build_app(app: FastAPI) -> None:
         metadata_store=tenant_metadata_store,
         group_manager=group_manager,
         profile_client=profile_client,
-        minio_config=config,
+        s3_config=config,
     )
     logger.info("Tenant manager initialized")
 
     # Store teardown-only resources directly on app state (only accessed in app_state.py)
-    app.state._s3_client = minio_client
+    app.state._s3_client = s3_client
+    app.state._iam_client = iam_client
     app.state._lock_manager = lock_manager
     app.state._db_pool = db_pool
 
@@ -197,6 +207,13 @@ async def destroy_app_state(app: FastAPI) -> None:
             logger.info("Redis connection closed")
         except Exception as e:
             logger.warning(f"Error closing Redis connection: {e}")
+
+    if hasattr(app.state, "_iam_client"):
+        try:
+            await app.state._iam_client.close()
+            logger.info("IAM client closed")
+        except Exception as e:
+            logger.warning(f"Error closing IAM client: {e}")
 
     if hasattr(app.state, "_s3_client"):
         try:

@@ -1,5 +1,8 @@
 # Ceph migration TODOs
 
+## Restore ListBucket specific paths once CEPH bug is fixed
+https://tracker.ceph.com/issues/74398
+
 ## Remove __init__.py files from tests/s3/
 
 The `tests/` tree has `__init__.py` files only because

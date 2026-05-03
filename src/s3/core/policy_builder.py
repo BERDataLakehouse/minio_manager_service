@@ -173,41 +173,36 @@ class PolicyBuilder:
     def _find_list_bucket_statement(self) -> PolicyStatement | None:
         """Find the ListBucket statement with prefix conditions."""
         for stmt in self.policy_model.policy_document.statement:
-            if (
-                stmt.action == PolicyAction.LIST_BUCKET
-                and stmt.condition
-                and "StringLike" in stmt.condition
-                and "s3:prefix" in stmt.condition["StringLike"]
-            ):
-                # There should only be one ListBucket statement
+            if stmt.action == PolicyAction.LIST_BUCKET:
+                # # if (
+                # #     stmt.condition
+                # #     and "StringLike" in stmt.condition
+                # #     and "s3:prefix" in stmt.condition["StringLike"]
+                # # ):
                 return stmt
         return None
 
     def _add_to_list_bucket_statement(self, clean_path: str) -> None:
         """Add path prefixes to the ListBucket statement in place."""
-        list_bucket_stmt = self._find_list_bucket_statement()
-        if not list_bucket_stmt or not list_bucket_stmt.condition:
-            raise PolicyOperationError("No ListBucket statement found to add path to")
-
-        prefixes = list_bucket_stmt.condition["StringLike"]["s3:prefix"]
-        new_prefixes = self._create_list_bucket_prefixes(clean_path)
-
-        for prefix in new_prefixes:
-            if prefix not in prefixes:
-                prefixes.append(prefix)
+        # # list_bucket_stmt = self._find_list_bucket_statement()
+        # # if not list_bucket_stmt or not list_bucket_stmt.condition:
+        # #     raise PolicyOperationError("No ListBucket statement found to add path to")
+        # # prefixes = list_bucket_stmt.condition["StringLike"]["s3:prefix"]
+        # # new_prefixes = self._create_list_bucket_prefixes(clean_path)
+        # # for prefix in new_prefixes:
+        # #     if prefix not in prefixes:
+        # #         prefixes.append(prefix)
 
     def _remove_from_list_bucket_statement(self, clean_path: str) -> None:
         """Remove path prefixes from the ListBucket statement."""
-        list_bucket_stmt = self._find_list_bucket_statement()
-        if not list_bucket_stmt or not list_bucket_stmt.condition:
-            raise PolicyOperationError("No ListBucket statement found to add path to")
-
-        prefixes = list_bucket_stmt.condition["StringLike"]["s3:prefix"]
-        prefixes_to_remove = self._create_list_bucket_prefixes(clean_path)
-
-        list_bucket_stmt.condition["StringLike"]["s3:prefix"] = [
-            prefix for prefix in prefixes if prefix not in prefixes_to_remove
-        ]
+        # # list_bucket_stmt = self._find_list_bucket_statement()
+        # # if not list_bucket_stmt or not list_bucket_stmt.condition:
+        # #     raise PolicyOperationError("No ListBucket statement found to add path to")
+        # # prefixes = list_bucket_stmt.condition["StringLike"]["s3:prefix"]
+        # # prefixes_to_remove = self._create_list_bucket_prefixes(clean_path)
+        # # list_bucket_stmt.condition["StringLike"]["s3:prefix"] = [
+        # #     prefix for prefix in prefixes if prefix not in prefixes_to_remove
+        # # ]
 
     def _remove_object_statements(self, target_resource: str) -> None:
         """
@@ -288,7 +283,7 @@ class PolicyBuilder:
 
     def _add_list_bucket_permissions(self, bucket_name: str, clean_path: str) -> None:
         """Add ListBucket permissions with proper prefixes."""
-        prefixes_to_add = self._create_list_bucket_prefixes(clean_path)
+        # # prefixes_to_add = self._create_list_bucket_prefixes(clean_path)
         bucket_resource = f"arn:aws:s3:::{bucket_name}"
 
         # Find existing ListBucket statement for this bucket
@@ -300,23 +295,23 @@ class PolicyBuilder:
                 existing_stmt = stmt
                 break
 
-        if (
-            existing_stmt
-            and existing_stmt.condition
-            and "StringLike" in existing_stmt.condition
-        ):
-            # Add to existing prefixes
-            current_prefixes = existing_stmt.condition["StringLike"]["s3:prefix"]
-            for prefix in prefixes_to_add:
-                if prefix not in current_prefixes:
-                    current_prefixes.append(prefix)
+        if existing_stmt:
+            # # if (
+            # #     existing_stmt.condition
+            # #     and "StringLike" in existing_stmt.condition
+            # # ):
+            # #     current_prefixes = existing_stmt.condition["StringLike"]["s3:prefix"]
+            # #     for prefix in prefixes_to_add:
+            # #         if prefix not in current_prefixes:
+            # #             current_prefixes.append(prefix)
+            pass
         else:
             # Create new ListBucket statement
             new_stmt = PolicyStatement(
                 effect=PolicyEffect.ALLOW,
                 action=PolicyAction.LIST_BUCKET,
                 resource=[bucket_resource],
-                condition={"StringLike": {"s3:prefix": prefixes_to_add.copy()}},
+                condition=None,  # # {"StringLike": {"s3:prefix": prefixes_to_add.copy()}},
                 principal=None,
             )
             self.policy_model.policy_document.statement.append(new_stmt)

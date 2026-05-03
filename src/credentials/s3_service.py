@@ -11,7 +11,7 @@ combined response.
 import logging
 
 from credentials.s3_store import S3CredentialStore
-from minio.managers.user_manager import UserManager
+from s3.managers.user_manager import UserManager
 from s3.core.distributed_lock import DistributedLockManager
 
 logger = logging.getLogger(__name__)

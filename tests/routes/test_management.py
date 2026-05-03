@@ -757,6 +757,7 @@ class TestRegeneratePoliciesEndpoint:
             return_value=["team1", "team1ro", "team2", "team2ro"]
         )
         mock_app_state.policy_manager.regenerate_user_home_policy = AsyncMock()
+        mock_app_state.policy_manager.regenerate_user_system_policy = AsyncMock()
         mock_app_state.policy_manager.regenerate_group_home_policy = AsyncMock()
         return mock_app_state
 
@@ -777,13 +778,24 @@ class TestRegeneratePoliciesEndpoint:
         assert data["errors"] == []
         assert data["performed_by"] == "admin"
 
-    def test_regenerate_policies_calls_user_regenerate(
+    def test_regenerate_policies_calls_user_home_regenerate(
         self, migration_client, migration_app_state
     ):
-        """Test that regenerate is called for each user."""
+        """Test that home policy regenerate is called for each user."""
         migration_client.post("/management/migrate/regenerate-policies")
 
         calls = migration_app_state.policy_manager.regenerate_user_home_policy.call_args_list
+        assert len(calls) == 2
+        assert calls[0].args == ("alice",)
+        assert calls[1].args == ("bob",)
+
+    def test_regenerate_policies_calls_user_system_regenerate(
+        self, migration_client, migration_app_state
+    ):
+        """Test that system policy regenerate is called for each user."""
+        migration_client.post("/management/migrate/regenerate-policies")
+
+        calls = migration_app_state.policy_manager.regenerate_user_system_policy.call_args_list
         assert len(calls) == 2
         assert calls[0].args == ("alice",)
         assert calls[1].args == ("bob",)
@@ -831,6 +843,25 @@ class TestRegeneratePoliciesEndpoint:
         assert len(data["errors"]) == 1
         assert data["errors"][0]["resource_name"] == "alice"
         assert "alice policy failed" in data["errors"][0]["error"]
+
+    def test_regenerate_policies_system_policy_error_continues(
+        self, migration_client, migration_app_state
+    ):
+        """Test that a system policy error does not block other users and is captured in errors."""
+        migration_app_state.policy_manager.regenerate_user_system_policy.side_effect = [
+            Exception("alice system policy failed"),
+            AsyncMock(),  # bob succeeds
+        ]
+
+        response = migration_client.post("/management/migrate/regenerate-policies")
+
+        data = response.json()
+        assert (
+            data["users_updated"] == 1
+        )  # alice has a failed policy, only bob fully succeeds
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["resource_name"] == "alice"
+        assert "alice system policy failed" in data["errors"][0]["error"]
 
     def test_regenerate_policies_group_error_continues(
         self, migration_client, migration_app_state

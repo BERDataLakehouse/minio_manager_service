@@ -50,9 +50,9 @@ services:
       dockerfile: Dockerfile
     platform: linux/amd64
     environment:
-      - MINIO_ENDPOINT=http://minio:9002
-      - MINIO_ROOT_USER=minio
-      - MINIO_ROOT_PASSWORD=minio123
+      - MINIO_ENDPOINT=http://ceph:8080
+      - MINIO_ROOT_USER=test_access_key
+      - MINIO_ROOT_PASSWORD=test_access_secret
       - KBASE_AUTH_URL=https://ci.kbase.us/services/auth/
       - KBASE_ADMIN_ROLES=CDM_JUPYTERHUB_ADMIN
       - KBASE_REQUIRED_ROLES=BERDL_USER
@@ -65,10 +65,13 @@ services:
       - MMS_DB_USER=mms
       - MMS_DB_PASSWORD=mmspassword
       - MMS_DB_ENCRYPTION_KEY=change-me-in-prod
+      - MMS_IAM_PATH_PREFIX=/data_governance_service
     ports:
       - "8010:8000"
     depends_on:
       minio:
+        condition: service_healthy
+      ceph:
         condition: service_healthy
       redis:
         condition: service_healthy
