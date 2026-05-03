@@ -14,7 +14,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from s3.core.s3_iam_client import S3IAMClient, _parse_policy
-from s3.exceptions import IamPolicyNotFoundError
+from s3.exceptions import IamGroupNotFoundError, IamPolicyNotFoundError
 
 
 # =============================================================================
@@ -539,6 +539,26 @@ async def test_list_users_in_group(iam_client, mock_iam_boto_client):
     )
     result = await iam_client.list_users_in_group("researchers")
     assert result == ["alice", "bob"]
+
+
+@pytest.mark.asyncio
+async def test_list_users_in_group_not_found(iam_client, mock_iam_boto_client):
+    paginator = MagicMock()
+    paginator.paginate = MagicMock(side_effect=no_such_entity("GetGroup"))
+    mock_iam_boto_client.get_paginator = MagicMock(return_value=paginator)
+    with pytest.raises(IamGroupNotFoundError):
+        await iam_client.list_users_in_group("researchers")
+
+
+@pytest.mark.asyncio
+async def test_list_users_in_group_other_error_reraises(
+    iam_client, mock_iam_boto_client
+):
+    paginator = MagicMock()
+    paginator.paginate = MagicMock(side_effect=other_error("GetGroup"))
+    mock_iam_boto_client.get_paginator = MagicMock(return_value=paginator)
+    with pytest.raises(ClientError):
+        await iam_client.list_users_in_group("researchers")
 
 
 @pytest.mark.asyncio

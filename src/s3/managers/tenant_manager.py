@@ -4,6 +4,7 @@ Coordinates between TenantMetadataStore (PostgreSQL), GroupManager (S3 IAM),
 and KBaseUserProfileClient (KBase Auth + local profiles).
 """
 
+import asyncio
 import logging
 
 from s3.managers.group_manager import GroupManager
@@ -62,7 +63,8 @@ class TenantManager:
     ) -> list[TenantSummaryResponse]:
         """List all tenants with summary info for the requesting user."""
         all_groups = await self._group_manager.list_groups()
-        tenant_names = [g for g in all_groups if _is_tenant_group(g)]
+        tenant_names = sorted(g for g in all_groups if _is_tenant_group(g))
+        all_groups_set = set(all_groups)
 
         # Pre-fetch all metadata in one query
         metadata_map = {
@@ -74,30 +76,56 @@ class TenantManager:
             await self.metadata_store.get_steward_tenants(requesting_user)
         )
 
-        summaries = []
-        for name in sorted(tenant_names):
-            members = await self._group_manager.get_group_members(name)
-            ro_members = []
-            ro_name = f"{name}ro"
-            if ro_name in all_groups:
-                ro_members = await self._group_manager.get_group_members(ro_name)
+        membership_results = await asyncio.gather(
+            *[
+                self._fetch_tenant_membership(name, all_groups_set)
+                for name in tenant_names
+            ]
+        )
 
+        summaries = []
+        for tenant_name, members, ro_members in membership_results:
             all_members = set(members) | set(ro_members)
-            meta = metadata_map.get(name, {})
+            meta = metadata_map.get(tenant_name, {})
 
             summaries.append(
                 TenantSummaryResponse(
-                    tenant_name=name,
+                    tenant_name=tenant_name,
                     display_name=meta.get("display_name"),
                     description=meta.get("description"),
                     website=meta.get("website"),
                     organization=meta.get("organization"),
                     member_count=len(all_members),
                     is_member=requesting_user in all_members,
-                    is_steward=name in steward_tenants,
+                    is_steward=tenant_name in steward_tenants,
                 )
             )
         return summaries
+
+    async def _fetch_tenant_membership(
+        self, tenant_name: str, known_groups: set[str]
+    ) -> tuple[str, list[str], list[str]]:
+        """Fetch RW and (when present) RO members for one tenant concurrently.
+
+        Args:
+            tenant_name: Base tenant (RW group) name.
+            known_groups: Full set of group names from list_groups(), used to
+                skip an extra existence check for the RO sibling.
+
+        Returns:
+            (tenant_name, rw_members, ro_members). ro_members is [] when the
+            RO sibling does not exist.
+        """
+        ro_name = f"{tenant_name}ro"
+        if ro_name in known_groups:
+            rw_members, ro_members = await asyncio.gather(
+                self._group_manager.get_group_members(tenant_name),
+                self._group_manager.get_group_members(ro_name),
+            )
+        else:
+            rw_members = await self._group_manager.get_group_members(tenant_name)
+            ro_members = []
+        return tenant_name, rw_members, ro_members
 
     # ── Tenant detail ────────────────────────────────────────────────────
 
