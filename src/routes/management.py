@@ -281,7 +281,7 @@ async def rotate_user_credentials(
     """Rotate credentials for a user."""
     app_state = get_app_state(request)
 
-    access_key, secret_key = await app_state.credential_service.rotate(username)
+    access_key, secret_key = await app_state.s3_credential_service.rotate(username)
 
     user_info = await app_state.user_manager.get_user(username)
 
@@ -319,7 +319,7 @@ async def delete_user(
 
     # Clean up cached credentials before deleting the MinIO user so that
     # a retry after partial failure doesn't fail on a missing user.
-    await app_state.credential_service.delete_credentials(username)
+    await app_state.s3_credential_service.delete_credentials(username)
 
     success = await app_state.user_manager.delete_resource(username)
     if not success:
@@ -584,7 +584,7 @@ async def rotate_all_credentials(
 
     for username in all_usernames:
         try:
-            await app_state.credential_service.rotate(username)
+            await app_state.s3_credential_service.rotate(username)
             users_rotated += 1
         except Exception as e:
             logger.warning(f"Failed to rotate credentials for user {username}: {e}")

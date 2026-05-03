@@ -32,7 +32,7 @@ DELETE FROM user_credentials WHERE username = %(username)s;
 """
 
 
-class CredentialStore:
+class S3CredentialStore:
     """Async PostgreSQL credential store with pgcrypto encryption.
 
     Accepts a shared ``AsyncConnectionPool`` from ``DatabasePool``.

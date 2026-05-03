@@ -1,37 +1,40 @@
-# MinIO Manager Service
+# KBERDL Data Governance Service
 
 [![codecov](https://codecov.io/gh/BERDataLakehouse/minio_manager_service/branch/main/graph/badge.svg)](https://codecov.io/gh/BERDataLakehouse/minio_manager_service)
 
-A centralized FastAPI-based microservice that manages IAM users, groups, and inline policies for data governance within the BERDL platform. It provides dynamic credential management and policy enforcement for Spark applications without requiring code changes.
+A centralized FastAPI-based microservice that manages data governance within the BERDL platform. It programmatically provisions S3 storage policies and Apache Polaris (Iceberg REST) catalogs, providing dynamic credential management and unified access control for Spark applications without requiring code changes.
+
+> **Note on naming.** The product is the **KBERDL Data Governance Service**. The repository, Python package (`minio-manager-service`), Docker service (`minio-manager`), and `MMS_*` environment variables retain the historical "MinIO Manager Service" name and will be renamed in a future cycle.
 
 ## Overview
 
-The MinIO Manager Service enables:
+The KBERDL Data Governance Service enables:
 
-- **Dynamic Credential Management**: Issue and rotate per-user S3 credentials on demand
-- **Automated Policy Enforcement**: Maintain user and group-level inline IAM policies with automatic updates
-- **Data Governance**: Path-level access control with sharing capabilities between users and groups
-- **Seamless Integration**: Zero-code changes for Spark applications; credentials injected at runtime
+- **Dynamic Credential Management**: Issue and rotate per-user S3 and Polaris credentials on demand
+- **Automated Policy Enforcement**: Maintain user and group-level inline IAM policies and Polaris RBAC roles with automatic updates
+- **Dataset Isolation**: Provision isolated personal and tenant-level Iceberg catalogs natively
+- **Data Governance**: Path-level and catalog-level access control with sharing capabilities between users and groups
+- **Seamless Integration**: Zero-code changes for Spark applications; S3 and catalog credentials injected at runtime
 
 ## Key Features
 
 ### User Management
-- Auto-create IAM users with unique access/secret key pairs
+
+- Auto-create IAM users and Polaris principals with unique access/secret key pairs
 - Credentials cached in PostgreSQL and returned on subsequent requests until explicitly rotated via `POST /credentials/rotate`
-- Each user gets two inline IAM policies:
-  - `home` — access to the user's home directory in the default bucket
-  - `system` — system-level access (e.g. bucket-level operations required by Spark)
-- Assign per-user home directories:
+- Assign per-user isolated storage and catalogs:
+
   - `s3a://cdm-lake/users-general-warehouse/{username}/` - General data storage
-  - `s3a://cdm-lake/users-sql-warehouse/{username}/` - Spark SQL warehouse
+  - `s3a://cdm-lake/users-sql-warehouse/{username}/` - Spark SQL / Delta warehouse
+  - `user_{username}` - Personal Apache Polaris Iceberg catalog
 
 ### Tenant Management
 - Tenants are the primary organizational unit, built on top of IAM groups
 - Each tenant has metadata (display name, description, website, organization), members, and data stewards
 - **Data stewards** can manage tenant membership and update metadata without being a full admin
 - Members are assigned read-write or read-only access
-- Each group gets one inline IAM policy:
-  - `group` — access to the group's shared storage paths
+- Provision dedicated tenant Iceberg catalogs in Polaris (`tenant_{groupname}`)
+- Assign users to groups with inherited permissions (MinIO IAM + Polaris catalog roles)
 - Tenant storage paths:
   - `s3a://cdm-lake/tenant-general-warehouse/{tenant}/` - General data storage
   - `s3a://cdm-lake/tenant-sql-warehouse/{tenant}/` - Spark SQL warehouse
@@ -56,9 +59,15 @@ The MinIO Manager Service enables:
 - Read-only groups via `{groupname}ro` convention
 - Share group workspace: `s3a://cdm-lake/groups-general-warehouse/{groupname}/`
 
+### Data Sharing
+- Grant/revoke path-level access between users and groups for legacy Delta/Parquet data
+- Manage Iceberg table sharing via native Polaris RBAC role assignments
+- Fine-grained permissions: read-only or read-write group variants (`{group}` vs `{group}ro`)
+
 ### Security
 - KBase authentication with role-based access control
 - User credentials encrypted at rest in PostgreSQL (pgcrypto)
+- Service holds only root/admin credentials for MinIO and Polaris
 - Distributed locking via Redis for concurrent operations
 - Credential rotation with blocking locks to prevent race conditions
 
@@ -76,7 +85,15 @@ docker compose logs -f minio-manager
 # Access services
 # - API docs: http://localhost:8010/docs
 # - Ceph RadosGW (S3/IAM): http://localhost:9050
+# - Polaris API: http://localhost:8182/api/catalog
 ```
+
+> **Upgrading an existing local stack.** A named `postgres_data` volume now
+> backs the postgres container, and the default database has changed from
+> `hive` to `polaris`. If you have an existing local checkout, run
+> `docker compose down -v` once before `docker compose up -d` so the new
+> init scripts run against a clean data directory. This drops the previous
+> ephemeral postgres state — production deployments are unaffected.
 
 ## Configuration
 
@@ -88,6 +105,8 @@ docker compose logs -f minio-manager
 | `MINIO_ROOT_USER` | Yes | - | S3/IAM access key |
 | `MINIO_ROOT_PASSWORD` | Yes | - | S3/IAM secret key |
 | `MMS_IAM_PATH_PREFIX` | No | `/data_governance_service` | IAM path prefix applied to all managed users and groups. Used to scope and list only service-managed entities (e.g. `PathPrefix` filtering). Must start and end with `/`. |
+| `POLARIS_CATALOG_URI` | Yes | - | Polaris management API URI (e.g., `http://polaris:8181/api/catalog`) |
+| `POLARIS_CREDENTIAL` | Yes | - | Polaris root/admin credentials (`client_id:client_secret`) |
 | `KBASE_AUTH_URL` | No | `https://ci.kbase.us/services/auth/` | KBase authentication service URL |
 | `KBASE_ADMIN_ROLES` | No | `KBASE_ADMIN` | Comma-separated admin roles |
 | `KBASE_REQUIRED_ROLES` | No | `BERDL_USER` | Required roles for access |
@@ -101,12 +120,12 @@ docker compose logs -f minio-manager
 
 ## JupyterHub Integration
 
-The service integrates seamlessly with JupyterHub:
+The service integrates seamlessly with JupyterHub and Spark Connect:
 
-1. **On user login**: JupyterHub calls `/credentials/` endpoint
-2. **Credentials issued**: Service creates the IAM user (if needed), caches credentials in PostgreSQL, and returns them
-3. **Spark configured**: Credentials injected into Spark session configuration
-4. **Transparent access**: Spark jobs access Ceph storage with proper permissions
+1. **On user login**: JupyterHub startup scripts (`01-credentials.py`) call the governance API endpoints
+2. **Credentials issued**: Service creates user/principal (if needed), caches credentials in PostgreSQL, and returns S3 and Polaris credentials
+3. **Spark configured**: Credentials and catalog mappings injected into Spark session configuration
+4. **Transparent access**: Spark jobs access Iceberg tables and S3 paths with strictly enforced permissions
 
 Users can then use credentials to:
 - Access their data via Spark (automatic)

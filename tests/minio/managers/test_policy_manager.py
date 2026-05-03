@@ -10,6 +10,7 @@ This module provides thorough test coverage for PolicyManager including:
 - Error handling and edge cases
 """
 
+import asyncio
 import json
 import os
 from contextlib import asynccontextmanager
@@ -813,7 +814,6 @@ class TestPolicyAttachmentStatus:
         self, policy_manager, mock_executor
     ):
         """Test checking if user policies attached when one is missing."""
-        from minio.models.command import CommandResult
 
         # First call returns attached, second returns not attached
         responses = [
@@ -1199,7 +1199,6 @@ class TestCreateMinIOPolicy:
         self, policy_manager, sample_policy_model, mock_executor
     ):
         """Test creating policy writes JSON to temp file."""
-        from minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
@@ -1216,7 +1215,6 @@ class TestCreateMinIOPolicy:
         self, policy_manager, sample_policy_model, mock_executor
     ):
         """Test raises error when policy creation fails."""
-        from minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
@@ -1238,7 +1236,6 @@ class TestLoadMinIOPolicy:
     @pytest.mark.asyncio
     async def test_loads_policy_successfully(self, policy_manager, mock_executor):
         """Test loading policy from MinIO."""
-        from minio.models.command import CommandResult
 
         policy_response = {
             "Policy": {
@@ -1277,7 +1274,6 @@ class TestLoadMinIOPolicy:
     @pytest.mark.asyncio
     async def test_raises_on_command_failure(self, policy_manager, mock_executor):
         """Test raises error when command fails."""
-        from minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
@@ -1432,8 +1428,6 @@ class TestEdgeCases:
             call_count[0] += 1
             if call_count[0] == 1:
                 # Simulate delay in first update
-                import asyncio
-
                 await asyncio.sleep(0.1)
 
         policy_manager._load_policy_for_target = AsyncMock(
@@ -1591,7 +1585,6 @@ class TestResourceExists:
     @pytest.mark.asyncio
     async def test_returns_true_when_exists(self, policy_manager, mock_executor):
         """Test resource_exists returns True when policy exists."""
-        from minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(
@@ -1610,7 +1603,6 @@ class TestResourceExists:
     @pytest.mark.asyncio
     async def test_returns_false_when_not_exists(self, policy_manager, mock_executor):
         """Test resource_exists returns False when policy doesn't exist."""
-        from minio.models.command import CommandResult
 
         mock_executor._execute_command = AsyncMock(
             return_value=CommandResult(

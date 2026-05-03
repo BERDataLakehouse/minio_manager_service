@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from polaris.credential_store import PolarisCredentialRecord, PolarisCredentialStore
+from credentials.polaris_store import PolarisCredentialRecord, PolarisCredentialStore
 
 
 @pytest.fixture

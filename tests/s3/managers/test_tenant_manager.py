@@ -1,7 +1,8 @@
 """Tests for the TenantManager class."""
 
+import asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, create_autospec
+from unittest.mock import AsyncMock, MagicMock, create_autospec
 
 import pytest
 
@@ -25,8 +26,6 @@ from service.kb_auth import AdminPermission, KBaseUser
 
 
 def _make_config():
-    from unittest.mock import MagicMock
-
     cfg = MagicMock()
     cfg.default_bucket = "cdm-lake"
     cfg.tenant_general_warehouse_prefix = "tenant-general-warehouse"
@@ -221,6 +220,101 @@ class TestListTenants:
         mock_group_manager.get_group_members.side_effect = get_members
         result = await manager.list_tenants("alice", "token")
         assert result[0].member_count == 2
+
+    async def test_results_are_sorted(self, manager, mock_group_manager):
+        mock_group_manager.list_groups.return_value = ["zebra", "alpha", "mango"]
+        result = await manager.list_tenants("alice", "token")
+        assert [s.tenant_name for s in result] == ["alpha", "mango", "zebra"]
+
+    async def test_per_tenant_membership_is_concurrent(
+        self, manager, mock_group_manager
+    ):
+        """Per-tenant membership reads must overlap, not run sequentially.
+
+        Each ``get_group_members`` call sleeps for ``DELAY`` seconds; if the
+        implementation awaits them one-at-a-time the total wall time would
+        be N * DELAY. With ``asyncio.gather`` it should be ~DELAY total.
+        """
+        mock_group_manager.list_groups.return_value = [
+            "t1",
+            "t1ro",
+            "t2",
+            "t2ro",
+            "t3",
+            "t3ro",
+        ]
+        DELAY = 0.05
+        N_TENANTS = 3
+        N_CALLS = N_TENANTS * 2
+
+        async def slow_get_members(_name: str) -> list[str]:
+            await asyncio.sleep(DELAY)
+            return []
+
+        mock_group_manager.get_group_members.side_effect = slow_get_members
+
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        result = await manager.list_tenants("alice", "token")
+        elapsed = loop.time() - start
+
+        assert len(result) == N_TENANTS
+        # Sequential lower bound would be N_CALLS * DELAY; concurrent should
+        # complete in ~ DELAY (with substantial slack for CI noise).
+        sequential_floor = N_CALLS * DELAY
+        assert elapsed < sequential_floor / 2, (
+            f"list_tenants ran sequentially: {elapsed:.3f}s vs "
+            f"sequential floor {sequential_floor:.3f}s"
+        )
+
+
+# ── _fetch_tenant_membership ─────────────────────────────────────────────
+
+
+class TestFetchTenantMembership:
+    """Direct tests for the _fetch_tenant_membership helper."""
+
+    async def test_fetches_rw_and_ro_when_ro_exists(self, manager, mock_group_manager):
+        async def get_members(name):
+            return ["alice"] if name == "t1" else ["bob"]
+
+        mock_group_manager.get_group_members.side_effect = get_members
+
+        result = await manager._fetch_tenant_membership("t1", {"t1", "t1ro"})
+
+        assert result == ("t1", ["alice"], ["bob"])
+        # Both sub-calls were made.
+        assert mock_group_manager.get_group_members.await_count == 2
+
+    async def test_skips_ro_when_not_in_known_groups(self, manager, mock_group_manager):
+        mock_group_manager.get_group_members.return_value = ["alice"]
+
+        result = await manager._fetch_tenant_membership("t1", {"t1"})
+
+        assert result == ("t1", ["alice"], [])
+        # Only the RW call was made; no RO call when sibling is absent.
+        assert mock_group_manager.get_group_members.await_count == 1
+        mock_group_manager.get_group_members.assert_awaited_once_with("t1")
+
+    async def test_rw_and_ro_run_concurrently(self, manager, mock_group_manager):
+        """The RW and RO membership reads for one tenant must overlap."""
+        DELAY = 0.05
+
+        async def slow_get_members(_name: str) -> list[str]:
+            await asyncio.sleep(DELAY)
+            return []
+
+        mock_group_manager.get_group_members.side_effect = slow_get_members
+
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        await manager._fetch_tenant_membership("t1", {"t1", "t1ro"})
+        elapsed = loop.time() - start
+
+        # If sequential, elapsed >= 2*DELAY. Concurrent should be ~DELAY.
+        assert elapsed < 2 * DELAY * 0.75, (
+            f"_fetch_tenant_membership ran RW+RO sequentially: {elapsed:.3f}s"
+        )
 
 
 # ── get_tenant_detail ────────────────────────────────────────────────────

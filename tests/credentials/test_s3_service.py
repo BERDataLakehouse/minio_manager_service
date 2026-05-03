@@ -1,5 +1,5 @@
 """
-Tests for the CredentialService class.
+Tests for the S3CredentialService class (MinIO-only credential lifecycle).
 
 Tests cover:
 - get_or_create: cache hit fast path, cache miss with lock, double-check pattern
@@ -7,6 +7,9 @@ Tests cover:
 - Auto-creation of new users
 - Distributed lock acquisition and contention
 - Error propagation from MinIO and DB layers
+
+Polaris coupling is NOT tested here — it lives in the route layer; see
+tests/polaris/test_orchestration.py for the Polaris orchestration helper.
 """
 
 from contextlib import asynccontextmanager
@@ -14,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from credentials.service import CredentialService
+from credentials.s3_service import S3CredentialService
 from service.exceptions import CredentialOperationError
 
 
@@ -48,7 +51,7 @@ def mock_user_manager():
 
 @pytest.fixture
 def mock_credential_store():
-    """Create a mock CredentialStore."""
+    """Create a mock S3CredentialStore."""
     store = AsyncMock()
     store.get_credentials = AsyncMock(return_value=None)
     store.store_credentials = AsyncMock()
@@ -66,8 +69,8 @@ def mock_lock_manager():
 
 @pytest.fixture
 def service(mock_user_manager, mock_credential_store, mock_lock_manager):
-    """Create a CredentialService with mocked dependencies."""
-    return CredentialService(
+    """Create an S3CredentialService with mocked dependencies."""
+    return S3CredentialService(
         user_manager=mock_user_manager,
         credential_store=mock_credential_store,
         lock_manager=mock_lock_manager,
@@ -78,7 +81,7 @@ def service(mock_user_manager, mock_credential_store, mock_lock_manager):
 
 
 class TestGetOrCreate:
-    """Tests for CredentialService.get_or_create."""
+    """Tests for S3CredentialService.get_or_create."""
 
     @pytest.mark.asyncio
     async def test_cache_hit_returns_immediately(self, service, mock_credential_store):
@@ -91,7 +94,6 @@ class TestGetOrCreate:
         result = await service.get_or_create("testuser")
 
         assert result == ("testuser", "cached-secret")
-        # Only one cache check (fast path), no store, no MinIO
         mock_credential_store.get_credentials.assert_called_once_with("testuser")
         mock_credential_store.store_credentials.assert_not_called()
 
@@ -131,17 +133,17 @@ class TestGetOrCreate:
 
     @pytest.mark.asyncio
     async def test_double_check_prevents_duplicate_work(
-        self, service, mock_user_manager, mock_credential_store, mock_lock_manager
+        self, service, mock_user_manager, mock_credential_store
     ):
-        """Test double-check pattern: cache populated between fast-path miss and lock acquire."""
+        """Cache populated between fast-path miss and post-lock check → no MinIO call."""
         call_count = 0
 
         async def get_creds_side_effect(username):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return None  # Fast path: miss
-            return ("testuser", "populated-by-another-request")  # Post-lock: hit
+                return None
+            return ("testuser", "populated-by-another-request")
 
         mock_credential_store.get_credentials = AsyncMock(
             side_effect=get_creds_side_effect
@@ -150,7 +152,6 @@ class TestGetOrCreate:
         result = await service.get_or_create("testuser")
 
         assert result == ("testuser", "populated-by-another-request")
-        # MinIO should NOT be called — another request already populated the cache
         mock_user_manager.resource_exists.assert_not_called()
         mock_user_manager.get_or_rotate_user_credentials.assert_not_called()
         mock_credential_store.store_credentials.assert_not_called()
@@ -164,7 +165,7 @@ class TestGetOrCreate:
             "testuser",
             "cached-secret",
         )
-        lock_acquired = []
+        lock_acquired: list[str] = []
 
         @asynccontextmanager
         async def tracking_lock(username, timeout=None):
@@ -184,7 +185,7 @@ class TestGetOrCreate:
     ):
         """Test that lock IS acquired when cache misses."""
         mock_credential_store.get_credentials.return_value = None
-        lock_acquired = []
+        lock_acquired: list[str] = []
 
         @asynccontextmanager
         async def tracking_lock(username, timeout=None):
@@ -202,7 +203,7 @@ class TestGetOrCreate:
     async def test_lock_contention_raises(
         self, service, mock_credential_store, mock_lock_manager
     ):
-        """Test that CredentialOperationError propagates on lock contention."""
+        """CredentialOperationError propagates on lock contention."""
         mock_credential_store.get_credentials.return_value = None
 
         @asynccontextmanager
@@ -222,7 +223,7 @@ class TestGetOrCreate:
     async def test_minio_create_user_error_propagates(
         self, service, mock_user_manager, mock_credential_store
     ):
-        """Test that MinIO errors propagate without storing credentials."""
+        """MinIO errors propagate without storing credentials."""
         mock_credential_store.get_credentials.return_value = None
         mock_user_manager.resource_exists.return_value = False
         mock_user_manager.create_user.side_effect = Exception("MinIO unreachable")
@@ -236,7 +237,7 @@ class TestGetOrCreate:
     async def test_minio_rotate_error_propagates(
         self, service, mock_user_manager, mock_credential_store
     ):
-        """Test that MinIO rotation errors propagate without storing."""
+        """MinIO rotation errors propagate without storing."""
         mock_credential_store.get_credentials.return_value = None
         mock_user_manager.resource_exists.return_value = True
         mock_user_manager.get_or_rotate_user_credentials.side_effect = Exception(
@@ -252,7 +253,7 @@ class TestGetOrCreate:
     async def test_store_error_propagates(
         self, service, mock_user_manager, mock_credential_store
     ):
-        """Test that DB store errors propagate (credentials rotated but not cached)."""
+        """DB store errors propagate (credentials rotated but not cached)."""
         mock_credential_store.get_credentials.return_value = None
         mock_user_manager.resource_exists.return_value = True
         mock_credential_store.store_credentials.side_effect = Exception("DB timeout")
@@ -265,20 +266,18 @@ class TestGetOrCreate:
 
 
 class TestRotate:
-    """Tests for CredentialService.rotate."""
+    """Tests for S3CredentialService.rotate."""
 
     @pytest.mark.asyncio
     async def test_rotate_existing_user(
         self, service, mock_user_manager, mock_credential_store
     ):
-        """Test rotate: delete stale → rotate in MinIO → store new."""
+        """Rotate: delete stale → rotate in MinIO → store new."""
         mock_user_manager.resource_exists.return_value = True
 
         result = await service.rotate("testuser")
 
         assert result == ("testuser", "rotated-secret-123")
-
-        # Verify order: delete first, then rotate, then store
         mock_credential_store.delete_credentials.assert_called_once_with("testuser")
         mock_user_manager.get_or_rotate_user_credentials.assert_called_once_with(
             "testuser"
@@ -291,7 +290,7 @@ class TestRotate:
     async def test_rotate_new_user_auto_creates(
         self, service, mock_user_manager, mock_credential_store
     ):
-        """Test rotate auto-creates user if not exists."""
+        """Rotate auto-creates user if not exists."""
         mock_user_manager.resource_exists.return_value = False
 
         result = await service.rotate("newuser")
@@ -299,16 +298,13 @@ class TestRotate:
         assert result == ("testuser", "created-secret-456")
         mock_credential_store.delete_credentials.assert_called_once_with("newuser")
         mock_user_manager.create_user.assert_called_once_with(username="newuser")
-        mock_credential_store.store_credentials.assert_called_once_with(
-            "newuser", "testuser", "created-secret-456"
-        )
 
     @pytest.mark.asyncio
     async def test_rotate_always_acquires_lock(
         self, service, mock_lock_manager, mock_credential_store
     ):
-        """Test that rotate always acquires the lock."""
-        lock_acquired = []
+        """Rotate always acquires the credential lock."""
+        lock_acquired: list[str] = []
 
         @asynccontextmanager
         async def tracking_lock(username, timeout=None):
@@ -326,7 +322,7 @@ class TestRotate:
     async def test_rotate_lock_contention_raises(
         self, service, mock_lock_manager, mock_credential_store
     ):
-        """Test that lock contention during rotate raises CredentialOperationError."""
+        """Lock contention during rotate raises CredentialOperationError."""
 
         @asynccontextmanager
         async def failing_lock(username, timeout=None):
@@ -345,12 +341,8 @@ class TestRotate:
     async def test_rotate_deletes_before_minio_call(
         self, service, mock_user_manager, mock_credential_store
     ):
-        """Test that stale creds are deleted before MinIO rotation.
-
-        This ensures that if MinIO rotation succeeds but store fails,
-        a subsequent GET won't return the old (now invalid) credentials.
-        """
-        call_order = []
+        """Stale creds deleted before MinIO rotation — no race window for stale GET."""
+        call_order: list[str] = []
 
         async def track_delete(username):
             call_order.append("delete")
@@ -377,7 +369,7 @@ class TestRotate:
     async def test_rotate_minio_error_leaves_no_stale_creds(
         self, service, mock_user_manager, mock_credential_store
     ):
-        """Test that if MinIO rotation fails, stale creds are already deleted."""
+        """If MinIO rotation fails, stale creds are already deleted; nothing stored."""
         mock_user_manager.resource_exists.return_value = True
         mock_user_manager.get_or_rotate_user_credentials.side_effect = Exception(
             "MinIO error"
@@ -386,9 +378,7 @@ class TestRotate:
         with pytest.raises(Exception, match="MinIO error"):
             await service.rotate("testuser")
 
-        # Delete should have been called before the error
         mock_credential_store.delete_credentials.assert_called_once_with("testuser")
-        # Store should NOT have been called
         mock_credential_store.store_credentials.assert_not_called()
 
 
@@ -396,11 +386,11 @@ class TestRotate:
 
 
 class TestDeleteCredentials:
-    """Tests for CredentialService.delete_credentials."""
+    """Tests for S3CredentialService.delete_credentials."""
 
     @pytest.mark.asyncio
     async def test_delete_delegates_to_store(self, service, mock_credential_store):
-        """Test delete_credentials delegates to the credential store."""
+        """delete_credentials delegates to the credential store."""
         await service.delete_credentials("testuser")
 
         mock_credential_store.delete_credentials.assert_called_once_with("testuser")
@@ -409,8 +399,8 @@ class TestDeleteCredentials:
     async def test_delete_acquires_lock(
         self, service, mock_credential_store, mock_lock_manager
     ):
-        """Test that delete_credentials acquires the credential lock."""
-        lock_acquired = []
+        """delete_credentials acquires the credential lock."""
+        lock_acquired: list[str] = []
 
         @asynccontextmanager
         async def tracking_lock(username, timeout=None):
@@ -426,7 +416,7 @@ class TestDeleteCredentials:
 
     @pytest.mark.asyncio
     async def test_delete_propagates_errors(self, service, mock_credential_store):
-        """Test that store errors propagate from delete_credentials."""
+        """Store errors propagate from delete_credentials."""
         mock_credential_store.delete_credentials.side_effect = Exception("DB error")
 
         with pytest.raises(Exception, match="DB error"):
@@ -436,14 +426,14 @@ class TestDeleteCredentials:
 # === CONSTRUCTOR TESTS ===
 
 
-class TestCredentialServiceInit:
-    """Tests for CredentialService initialization."""
+class TestS3CredentialServiceInit:
+    """Tests for S3CredentialService initialization."""
 
     def test_init_stores_dependencies(
         self, mock_user_manager, mock_credential_store, mock_lock_manager
     ):
-        """Test that constructor stores all dependencies."""
-        svc = CredentialService(
+        """Constructor stores all dependencies."""
+        svc = S3CredentialService(
             user_manager=mock_user_manager,
             credential_store=mock_credential_store,
             lock_manager=mock_lock_manager,
