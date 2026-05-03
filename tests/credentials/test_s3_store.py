@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from credentials.store import CredentialStore
+from credentials.s3_store import S3CredentialStore
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ def mock_pool():
 @pytest.fixture
 def credential_store(mock_pool):
     """Create a CredentialStore with a mocked pool."""
-    return CredentialStore(mock_pool, encryption_key="test-encryption-key")
+    return S3CredentialStore(mock_pool, encryption_key="test-encryption-key")
 
 
 class TestCredentialStoreGetCredentials:

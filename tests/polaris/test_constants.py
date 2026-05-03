@@ -3,6 +3,7 @@
 from polaris.constants import (
     ICEBERG_STORAGE_SUBDIRECTORY,
     PERSONAL_CATALOG_ADMIN_ROLE,
+    dedup_groups_preferring_write,
     normalize_group_name_for_polaris,
     personal_catalog_name,
     personal_principal_role,
@@ -81,3 +82,42 @@ class TestTenantCatalogNaming:
 
     def test_tenant_reader_principal_role(self):
         assert tenant_reader_principal_role("globalusers") == "globalusersro_member"
+
+
+class TestDedupGroupsPreferringWrite:
+    """Tests for the dedup_groups_preferring_write helper."""
+
+    def test_empty_input_returns_empty_dict(self):
+        assert dedup_groups_preferring_write([]) == {}
+
+    def test_single_writer_group(self):
+        assert dedup_groups_preferring_write(["teamA"]) == {"teamA": False}
+
+    def test_single_reader_group(self):
+        assert dedup_groups_preferring_write(["teamAro"]) == {"teamA": True}
+
+    def test_writer_and_reader_dedup_to_writer(self):
+        """Both variants present → writer wins (is_ro=False)."""
+        assert dedup_groups_preferring_write(["teamA", "teamAro"]) == {"teamA": False}
+
+    def test_writer_after_reader_still_wins(self):
+        """Order doesn't matter — writer always wins over reader."""
+        assert dedup_groups_preferring_write(["teamAro", "teamA"]) == {"teamA": False}
+
+    def test_independent_groups_kept_separately(self):
+        result = dedup_groups_preferring_write(["teamA", "teamBro", "teamC"])
+        assert result == {"teamA": False, "teamB": True, "teamC": False}
+
+    def test_empty_base_dropped(self):
+        """A group named exactly "ro" normalises to base "" — dropped defensively."""
+        assert dedup_groups_preferring_write(["ro", "teamA"]) == {"teamA": False}
+
+    def test_accepts_any_iterable(self):
+        """Helper takes Iterable[str], not specifically list."""
+        from collections.abc import Iterable
+
+        def gen() -> Iterable[str]:
+            yield "teamA"
+            yield "teamBro"
+
+        assert dedup_groups_preferring_write(gen()) == {"teamA": False, "teamB": True}

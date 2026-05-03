@@ -1555,6 +1555,66 @@ class TestDeletions:
             assert result == [("analytics",), ("shared",), ("shared", "raw")]
 
     @pytest.mark.asyncio
+    async def test_drop_catalog_empties_then_deletes(self, polaris_service):
+        """drop_catalog drops namespaces → catalog roles → catalog in order."""
+        call_order: list[str] = []
+        with (
+            patch.object(
+                polaris_service,
+                "delete_all_namespaces",
+                new_callable=AsyncMock,
+                side_effect=lambda *_: call_order.append("namespaces"),
+            ) as mock_del_ns,
+            patch.object(
+                polaris_service,
+                "delete_all_catalog_roles",
+                new_callable=AsyncMock,
+                side_effect=lambda *_: call_order.append("roles"),
+            ) as mock_del_roles,
+            patch.object(
+                polaris_service,
+                "delete_catalog",
+                new_callable=AsyncMock,
+                side_effect=lambda *_: call_order.append("catalog"),
+            ) as mock_del_cat,
+        ):
+            await polaris_service.drop_catalog("user_alice")
+
+            mock_del_ns.assert_called_once_with("user_alice")
+            mock_del_roles.assert_called_once_with("user_alice")
+            mock_del_cat.assert_called_once_with("user_alice")
+            # Strict ordering — Polaris rejects DELETE on a catalog with
+            # attached roles or non-empty namespaces, so the cleanup
+            # sequence must run before the catalog drop.
+            assert call_order == ["namespaces", "roles", "catalog"]
+
+    @pytest.mark.asyncio
+    async def test_drop_catalog_continues_on_per_step_failure(self, polaris_service):
+        """drop_catalog is best-effort — earlier-step failures don't block later ones."""
+        with (
+            patch.object(
+                polaris_service,
+                "delete_all_namespaces",
+                new_callable=AsyncMock,
+                side_effect=PolarisOperationError("boom", status=500),
+            ),
+            patch.object(
+                polaris_service,
+                "delete_all_catalog_roles",
+                new_callable=AsyncMock,
+                side_effect=PolarisOperationError("nope", status=500),
+            ) as mock_del_roles,
+            patch.object(
+                polaris_service, "delete_catalog", new_callable=AsyncMock
+            ) as mock_del_cat,
+        ):
+            # Should NOT raise — every step funnels through safe_delete.
+            await polaris_service.drop_catalog("user_alice")
+
+            mock_del_roles.assert_called_once_with("user_alice")
+            mock_del_cat.assert_called_once_with("user_alice")
+
+    @pytest.mark.asyncio
     async def test_drop_tenant_catalog(self, polaris_service):
         """Test drop_tenant_catalog drops the catalog and both bound member roles sequentially."""
         with (
