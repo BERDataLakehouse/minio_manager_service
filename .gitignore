@@ -10,3 +10,4 @@ test/test_temp/
 /.pytest_cache/
 /.ruff_cache/
 /.venv/
+src/minio_manager_service.egg-info/

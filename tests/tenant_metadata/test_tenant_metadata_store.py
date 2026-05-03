@@ -1,5 +1,6 @@
 """Tests for the TenantMetadataStore class."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -674,11 +675,10 @@ class TestSingleFlightOnStore:
 
     @pytest.mark.asyncio
     async def test_concurrent_get_metadata_dedup(self, store, mock_pool):
-        import asyncio as _aio
 
         execute_calls = 0
-        loader_started = _aio.Event()
-        loader_can_finish = _aio.Event()
+        loader_started = asyncio.Event()
+        loader_can_finish = asyncio.Event()
 
         async def slow_execute(*_a, **_kw):
             nonlocal execute_calls
@@ -691,10 +691,10 @@ class TestSingleFlightOnStore:
 
         mock_pool._mock_conn.execute.side_effect = slow_execute
 
-        tasks = [_aio.create_task(store.get_metadata("t1")) for _ in range(8)]
+        tasks = [asyncio.create_task(store.get_metadata("t1")) for _ in range(8)]
         await loader_started.wait()
         loader_can_finish.set()
-        results = await _aio.gather(*tasks)
+        results = await asyncio.gather(*tasks)
 
         assert all(r["tenant_name"] == "t1" for r in results)
         # 8 concurrent reads -> 1 SQL execute (single-flight).

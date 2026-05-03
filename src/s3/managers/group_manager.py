@@ -2,6 +2,7 @@
 
 import logging
 
+from s3.exceptions import IamGroupNotFoundError
 from service.exceptions import GroupNotFoundError, GroupOperationError
 from s3.core.s3_client import S3Client
 from s3.core.s3_iam_client import S3IAMClient
@@ -176,9 +177,10 @@ class GroupManager:
 
         group_name: Name of the group.
         """
-        if not await self._iam_client.group_exists(group_name):
-            raise GroupNotFoundError(f"Group {group_name} not found")
-        return await self._iam_client.list_users_in_group(group_name)
+        try:
+            return await self._iam_client.list_users_in_group(group_name)
+        except IamGroupNotFoundError as e:
+            raise GroupNotFoundError(f"Group {group_name} not found") from e
 
     async def get_group_info(self, group_name: str) -> GroupModel:
         """

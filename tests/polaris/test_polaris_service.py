@@ -1,5 +1,6 @@
 """Tests for the PolarisService module."""
 
+import asyncio
 import json
 
 import pytest
@@ -266,12 +267,11 @@ class TestGetToken:
     @pytest.mark.asyncio
     async def test_get_token_concurrent_calls_single_flight(self, polaris_service):
         """Test concurrent _get_token callers issue exactly one OAuth POST."""
-        import asyncio as _asyncio
 
         # Use an event so multiple coroutines pile up on the lock before the
         # first one's POST completes — proves the second waiter sees the
         # populated token and skips its own POST.
-        gate = _asyncio.Event()
+        gate = asyncio.Event()
         post_count = 0
 
         async def slow_json():
@@ -295,12 +295,12 @@ class TestGetToken:
         session.closed = False
 
         # Launch two concurrent fetches; one must wait on the lock.
-        task1 = _asyncio.create_task(polaris_service._get_token(session))
-        task2 = _asyncio.create_task(polaris_service._get_token(session))
+        task1 = asyncio.create_task(polaris_service._get_token(session))
+        task2 = asyncio.create_task(polaris_service._get_token(session))
         # Yield so both tasks reach the lock / POST.
-        await _asyncio.sleep(0)
+        await asyncio.sleep(0)
         gate.set()
-        results = await _asyncio.gather(task1, task2)
+        results = await asyncio.gather(task1, task2)
 
         assert results == ["tok", "tok"]
         # Single-flight: only the first holder of the lock posted.
@@ -1553,6 +1553,66 @@ class TestDeletions:
             result = await polaris_service._list_all_namespaces("tenant_foo")
 
             assert result == [("analytics",), ("shared",), ("shared", "raw")]
+
+    @pytest.mark.asyncio
+    async def test_drop_catalog_empties_then_deletes(self, polaris_service):
+        """drop_catalog drops namespaces → catalog roles → catalog in order."""
+        call_order: list[str] = []
+        with (
+            patch.object(
+                polaris_service,
+                "delete_all_namespaces",
+                new_callable=AsyncMock,
+                side_effect=lambda *_: call_order.append("namespaces"),
+            ) as mock_del_ns,
+            patch.object(
+                polaris_service,
+                "delete_all_catalog_roles",
+                new_callable=AsyncMock,
+                side_effect=lambda *_: call_order.append("roles"),
+            ) as mock_del_roles,
+            patch.object(
+                polaris_service,
+                "delete_catalog",
+                new_callable=AsyncMock,
+                side_effect=lambda *_: call_order.append("catalog"),
+            ) as mock_del_cat,
+        ):
+            await polaris_service.drop_catalog("user_alice")
+
+            mock_del_ns.assert_called_once_with("user_alice")
+            mock_del_roles.assert_called_once_with("user_alice")
+            mock_del_cat.assert_called_once_with("user_alice")
+            # Strict ordering — Polaris rejects DELETE on a catalog with
+            # attached roles or non-empty namespaces, so the cleanup
+            # sequence must run before the catalog drop.
+            assert call_order == ["namespaces", "roles", "catalog"]
+
+    @pytest.mark.asyncio
+    async def test_drop_catalog_continues_on_per_step_failure(self, polaris_service):
+        """drop_catalog is best-effort — earlier-step failures don't block later ones."""
+        with (
+            patch.object(
+                polaris_service,
+                "delete_all_namespaces",
+                new_callable=AsyncMock,
+                side_effect=PolarisOperationError("boom", status=500),
+            ),
+            patch.object(
+                polaris_service,
+                "delete_all_catalog_roles",
+                new_callable=AsyncMock,
+                side_effect=PolarisOperationError("nope", status=500),
+            ) as mock_del_roles,
+            patch.object(
+                polaris_service, "delete_catalog", new_callable=AsyncMock
+            ) as mock_del_cat,
+        ):
+            # Should NOT raise — every step funnels through safe_delete.
+            await polaris_service.drop_catalog("user_alice")
+
+            mock_del_roles.assert_called_once_with("user_alice")
+            mock_del_cat.assert_called_once_with("user_alice")
 
     @pytest.mark.asyncio
     async def test_drop_tenant_catalog(self, polaris_service):

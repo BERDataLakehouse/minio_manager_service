@@ -3,3 +3,7 @@
 
 class IamPolicyNotFoundError(Exception):
     """Raised by the IAM client when a requested inline policy does not exist."""
+
+
+class IamGroupNotFoundError(Exception):
+    """Raised by the IAM client when a requested group does not exist."""

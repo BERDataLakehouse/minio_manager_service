@@ -28,7 +28,7 @@ from s3.models.policy import (
 )
 from s3.models.user import UserModel
 from s3.models.group import GroupModel
-from credentials.store import CredentialStore
+from credentials.s3_store import S3CredentialStore
 from service.dependencies import auth
 from service.exceptions import PolicyOperationError
 from service.kb_auth import AdminPermission, KBaseUser
@@ -447,8 +447,8 @@ def test_client(mock_app):
 
 @pytest.fixture
 def mock_credential_store():
-    """Create a mock CredentialStore for testing."""
-    store = MagicMock(spec=CredentialStore)
+    """Create a mock S3CredentialStore for testing."""
+    store = MagicMock(spec=S3CredentialStore)
     store.get_credentials = AsyncMock(return_value=None)
     store.store_credentials = AsyncMock()
     store.delete_credentials = AsyncMock()
