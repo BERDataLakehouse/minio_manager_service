@@ -21,12 +21,13 @@ def polaris_service():
     async def _safe_delete(description, action):
         # Real safe_delete swallows PolarisOperationError; mimic that here so
         # tests can wire side_effect on the underlying delete_* methods.
-        from service.exceptions import PolarisOperationError
-
         try:
             await action
         except PolarisOperationError:
-            pass
+            # Intentional no-op: the production safe_delete logs and
+            # continues. We mirror the swallow so per-step failures in
+            # delete_user tests don't propagate, exactly like prod.
+            return
 
     svc.safe_delete = AsyncMock(side_effect=_safe_delete)
     return svc
