@@ -1,26 +1,29 @@
 """
-Credential coordination service.
+S3 (MinIO) credential coordination service.
 
-Encapsulates the lock → cache → S3 → store workflow so that credential
-routes (user-facing and management) are thin one-liner callers.
+Encapsulates the lock → cache → S3 → store workflow for **MinIO IAM**
+credentials only. Polaris credentials live in
+:class:`credentials.polaris_service.PolarisCredentialService`; the route
+layer composes the two services to give callers (JupyterHub) one
+combined response.
 """
 
 import logging
 
-from s3.core.distributed_lock import DistributedLockManager
+from credentials.s3_store import S3CredentialStore
 from minio.managers.user_manager import UserManager
-from credentials.store import CredentialStore
+from s3.core.distributed_lock import DistributedLockManager
 
 logger = logging.getLogger(__name__)
 
 
-class CredentialService:
-    """Coordinates distributed locking, S3 operations, and DB caching for credentials."""
+class S3CredentialService:
+    """Coordinates distributed locking, S3 operations, and DB caching for MinIO credentials."""
 
     def __init__(
         self,
         user_manager: UserManager,
-        credential_store: CredentialStore,
+        credential_store: S3CredentialStore,
         lock_manager: DistributedLockManager,
     ) -> None:
         self._user_manager = user_manager

@@ -673,6 +673,38 @@ class PolarisService:
                 return
             raise
 
+    async def drop_catalog(self, catalog: str) -> None:
+        """Drop a catalog after best-effort emptying its contents.
+
+        Polaris rejects ``DELETE /catalogs/{name}`` if the catalog still
+        contains namespaces, tables, or catalog roles. This helper handles
+        the full cleanup sequence:
+
+          1. Drop all namespaces (deepest first; tables block parent drop).
+          2. Drop all catalog roles attached to the catalog.
+          3. Drop the catalog itself.
+
+        Each step is best-effort — failures are logged via :meth:`safe_delete`
+        and do not block later steps. Used by both :meth:`drop_tenant_catalog`
+        and :class:`PolarisUserManager.delete_user` so personal and tenant
+        catalogs share the same teardown semantics.
+
+        Note: this does NOT drop principal-role bindings on the catalog —
+        callers are responsible for revoking those first if applicable.
+        """
+        await self.safe_delete(
+            f"namespaces in {catalog}",
+            self.delete_all_namespaces(catalog),
+        )
+        await self.safe_delete(
+            f"catalog roles in {catalog}",
+            self.delete_all_catalog_roles(catalog),
+        )
+        await self.safe_delete(
+            f"catalog {catalog}",
+            self.delete_catalog(catalog),
+        )
+
     async def drop_tenant_catalog(self, group_name: str) -> None:
         """Drop a Polaris tenant catalog and its associated principal roles.
 
@@ -690,33 +722,26 @@ class PolarisService:
         writer_principal_role = tenant_writer_principal_role(group_name)
         reader_principal_role = tenant_reader_principal_role(group_name)
 
-        await self._safe_delete(
+        await self.safe_delete(
             f"principal role {writer_principal_role}",
             self.delete_principal_role(writer_principal_role),
         )
-        await self._safe_delete(
+        await self.safe_delete(
             f"principal role {reader_principal_role}",
             self.delete_principal_role(reader_principal_role),
         )
-        await self._safe_delete(
-            f"namespaces in {tenant_name}",
-            self.delete_all_namespaces(tenant_name),
-        )
-        await self._safe_delete(
-            f"catalog roles in {tenant_name}",
-            self.delete_all_catalog_roles(tenant_name),
-        )
-        await self._safe_delete(
-            f"catalog {tenant_name}",
-            self.delete_catalog(tenant_name),
-        )
+        # Empty + drop the catalog itself (namespaces → roles → catalog).
+        await self.drop_catalog(tenant_name)
 
     @staticmethod
-    async def _safe_delete(description: str, action: Awaitable[None]) -> None:
+    async def safe_delete(description: str, action: Awaitable[None]) -> None:
         """Await ``action`` and swallow PolarisOperationError with a warning.
 
-        Used by best-effort orchestrators (e.g. ``drop_tenant_catalog``) where
-        an early failure must not block subsequent cleanup steps.
+        Public so other Polaris orchestrators (e.g. PolarisUserManager) can
+        share the same log format and contract as PolarisService's own
+        best-effort teardowns (``drop_tenant_catalog``). Threading every
+        best-effort delete through this single helper keeps the warning
+        prefix consistent for log aggregators / metrics.
         """
         try:
             await action

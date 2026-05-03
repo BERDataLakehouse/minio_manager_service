@@ -12,8 +12,8 @@ from typing import NamedTuple
 
 from fastapi import FastAPI, Request
 
-from credentials.service import CredentialService
-from credentials.store import CredentialStore
+from credentials.s3_service import S3CredentialService
+from credentials.s3_store import S3CredentialStore
 from s3.core.distributed_lock import DistributedLockManager
 from s3.core.s3_client import S3Client
 from minio.managers.group_manager import GroupManager
@@ -40,7 +40,7 @@ class AppState(NamedTuple):
     group_manager: GroupManager
     policy_manager: PolicyManager
     sharing_manager: SharingManager
-    credential_service: CredentialService
+    s3_credential_service: S3CredentialService
     tenant_manager: TenantManager
     users_sql_warehouse_base: str
     tenant_sql_warehouse_base: str
@@ -85,7 +85,7 @@ async def build_app(app: FastAPI) -> None:
     logger.info("Database pool initialized")
 
     # Initialize stores backed by the shared pool
-    credential_store = CredentialStore(
+    s3_credential_store = S3CredentialStore(
         pool=db_pool.pool,
         encryption_key=not_falsy(
             os.getenv("MMS_DB_ENCRYPTION_KEY"), "MMS_DB_ENCRYPTION_KEY"
@@ -145,12 +145,12 @@ async def build_app(app: FastAPI) -> None:
     logger.info("S3 managers initialized")
 
     # Initialize credential service (coordinates lock + S3 + DB)
-    credential_service = CredentialService(
+    s3_credential_service = S3CredentialService(
         user_manager=user_manager,
-        credential_store=credential_store,
+        credential_store=s3_credential_store,
         lock_manager=lock_manager,
     )
-    logger.info("Credential service initialized")
+    logger.info("S3 credential service initialized")
 
     # Initialize profile client and tenant manager
     profile_client = KBaseUserProfileClient(auth_url, pool=db_pool.pool)
@@ -173,7 +173,7 @@ async def build_app(app: FastAPI) -> None:
         group_manager=group_manager,
         policy_manager=policy_manager,
         sharing_manager=sharing_manager,
-        credential_service=credential_service,
+        s3_credential_service=s3_credential_service,
         tenant_manager=tenant_manager,
         # ruff is forcing these long lines, yuck
         users_sql_warehouse_base=f"s3a://{config.default_bucket}/{config.users_sql_warehouse_prefix}",
