@@ -629,7 +629,8 @@ class RegeneratePoliciesResponse(BaseModel):
     response_model=RegeneratePoliciesResponse,
     summary="Regenerate all IAM policies",
     description=(
-        "Force-regenerate HOME policies for all users and groups from the current template. "
+        "Force-regenerate 'home' and 'system'  policies for all users and 'group' policies "
+        "for all groups from the current template. "
         "This updates pre-existing policies to include new path statements. "
         "Each regeneration is independent — errors do not block others."
     ),
@@ -638,26 +639,34 @@ async def regenerate_all_policies(
     request: Request,
     authenticated_user=Depends(require_admin),
 ):
-    """Regenerate all user and group HOME policies from current templates."""
+    """Regenerate all user home/system and group policies from current templates."""
     app_state = get_app_state(request)
     errors: list[MigrationError] = []
     users_updated = 0
     groups_updated = 0
 
-    # Regenerate user HOME policies
+    # Regenerate user home and system policies
     all_usernames = await app_state.user_manager.list_resources()
-    logger.info(f"Regenerating HOME policies for {len(all_usernames)} users")
+    logger.info(f"Regenerating home and system policies for {len(all_usernames)} users")
 
     for username in all_usernames:
-        try:
-            await app_state.policy_manager.regenerate_user_home_policy(username)
+        user_errors = []
+        for regenerate in [
+            app_state.policy_manager.regenerate_user_home_policy,
+            app_state.policy_manager.regenerate_user_system_policy,
+        ]:
+            try:
+                await regenerate(username)
+            except Exception as e:
+                logger.warning(f"Failed to regenerate policy for user {username}: {e}")
+                user_errors.append(str(e))
+
+        if not user_errors:
             users_updated += 1
-        except Exception as e:
-            logger.warning(f"Failed to regenerate policy for user {username}: {e}")
-            errors.append(
-                MigrationError(
-                    resource_type="user", resource_name=username, error=str(e)
-                )
+        else:
+            errors.extend(
+                MigrationError(resource_type="user", resource_name=username, error=err)
+                for err in user_errors
             )
 
     # Regenerate group HOME policies (both RW and RO)
