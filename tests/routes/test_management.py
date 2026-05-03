@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from s3.models.policy import PolicyDocument, PolicyModel, PolicyTarget
 
+from credentials.polaris_store import PolarisCredentialRecord
 from s3.models.user import UserModel
 from routes.management import (
     EnsurePolarisResponse,
@@ -110,6 +111,20 @@ def mock_app_state():
     )
     app_state.polaris_credential_service = AsyncMock()
     app_state.polaris_credential_service.delete_credentials = AsyncMock()
+    # create_user / rotate-credentials populate the response with the
+    # Polaris half too, so the credential service must return a valid
+    # record on get_or_create AND rotate.
+    _polaris_record = PolarisCredentialRecord(
+        client_id="polaris-cid",
+        client_secret="polaris-secret",
+        personal_catalog="user_user1",
+    )
+    app_state.polaris_credential_service.get_or_create = AsyncMock(
+        return_value=_polaris_record
+    )
+    app_state.polaris_credential_service.rotate = AsyncMock(
+        return_value=_polaris_record
+    )
 
     # Mock policy manager
     app_state.policy_manager = AsyncMock()
@@ -213,8 +228,10 @@ class TestUserManagementResponse:
         """Test creating a valid UserManagementResponse."""
         response = UserManagementResponse(
             username="testuser",
-            access_key="testuser",
-            secret_key="secret-key",
+            s3_access_key="testuser",
+            s3_secret_key="secret-key",
+            polaris_client_id="polaris-cid",
+            polaris_client_secret="polaris-secret",
             home_paths=["s3a://bucket/users/testuser/"],
             groups=[],
             total_policies=2,
@@ -224,6 +241,10 @@ class TestUserManagementResponse:
         )
         assert response.username == "testuser"
         assert response.operation == "create"
+        assert response.s3_access_key == "testuser"
+        assert response.s3_secret_key == "secret-key"
+        assert response.polaris_client_id == "polaris-cid"
+        assert response.polaris_client_secret == "polaris-secret"
 
 
 class TestGroupManagementResponse:
@@ -314,26 +335,43 @@ class TestCreateUserEndpoint:
         assert data["operation"] == "create"
 
     def test_create_user_includes_secret_key(self, client, mock_app_state):
-        """Test that create returns secret key."""
+        """Test that create returns the full S3 + Polaris credential bundle."""
         response = client.post("/management/users/newuser")
 
         assert response.status_code == 201
         data = response.json()
-        assert "secret_key" in data
-        assert data["secret_key"] == "secret-key-123"
+        # S3 IAM half
+        assert data["s3_secret_key"] == "secret-key-123"
+        assert data["s3_access_key"] == "newuser"
+        # Polaris OAuth half — fixture returns a fixed record
+        assert data["polaris_client_id"] == "polaris-cid"
+        assert data["polaris_client_secret"] == "polaris-secret"
 
 
 class TestRotateUserCredentialsEndpoint:
     """Tests for rotate_user_credentials endpoint."""
 
     def test_rotate_credentials_success(self, client, mock_app_state):
-        """Test rotating credentials successfully."""
+        """Test rotating credentials returns the rotated S3 + Polaris bundle."""
         response = client.post("/management/users/user1/rotate-credentials")
 
         assert response.status_code == 200
         data = response.json()
         assert data["operation"] == "rotate"
-        assert data["secret_key"] == "new-secret-key"
+        # S3 IAM half (fixture returns ('user1', 'new-secret-key') on rotate)
+        assert data["s3_secret_key"] == "new-secret-key"
+        # Polaris half (fixture returns the shared PolarisCredentialRecord)
+        assert data["polaris_client_id"] == "polaris-cid"
+        assert data["polaris_client_secret"] == "polaris-secret"
+
+    def test_rotate_credentials_rotates_both_backends(self, client, mock_app_state):
+        """Both S3 and Polaris rotate calls fire — admin rotation must be full-bundle."""
+        client.post("/management/users/user1/rotate-credentials")
+
+        mock_app_state.s3_credential_service.rotate.assert_called_once_with("user1")
+        mock_app_state.polaris_credential_service.rotate.assert_called_once_with(
+            "user1"
+        )
 
 
 class TestDeleteUserEndpoint:
@@ -1518,6 +1556,15 @@ class TestRotateAllCredentialsEndpoint:
         mock_app_state.s3_credential_service.rotate = AsyncMock(
             return_value=("alice", "new-secret")
         )
+        # Polaris rotate is exercised per-user alongside S3 rotate. Default
+        # success — individual tests override side_effect for failure cases.
+        mock_app_state.polaris_credential_service.rotate = AsyncMock(
+            return_value=PolarisCredentialRecord(
+                client_id="polaris-cid",
+                client_secret="polaris-secret",
+                personal_catalog="user_alice",
+            )
+        )
         return mock_app_state
 
     @pytest.fixture
@@ -1540,15 +1587,51 @@ class TestRotateAllCredentialsEndpoint:
     ):
         rotate_client.post("/management/credentials/rotate-all-credentials")
 
-        calls = rotate_app_state.s3_credential_service.rotate.call_args_list
-        assert len(calls) == 2
-        assert calls[0].args == ("alice",)
-        assert calls[1].args == ("bob",)
+        s3_calls = rotate_app_state.s3_credential_service.rotate.call_args_list
+        assert len(s3_calls) == 2
+        assert s3_calls[0].args == ("alice",)
+        assert s3_calls[1].args == ("bob",)
 
-    def test_rotate_all_error_continues(self, rotate_client, rotate_app_state):
+        # Polaris rotates alongside S3 — both backends every user.
+        polaris_calls = (
+            rotate_app_state.polaris_credential_service.rotate.call_args_list
+        )
+        assert len(polaris_calls) == 2
+        assert polaris_calls[0].args == ("alice",)
+        assert polaris_calls[1].args == ("bob",)
+
+    def test_rotate_all_s3_error_continues(self, rotate_client, rotate_app_state):
+        """S3 failure on one user doesn't block Polaris on that user or other users.
+
+        ``users_rotated`` only counts users where BOTH backends succeeded;
+        the alice S3 failure → alice counts as failed even though her
+        Polaris rotation succeeded.
+        """
         rotate_app_state.s3_credential_service.rotate.side_effect = [
             Exception("alice rotate failed"),
             ("bob", "new-secret"),
+        ]
+
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_rotated"] == 1  # only bob fully succeeded
+        assert data["users_failed"] == 1  # alice partial failure
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["resource_name"] == "alice"
+        assert data["errors"][0]["resource_type"] == "user_s3"
+        assert "alice rotate failed" in data["errors"][0]["error"]
+
+    def test_rotate_all_polaris_error_continues(self, rotate_client, rotate_app_state):
+        """Polaris failure is reported with resource_type ``user_polaris``."""
+        rotate_app_state.polaris_credential_service.rotate.side_effect = [
+            Exception("alice polaris failed"),
+            PolarisCredentialRecord(
+                client_id="polaris-cid",
+                client_secret="polaris-secret",
+                personal_catalog="user_bob",
+            ),
         ]
 
         response = rotate_client.post("/management/credentials/rotate-all-credentials")
@@ -1559,12 +1642,47 @@ class TestRotateAllCredentialsEndpoint:
         assert data["users_failed"] == 1
         assert len(data["errors"]) == 1
         assert data["errors"][0]["resource_name"] == "alice"
-        assert data["errors"][0]["resource_type"] == "user"
-        assert "alice rotate failed" in data["errors"][0]["error"]
+        assert data["errors"][0]["resource_type"] == "user_polaris"
+
+    def test_rotate_all_both_backends_fail_for_same_user(
+        self, rotate_client, rotate_app_state
+    ):
+        """A single user with both backends failing produces two error rows.
+
+        Counted once in ``users_failed`` (it's still one user), but each
+        backend's error is preserved so operators can retry just the
+        failing backend.
+        """
+        rotate_app_state.s3_credential_service.rotate.side_effect = [
+            Exception("alice s3 failed"),
+            ("bob", "new-secret"),
+        ]
+        rotate_app_state.polaris_credential_service.rotate.side_effect = [
+            Exception("alice polaris failed"),
+            PolarisCredentialRecord(
+                client_id="polaris-cid",
+                client_secret="polaris-secret",
+                personal_catalog="user_bob",
+            ),
+        ]
+
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_rotated"] == 1  # bob ok
+        assert data["users_failed"] == 1  # alice (both halves failed but one user)
+        assert len(data["errors"]) == 2
+        types = {e["resource_type"] for e in data["errors"]}
+        assert types == {"user_s3", "user_polaris"}
 
     def test_rotate_all_all_fail(self, rotate_client, rotate_app_state):
+        """All users, all backends fail → 2 users × 2 backends = 4 error rows."""
         rotate_app_state.s3_credential_service.rotate.side_effect = Exception(
-            "rotate failed"
+            "s3 rotate failed"
+        )
+        rotate_app_state.polaris_credential_service.rotate.side_effect = Exception(
+            "polaris rotate failed"
         )
 
         response = rotate_client.post("/management/credentials/rotate-all-credentials")
@@ -1573,7 +1691,14 @@ class TestRotateAllCredentialsEndpoint:
         data = response.json()
         assert data["users_rotated"] == 0
         assert data["users_failed"] == 2
-        assert len(data["errors"]) == 2
+        assert len(data["errors"]) == 4
+        # Half S3, half Polaris.
+        s3_errs = [e for e in data["errors"] if e["resource_type"] == "user_s3"]
+        polaris_errs = [
+            e for e in data["errors"] if e["resource_type"] == "user_polaris"
+        ]
+        assert len(s3_errs) == 2
+        assert len(polaris_errs) == 2
 
     def test_rotate_all_no_users(self, rotate_client, rotate_app_state):
         rotate_app_state.user_manager.list_resources.return_value = []

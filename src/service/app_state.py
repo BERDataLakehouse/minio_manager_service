@@ -171,7 +171,7 @@ async def build_app(app: FastAPI) -> None:
         tenant_sql_warehouse_base=tenant_sql_warehouse_base,
     )
     polaris_credential_service = PolarisCredentialService(
-        polaris_service=polaris_service,
+        polaris_user_manager=polaris_user_manager,
         credential_store=polaris_credential_store,
         lock_manager=lock_manager,
     )

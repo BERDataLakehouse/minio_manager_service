@@ -51,14 +51,26 @@ class UserListResponse(BaseModel):
 
 
 class UserManagementResponse(BaseModel):
-    """Response model for user management operations."""
+    """Response model for user management operations.
+
+    Carries the full credential bundle (S3 IAM + Polaris OAuth) returned
+    on create / rotate so admin tooling has both halves in one round-trip,
+    matching the user-facing ``GET /credentials/`` shape.
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
 
     username: Annotated[str, Field(description="Username", min_length=1)]
-    access_key: Annotated[str, Field(description="MinIO access key")]
-    secret_key: Annotated[
-        str, Field(description="MinIO secret key (only on creation/rotation)")
+    # S3 IAM half
+    s3_access_key: Annotated[str, Field(description="S3 IAM access key")]
+    s3_secret_key: Annotated[
+        str, Field(description="S3 IAM secret key (only on creation/rotation)")
+    ]
+    # Polaris OAuth half
+    polaris_client_id: Annotated[str, Field(description="Polaris OAuth client ID")]
+    polaris_client_secret: Annotated[
+        str,
+        Field(description="Polaris OAuth client secret (only on creation/rotation)"),
     ]
     home_paths: Annotated[list[str], Field(description="User home directory paths")]
     groups: Annotated[list[str], Field(description="Group memberships")]
@@ -139,17 +151,34 @@ class MigrationError(BaseModel):
 
 
 class RotateAllCredentialsResponse(BaseModel):
-    """Response model for bulk credential rotation."""
+    """Response model for bulk credential rotation.
+
+    A user counts as ``rotated`` only when BOTH backends rotate
+    successfully — partial-success cases (e.g., S3 ok, Polaris failed)
+    are counted under ``users_failed`` and surfaced in ``errors`` with
+    ``resource_type`` of ``user_s3`` or ``user_polaris`` so operators
+    can tell which backend to retry.
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
 
     users_rotated: Annotated[
-        int, Field(description="Number of users whose credentials were rotated", ge=0)
+        int,
+        Field(description="Users whose S3 AND Polaris credentials both rotated", ge=0),
     ]
     users_failed: Annotated[
-        int, Field(description="Number of users whose rotation failed", ge=0)
+        int,
+        Field(description="Users where at least one backend's rotation failed", ge=0),
     ]
-    errors: Annotated[list[MigrationError], Field(description="Errors encountered")]
+    errors: Annotated[
+        list[MigrationError],
+        Field(
+            description=(
+                "Per-backend errors. ``resource_type`` is ``user_s3`` or "
+                "``user_polaris`` so each backend's failures are separable."
+            )
+        ),
+    ]
     performed_by: Annotated[str, Field(description="Admin who performed the operation")]
     timestamp: Annotated[datetime, Field(description="When operation was performed")]
 
@@ -273,10 +302,18 @@ async def create_user(
         group_manager=app_state.group_manager,
     )
 
+    # 3. Polaris credentials. PolarisCredentialService self-bootstraps the
+    # principal on cache miss, so step 2's create_user is redundant on this
+    # path — we keep it for the group-membership mirror that the credential
+    # service does not perform.
+    polaris_record = await app_state.polaris_credential_service.get_or_create(username)
+
     response = UserManagementResponse(
         username=user_info.username,
-        access_key=user_info.access_key,
-        secret_key=str(user_info.secret_key),
+        s3_access_key=user_info.access_key,
+        s3_secret_key=str(user_info.secret_key),
+        polaris_client_id=polaris_record.client_id,
+        polaris_client_secret=polaris_record.client_secret,
         home_paths=user_info.home_paths,
         groups=user_info.groups,
         total_policies=user_info.total_policies,
@@ -300,22 +337,30 @@ async def rotate_user_credentials(
     request: Request,
     authenticated_user=Depends(require_admin),
 ):
-    """Rotate MinIO credentials for a user.
+    """Rotate both S3 IAM and Polaris OAuth credentials for a user.
 
-    This endpoint rotates the MinIO IAM credentials only. To also rotate
-    Polaris credentials, the user calls ``POST /credentials/rotate``
-    (which composes both backends).
+    Mirrors the user-facing ``POST /credentials/rotate`` so admin-driven
+    rotation has the same blast radius as user-driven rotation. This is
+    typically used to respond to suspected credential compromise — leaving
+    Polaris OAuth secrets intact would let long-lived Spark Connect /
+    Trino sessions keep authenticating with the old material.
+
+    Both backends self-bootstrap the underlying identity, so this works
+    on users provisioned before either backend was integrated.
     """
     app_state = get_app_state(request)
 
     access_key, secret_key = await app_state.s3_credential_service.rotate(username)
+    polaris_record = await app_state.polaris_credential_service.rotate(username)
 
     user_info = await app_state.user_manager.get_user(username)
 
     response = UserManagementResponse(
         username=username,
-        access_key=access_key,
-        secret_key=secret_key,
+        s3_access_key=access_key,
+        s3_secret_key=secret_key,
+        polaris_client_id=polaris_record.client_id,
+        polaris_client_secret=polaris_record.client_secret,
         home_paths=user_info.home_paths,
         groups=user_info.groups,
         total_policies=user_info.total_policies,
@@ -621,16 +666,26 @@ async def delete_group(
     response_model=RotateAllCredentialsResponse,
     summary="Rotate all users' credentials",
     description=(
-        "Force-rotate credentials for every user in the system. "
-        "Each rotation is independent — errors do not block others. "
-        "Returns counts of successes and failures with error details."
+        "Force-rotate BOTH S3 IAM and Polaris OAuth credentials for every "
+        "user in the system. Each per-user, per-backend rotation is "
+        "independent — errors do not block others. A user is counted as "
+        "fully rotated only when both backends succeed; partial failures "
+        "are surfaced in ``errors`` with ``resource_type`` of ``user_s3`` "
+        "or ``user_polaris``."
     ),
 )
 async def rotate_all_credentials(
     request: Request,
     authenticated_user=Depends(require_admin),
 ):
-    """Rotate credentials for all users in the system."""
+    """Rotate S3 + Polaris credentials for all users.
+
+    Used as a security primitive (e.g., after suspected compromise or an
+    encryption-key rollover). Polaris must be rotated alongside S3 —
+    leaving Polaris OAuth secrets intact would defeat the purpose by
+    letting long-lived Spark Connect / Trino sessions keep authenticating
+    with the old material.
+    """
     app_state = get_app_state(request)
     errors: list[MigrationError] = []
     users_rotated = 0
@@ -639,25 +694,50 @@ async def rotate_all_credentials(
     logger.info(f"Rotating credentials for {len(all_usernames)} users")
 
     for username in all_usernames:
+        # Track each backend independently so a Polaris failure doesn't
+        # mask a successful S3 rotation (or vice versa). Both backends
+        # are attempted for every user even if the first fails.
+        s3_ok = False
+        polaris_ok = False
+
         try:
             await app_state.s3_credential_service.rotate(username)
-            users_rotated += 1
+            s3_ok = True
         except Exception as e:
-            logger.warning(f"Failed to rotate credentials for user {username}: {e}")
+            logger.warning(f"Failed to rotate S3 credentials for user {username}: {e}")
             errors.append(
                 MigrationError(
-                    resource_type="user", resource_name=username, error=str(e)
+                    resource_type="user_s3", resource_name=username, error=str(e)
                 )
             )
 
+        try:
+            await app_state.polaris_credential_service.rotate(username)
+            polaris_ok = True
+        except Exception as e:
+            logger.warning(
+                f"Failed to rotate Polaris credentials for user {username}: {e}"
+            )
+            errors.append(
+                MigrationError(
+                    resource_type="user_polaris", resource_name=username, error=str(e)
+                )
+            )
+
+        if s3_ok and polaris_ok:
+            users_rotated += 1
+
+    users_failed = len(all_usernames) - users_rotated
+
     logger.info(
         f"Admin {authenticated_user.user} rotated credentials: "
-        f"{users_rotated} succeeded, {len(errors)} failed"
+        f"{users_rotated} fully succeeded, {users_failed} had at least one "
+        f"backend failure ({len(errors)} per-backend errors total)"
     )
 
     return RotateAllCredentialsResponse(
         users_rotated=users_rotated,
-        users_failed=len(errors),
+        users_failed=users_failed,
         errors=errors,
         performed_by=authenticated_user.user,
         timestamp=datetime.now(),

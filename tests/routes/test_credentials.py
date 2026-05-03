@@ -37,13 +37,14 @@ def mock_mc_path():
 
 @pytest.fixture
 def mock_app_state():
-    """Create a mock AppState with the per-backend services + Polaris managers.
+    """Create a mock AppState exposing only the two per-backend services.
 
-    The credentials routes call:
+    The credentials routes are a two-line orchestration:
       - app_state.s3_credential_service.get_or_create / rotate (MinIO)
-      - ensure_user_polaris_state (uses polaris_user_manager,
-        polaris_group_manager, group_manager)
       - app_state.polaris_credential_service.get_or_create / rotate (Polaris)
+
+    Each service self-bootstraps its own identity on cache miss, so the
+    route doesn't need access to the underlying managers.
     """
     app_state = MagicMock(spec=AppState)
 
@@ -70,12 +71,6 @@ def mock_app_state():
             personal_catalog="user_testuser",
         )
     )
-
-    # ensure_user_polaris_state queries these.
-    app_state.polaris_user_manager = AsyncMock()
-    app_state.polaris_group_manager = AsyncMock()
-    app_state.group_manager = AsyncMock()
-    app_state.group_manager.get_user_groups = AsyncMock(return_value=["globalusers"])
 
     return app_state
 
@@ -107,12 +102,10 @@ def client(test_app, mock_app_state):
 
 _VALID_KW = dict(
     username="testuser",
-    access_key="testuser",
-    secret_key="test-secret-key-123456",
+    s3_access_key="testuser",
+    s3_secret_key="test-secret-key-123456",
     polaris_client_id="polaris-cid",
     polaris_client_secret="polaris-secret-456",
-    personal_catalog="user_testuser",
-    tenant_catalogs=["tenant_globalusers"],
 )
 
 
@@ -122,18 +115,16 @@ class TestCredentialsResponse:
     def test_credentials_response_valid(self):
         response = CredentialsResponse(**_VALID_KW)
         assert response.username == "testuser"
-        assert response.access_key == "testuser"
-        assert response.secret_key == "test-secret-key-123456"
+        assert response.s3_access_key == "testuser"
+        assert response.s3_secret_key == "test-secret-key-123456"
         assert response.polaris_client_id == "polaris-cid"
         assert response.polaris_client_secret == "polaris-secret-456"
-        assert response.personal_catalog == "user_testuser"
-        assert response.tenant_catalogs == ["tenant_globalusers"]
 
     def test_credentials_response_strips_whitespace(self):
-        kw = _VALID_KW | {"username": "  testuser  ", "access_key": "  testuser  "}
+        kw = _VALID_KW | {"username": "  testuser  ", "s3_access_key": "  testuser  "}
         response = CredentialsResponse(**kw)
         assert response.username == "testuser"
-        assert response.access_key == "testuser"
+        assert response.s3_access_key == "testuser"
 
     def test_credentials_response_frozen(self):
         response = CredentialsResponse(**_VALID_KW)
@@ -146,7 +137,7 @@ class TestCredentialsResponse:
 
     def test_credentials_response_secret_key_min_length(self):
         with pytest.raises(ValueError):
-            CredentialsResponse(**(_VALID_KW | {"secret_key": "short"}))
+            CredentialsResponse(**(_VALID_KW | {"s3_secret_key": "short"}))
 
 
 # === GET CREDENTIALS ENDPOINT TESTS ===
@@ -156,34 +147,38 @@ class TestGetCredentialsEndpoint:
     """Tests for GET /credentials/ endpoint."""
 
     def test_get_credentials_returns_full_bundle(self, client, mock_app_state):
-        """Response carries MinIO + Polaris credential material in one body."""
+        """Response carries S3 + Polaris credential material in one body.
+
+        Catalog metadata is intentionally excluded — clients fetch it from
+        ``GET /polaris/effective-access/me``.
+        """
         response = client.get("/credentials/")
 
         assert response.status_code == 200
         data = response.json()
         assert data["username"] == "testuser"
-        # MinIO half
-        assert data["access_key"] == "testuser"
-        assert data["secret_key"] == "minio-cached"
+        # S3 half
+        assert data["s3_access_key"] == "testuser"
+        assert data["s3_secret_key"] == "minio-cached"
         # Polaris half
         assert data["polaris_client_id"] == "polaris-cid"
         assert data["polaris_client_secret"] == "polaris-cached"
-        assert data["personal_catalog"] == "user_testuser"
-        assert data["tenant_catalogs"] == ["tenant_globalusers"]
+        # Catalog metadata excluded.
+        assert "personal_catalog" not in data
+        assert "tenant_catalogs" not in data
 
     def test_get_credentials_invokes_both_backends(self, client, mock_app_state):
-        """The route calls the S3 service AND the Polaris service in get_or_create mode."""
+        """The route calls the S3 service AND the Polaris service in get_or_create mode.
+
+        Each per-backend service self-bootstraps its own identity on cache
+        miss — the route is just a two-line orchestration.
+        """
         client.get("/credentials/")
 
         mock_app_state.s3_credential_service.get_or_create.assert_called_once_with(
             "testuser"
         )
-        # Polaris credential lookup uses the catalog name returned by ensure_user_polaris_state.
         mock_app_state.polaris_credential_service.get_or_create.assert_called_once_with(
-            username="testuser", personal_catalog="user_testuser"
-        )
-        # ensure_user_polaris_state invoked the personal-asset provisioner.
-        mock_app_state.polaris_user_manager.create_user.assert_called_once_with(
             "testuser"
         )
 
@@ -194,12 +189,10 @@ class TestGetCredentialsEndpoint:
 
         assert set(data.keys()) == {
             "username",
-            "access_key",
-            "secret_key",
+            "s3_access_key",
+            "s3_secret_key",
             "polaris_client_id",
             "polaris_client_secret",
-            "personal_catalog",
-            "tenant_catalogs",
         }
 
     @pytest.mark.asyncio
@@ -242,12 +235,12 @@ class TestRotateCredentialsEndpoint:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["secret_key"] == "minio-rotated"
+        assert data["s3_secret_key"] == "minio-rotated"
         assert data["polaris_client_secret"] == "polaris-rotated"
 
         mock_app_state.s3_credential_service.rotate.assert_called_once_with("testuser")
         mock_app_state.polaris_credential_service.rotate.assert_called_once_with(
-            username="testuser", personal_catalog="user_testuser"
+            "testuser"
         )
 
     @pytest.mark.asyncio

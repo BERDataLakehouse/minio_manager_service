@@ -11,10 +11,16 @@ from service.exceptions import PolarisOperationError
 
 
 @pytest.fixture
-def mock_polaris_service():
-    """Create a mock Polaris credential issuer."""
-    service = AsyncMock()
-    service.reset_principal_credentials = AsyncMock(
+def mock_polaris_user_manager():
+    """Create a mock PolarisUserManager.
+
+    PolarisCredentialService now self-bootstraps the principal via the
+    user manager (mirroring S3CredentialService) — `create_user` is
+    idempotent, `reset_credentials` returns the raw Polaris response.
+    """
+    manager = AsyncMock()
+    manager.create_user = AsyncMock()
+    manager.reset_credentials = AsyncMock(
         return_value={
             "credentials": {
                 "clientId": "client-id",
@@ -22,7 +28,7 @@ def mock_polaris_service():
             }
         }
     )
-    return service
+    return manager
 
 
 @pytest.fixture
@@ -57,10 +63,10 @@ def mock_lock_manager(lock_calls):
 
 
 @pytest.fixture
-def service(mock_polaris_service, mock_store, mock_lock_manager):
+def service(mock_polaris_user_manager, mock_store, mock_lock_manager):
     """Create a PolarisCredentialService with mocked dependencies."""
     return PolarisCredentialService(
-        polaris_service=mock_polaris_service,
+        polaris_user_manager=mock_polaris_user_manager,
         credential_store=mock_store,
         lock_manager=mock_lock_manager,
     )
@@ -71,9 +77,9 @@ class TestPolarisCredentialServiceGetOrCreate:
 
     @pytest.mark.asyncio
     async def test_cache_hit_returns_without_reset(
-        self, service, mock_store, mock_polaris_service
+        self, service, mock_store, mock_polaris_user_manager
     ):
-        """Test cache hit does not reset Polaris credentials."""
+        """Test cache hit does not bootstrap or reset."""
         cached = PolarisCredentialRecord(
             client_id="cached-id",
             client_secret="cached-secret",
@@ -81,11 +87,12 @@ class TestPolarisCredentialServiceGetOrCreate:
         )
         mock_store.get_credentials.return_value = cached
 
-        result = await service.get_or_create("testuser", "user_testuser")
+        result = await service.get_or_create("testuser")
 
         assert result == cached
         mock_store.get_credentials.assert_called_once_with("testuser")
-        mock_polaris_service.reset_principal_credentials.assert_not_called()
+        mock_polaris_user_manager.create_user.assert_not_called()
+        mock_polaris_user_manager.reset_credentials.assert_not_called()
         mock_store.store_credentials.assert_not_called()
 
     @pytest.mark.asyncio
@@ -97,25 +104,25 @@ class TestPolarisCredentialServiceGetOrCreate:
             personal_catalog="user_testuser",
         )
 
-        await service.get_or_create("testuser", "user_testuser")
+        await service.get_or_create("testuser")
 
         assert lock_calls == []
 
     @pytest.mark.asyncio
-    async def test_cache_miss_resets_and_stores(
-        self, service, mock_store, mock_polaris_service
+    async def test_cache_miss_bootstraps_resets_and_stores(
+        self, service, mock_store, mock_polaris_user_manager
     ):
-        """Test cache miss resets Polaris credentials and stores them."""
-        result = await service.get_or_create("testuser", "user_testuser")
+        """Test cache miss provisions the principal, resets, and stores."""
+        result = await service.get_or_create("testuser")
 
         assert result == PolarisCredentialRecord(
             client_id="client-id",
             client_secret="client-secret",
             personal_catalog="user_testuser",
         )
-        mock_polaris_service.reset_principal_credentials.assert_called_once_with(
-            name="testuser"
-        )
+        # Self-bootstrap mirrors S3CredentialService.create_user before reset.
+        mock_polaris_user_manager.create_user.assert_called_once_with("testuser")
+        mock_polaris_user_manager.reset_credentials.assert_called_once_with("testuser")
         mock_store.store_credentials.assert_called_once_with(
             username="testuser",
             client_id="client-id",
@@ -131,13 +138,13 @@ class TestPolarisCredentialServiceGetOrCreate:
         ``polaris:`` prefix the two would share a Redis key and serialize each
         other unnecessarily. Asserting the prefix here prevents regressions.
         """
-        await service.get_or_create("alice", "user_alice")
+        await service.get_or_create("alice")
 
         assert lock_calls == [("polaris:alice", None)]
 
     @pytest.mark.asyncio
     async def test_post_lock_cache_hit_returns_without_reset(
-        self, service, mock_store, mock_polaris_service
+        self, service, mock_store, mock_polaris_user_manager
     ):
         """Test a concurrent creator can populate the cache while we wait."""
         cached = PolarisCredentialRecord(
@@ -147,11 +154,12 @@ class TestPolarisCredentialServiceGetOrCreate:
         )
         mock_store.get_credentials.side_effect = [None, cached]
 
-        result = await service.get_or_create("testuser", "user_testuser")
+        result = await service.get_or_create("testuser")
 
         assert result == cached
         assert mock_store.get_credentials.call_count == 2
-        mock_polaris_service.reset_principal_credentials.assert_not_called()
+        mock_polaris_user_manager.create_user.assert_not_called()
+        mock_polaris_user_manager.reset_credentials.assert_not_called()
         mock_store.store_credentials.assert_not_called()
 
 
@@ -159,40 +167,39 @@ class TestPolarisCredentialServiceRotate:
     """Tests for rotate."""
 
     @pytest.mark.asyncio
-    async def test_rotate_deletes_resets_and_stores(
-        self, service, mock_store, mock_polaris_service
+    async def test_rotate_deletes_bootstraps_resets_and_stores(
+        self, service, mock_store, mock_polaris_user_manager
     ):
-        """Test rotate deletes cached credentials before resetting."""
-        result = await service.rotate("testuser", "user_testuser")
+        """Test rotate deletes cached credentials before bootstrapping + resetting."""
+        result = await service.rotate("testuser")
 
         assert result.client_id == "client-id"
         mock_store.delete_credentials.assert_called_once_with("testuser")
-        mock_polaris_service.reset_principal_credentials.assert_called_once_with(
-            name="testuser"
-        )
+        # Self-bootstrap before reset so admin rotation of a pre-Polaris
+        # user can't 404 on a missing principal.
+        mock_polaris_user_manager.create_user.assert_called_once_with("testuser")
+        mock_polaris_user_manager.reset_credentials.assert_called_once_with("testuser")
         mock_store.store_credentials.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_rotate_acquires_namespaced_lock(self, service, lock_calls):
         """Test rotate locks on the polaris-prefixed key."""
-        await service.rotate("alice", "user_alice")
+        await service.rotate("alice")
 
         assert lock_calls == [("polaris:alice", None)]
 
     @pytest.mark.asyncio
     async def test_missing_credentials_raises_polaris_error(
-        self, service, mock_polaris_service, mock_store
+        self, service, mock_polaris_user_manager, mock_store
     ):
         """Test a malformed Polaris reset response raises PolarisOperationError.
 
         The store must NOT be written when Polaris returns garbage.
         """
-        mock_polaris_service.reset_principal_credentials.return_value = {
-            "credentials": {}
-        }
+        mock_polaris_user_manager.reset_credentials.return_value = {"credentials": {}}
 
         with pytest.raises(PolarisOperationError, match="Polaris did not return"):
-            await service.rotate("testuser", "user_testuser")
+            await service.rotate("testuser")
 
         mock_store.store_credentials.assert_not_called()
 

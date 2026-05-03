@@ -181,8 +181,7 @@ class TestProvisionPolarisUser:
             principal="testuser", principal_role="testuser_role"
         )
         mock_app_state_obj.polaris_credential_service.get_or_create.assert_called_once_with(
-            username="testuser",
-            personal_catalog="user_testuser",
+            "testuser"
         )
 
     def test_provision_other_user_catalog_forbidden(
@@ -388,8 +387,7 @@ class TestRotatePolarisCredentials:
         assert data["client_secret"] == "rotated-client-secret"
         assert data["personal_catalog"] == "user_testuser"
         mock_app_state_obj.polaris_credential_service.rotate.assert_called_once_with(
-            username="testuser",
-            personal_catalog="user_testuser",
+            "testuser"
         )
 
     def test_rotate_other_user_forbidden(self, mock_app_state_obj, regular_user):
@@ -408,8 +406,7 @@ class TestRotatePolarisCredentials:
 
         assert response.status_code == 200
         mock_app_state_obj.polaris_credential_service.rotate.assert_called_once_with(
-            username="otheruser",
-            personal_catalog="user_otheruser",
+            "otheruser"
         )
 
     def test_rotate_credentials_unexpected_error_sanitised(

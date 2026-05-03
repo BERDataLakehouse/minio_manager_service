@@ -10,6 +10,7 @@ failure is safe.
 """
 
 import logging
+from typing import Any
 
 from polaris.constants import (
     PERSONAL_CATALOG_ADMIN_ROLE,
@@ -96,6 +97,20 @@ class PolarisUserManager:
         )
 
         logger.info("Provisioned Polaris assets for user %s", username)
+
+    async def reset_credentials(self, username: str) -> dict[str, Any]:
+        """Reset and return Polaris client credentials for the user's principal.
+
+        Mirrors :meth:`MinioUserManager.get_or_rotate_user_credentials` —
+        callers (notably :class:`PolarisCredentialService`) use this as the
+        credential-issuance step. Assumes the principal already exists; pair
+        with :meth:`create_user` (idempotent) for self-bootstrap callers.
+
+        Returns:
+            The full Polaris response dict; ``["credentials"]`` carries
+            ``clientId`` and ``clientSecret``.
+        """
+        return await self._polaris.reset_principal_credentials(name=username)
 
     async def delete_user(self, username: str) -> None:
         """Tear down a user's personal Polaris assets in reverse creation order.

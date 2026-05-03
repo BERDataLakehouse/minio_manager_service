@@ -125,10 +125,11 @@ async def provision_polaris_user(
         polaris_group_manager=app_state_obj.polaris_group_manager,
         group_manager=app_state_obj.group_manager,
     )
-    creds = await app_state_obj.polaris_credential_service.get_or_create(
-        username=username,
-        personal_catalog=catalog_name,
-    )
+    # PolarisCredentialService self-bootstraps the principal so
+    # ensure_user_polaris_state's create_user call is redundant on this
+    # path — kept above because we also need the tenant_catalogs list for
+    # the response, which the credential service doesn't compute.
+    creds = await app_state_obj.polaris_credential_service.get_or_create(username)
 
     return PolarisCredentialsResponse(
         client_id=creds.client_id,
@@ -161,10 +162,7 @@ async def rotate_polaris_credentials(
         polaris_group_manager=app_state_obj.polaris_group_manager,
         group_manager=app_state_obj.group_manager,
     )
-    creds = await app_state_obj.polaris_credential_service.rotate(
-        username=username,
-        personal_catalog=catalog_name,
-    )
+    creds = await app_state_obj.polaris_credential_service.rotate(username)
 
     return PolarisCredentialsResponse(
         client_id=creds.client_id,
