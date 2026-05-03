@@ -10,10 +10,11 @@ import pytest
 
 from s3.core.s3_client import S3Client
 from s3.core.s3_iam_client import S3IAMClient
+from s3.exceptions import IamGroupNotFoundError
 from s3.managers.group_manager import GroupManager
 from s3.managers.policy_manager import PolicyManager
 from s3.models.s3_config import S3Config
-from service.exceptions import GroupOperationError
+from service.exceptions import GroupNotFoundError, GroupOperationError
 
 
 # TODO TESTING these tests are AI generated and... aren't great. Could probably use a rework
@@ -235,15 +236,17 @@ async def test_remove_user_from_group_calls_iam(group_manager, mock_iam_client):
 # =============================================================================
 
 
-async def test_get_group_members_raises_if_not_exists(group_manager, mock_iam_client):
-    mock_iam_client.group_exists.return_value = False
-    with pytest.raises(GroupOperationError, match="researchers"):
-        await group_manager.get_group_members("researchers")
-
-
 async def test_get_group_members_returns_members(group_manager, mock_iam_client):
     mock_iam_client.list_users_in_group.return_value = ["alice", "bob"]
     assert await group_manager.get_group_members("researchers") == ["alice", "bob"]
+
+
+async def test_get_group_members_raises_group_not_found(group_manager, mock_iam_client):
+    mock_iam_client.list_users_in_group.side_effect = IamGroupNotFoundError(
+        "researchers"
+    )
+    with pytest.raises(GroupNotFoundError, match="researchers"):
+        await group_manager.get_group_members("researchers")
 
 
 # =============================================================================
@@ -280,7 +283,9 @@ async def test_is_user_in_group_false(group_manager, mock_iam_client):
 
 
 async def test_is_user_in_group_wraps_exception(group_manager, mock_iam_client):
-    mock_iam_client.group_exists.return_value = False
+    mock_iam_client.list_users_in_group.side_effect = IamGroupNotFoundError(
+        "researchers"
+    )
     with pytest.raises(GroupOperationError, match="researchers"):
         await group_manager.is_user_in_group("alice", "researchers")
 
