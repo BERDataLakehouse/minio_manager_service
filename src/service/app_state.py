@@ -45,7 +45,6 @@ class AppState(NamedTuple):
     group_manager: GroupManager
     policy_manager: PolicyManager
     sharing_manager: SharingManager
-    polaris_service: PolarisService
     polaris_user_manager: PolarisUserManager
     polaris_group_manager: PolarisGroupManager
     polaris_credential_service: PolarisCredentialService
@@ -214,6 +213,7 @@ async def build_app(app: FastAPI) -> None:
     app.state._s3_client = minio_client
     app.state._lock_manager = lock_manager
     app.state._db_pool = db_pool
+    app.state._polaris_service = polaris_service
 
     app.state._minio_manager_state = AppState(
         auth=auth,
@@ -221,7 +221,6 @@ async def build_app(app: FastAPI) -> None:
         group_manager=group_manager,
         policy_manager=policy_manager,
         sharing_manager=sharing_manager,
-        polaris_service=polaris_service,
         polaris_user_manager=polaris_user_manager,
         polaris_group_manager=polaris_group_manager,
         polaris_credential_service=polaris_credential_service,
@@ -257,10 +256,10 @@ async def destroy_app_state(app: FastAPI) -> None:
         except Exception as e:
             logger.warning(f"Error closing S3 client session: {e}")
 
-    if hasattr(app.state, "_minio_manager_state") and app.state._minio_manager_state:
+    if hasattr(app.state, "_polaris_service"):
         try:
             # Close Polaris HTTP session
-            await app.state._minio_manager_state.polaris_service.close()
+            await app.state._polaris_service.close()
             logger.info("Polaris HTTP session closed")
         except Exception as e:
             logger.warning(f"Error closing Polaris HTTP session: {e}")

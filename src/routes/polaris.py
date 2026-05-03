@@ -1,8 +1,16 @@
 """Polaris provisioning and effective-access HTTP routes.
 
-These routes are not yet mounted in :mod:`main`. ``AppState`` will gain
-``polaris_service`` / ``polaris_credential_service`` fields in a follow-up
-PR, at which point this router can be wired into the FastAPI app.
+Mounted at ``/polaris`` from :mod:`main`. Provides explicit self-service
+provisioning (``POST /polaris/user_provision/{username}``) and credential
+rotation (``POST /polaris/credentials/rotate/{username}``), plus
+effective-access discovery (``GET /polaris/effective-access/{me,username}``).
+
+Day-to-day callers should prefer the unified ``/credentials/`` and
+``/credentials/rotate`` endpoints, which also return the S3 IAM half.
+These Polaris-only endpoints are mostly used by tooling that needs the
+``tenant_catalogs`` list in the response (which the unified endpoints
+omit) and by admins explicitly rotating Polaris credentials for another
+user.
 """
 
 from typing import Annotated, Literal

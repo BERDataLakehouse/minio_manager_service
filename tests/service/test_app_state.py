@@ -33,7 +33,6 @@ class TestAppStateNamedTuple:
             group_manager=MagicMock(),
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
-            polaris_service=MagicMock(),
             polaris_user_manager=MagicMock(),
             polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
@@ -43,30 +42,23 @@ class TestAppStateNamedTuple:
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
         )
         assert state.auth is not None
-        assert state.polaris_service is not None
+        assert state.polaris_user_manager is not None
+        assert state.polaris_group_manager is not None
         assert state.polaris_credential_service is not None
         assert state.s3_credential_service is not None
         assert state.tenant_manager is not None
 
-    def test_app_state_with_polaris(self):
-        """Test AppState with PolarisService."""
-        polaris = MagicMock()
-        state = AppState(
-            auth=MagicMock(),
-            user_manager=MagicMock(),
-            group_manager=MagicMock(),
-            policy_manager=MagicMock(),
-            sharing_manager=MagicMock(),
-            polaris_service=polaris,
-            polaris_user_manager=MagicMock(),
-            polaris_group_manager=MagicMock(),
-            polaris_credential_service=MagicMock(),
-            s3_credential_service=MagicMock(),
-            tenant_manager=MagicMock(),
-            users_sql_warehouse_base="s3a://test-bucket/users-sql",
-            tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
-        )
-        assert state.polaris_service is polaris
+    def test_app_state_does_not_expose_raw_polaris_service(self):
+        """The low-level PolarisService is teardown-only.
+
+        Routes interact with Polaris exclusively through the manager layer
+        (``polaris_user_manager`` / ``polaris_group_manager``) and the
+        ``polaris_credential_service``. Exposing the raw client on AppState
+        would invite direct calls that bypass the manager-layer
+        orchestration; keep it on ``app.state._polaris_service`` for
+        ``destroy_app_state`` only.
+        """
+        assert "polaris_service" not in AppState._fields
 
 
 # === REQUEST STATE TESTS ===
@@ -206,9 +198,13 @@ class TestBuildApp:
 
             mock_migrate.assert_called_once()
             state = app.state._minio_manager_state
-            assert state.polaris_service is not None
+            assert state.polaris_user_manager is not None
+            assert state.polaris_group_manager is not None
             assert state.polaris_credential_service is not None
             assert state.s3_credential_service is not None
+            # The raw PolarisService is parked on app.state for shutdown
+            # but intentionally not exposed via AppState.
+            assert app.state._polaris_service is not None
             # Verify Polaris was called with correct args
             call_args = mock_polaris_cls.call_args[0]
             assert call_args[0] == "http://polaris:8181"
@@ -290,13 +286,13 @@ class TestDestroyAppState:
         app.state._lock_manager = mock_lock
         app.state._s3_client = mock_s3_client
         app.state._db_pool = mock_db_pool
+        app.state._polaris_service = mock_polaris
         app.state._minio_manager_state = AppState(
             auth=MagicMock(),
             user_manager=MagicMock(),
             group_manager=MagicMock(),
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
-            polaris_service=mock_polaris,
             polaris_user_manager=MagicMock(),
             polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
@@ -336,13 +332,13 @@ class TestDestroyAppState:
         app.state._lock_manager = mock_lock
         app.state._s3_client = mock_s3_client
         app.state._db_pool = mock_db_pool
+        app.state._polaris_service = mock_polaris
         app.state._minio_manager_state = AppState(
             auth=MagicMock(),
             user_manager=MagicMock(),
             group_manager=MagicMock(),
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
-            polaris_service=mock_polaris,
             polaris_user_manager=MagicMock(),
             polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),

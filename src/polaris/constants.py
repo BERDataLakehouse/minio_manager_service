@@ -92,7 +92,7 @@ def dedup_groups_preferring_write(
     defensively so we never call Polaris with an empty catalog name.
 
     Used by both the live provisioning path
-    (:func:`routes.polaris._ensure_polaris_user_resources`) and the bulk
+    (:func:`polaris.orchestration.ensure_user_polaris_state`) and the bulk
     backfill (``ensure-polaris-resources`` migration endpoint) so they apply
     identical role-binding semantics.
 

@@ -145,8 +145,8 @@ def mock_app_state():
     app_state.policy_manager.delete_resource = AsyncMock(return_value=True)
 
     # Mock Polaris stack — managers are the orchestration layer the routes
-    # call directly; PolarisService is exposed for the polaris.py routes only.
-    app_state.polaris_service = AsyncMock()
+    # call directly. The raw PolarisService is teardown-only and not on
+    # AppState, so it is not mocked here.
     app_state.polaris_user_manager = AsyncMock()
     app_state.polaris_user_manager.create_user = AsyncMock()
     app_state.polaris_user_manager.delete_user = AsyncMock()

@@ -120,10 +120,17 @@ class PolarisUserManager:
         ``drop_tenant_catalog`` so log aggregators see one prefix) and do not
         block later steps.
 
-        Tenant role bindings (memberships from group membership) are revoked
-        first defensively in case the configured Polaris version doesn't
-        auto-cascade on ``delete_principal``. Then we delete the personal
-        principal role, the principal itself, and the personal catalog.
+        Steps:
+          1. Revoke every principal-role binding the user holds (so the
+             principal can be deleted cleanly regardless of whether the
+             configured Polaris version auto-cascades on ``delete_principal``).
+          2. Delete the personal principal role (``{username}_role``).
+          3. Delete the principal itself.
+          4. Drop the personal catalog via :meth:`PolarisService.drop_catalog`,
+             which empties its namespaces and catalog roles first. The
+             ``catalog_admin`` role created in :meth:`create_user` and any
+             user-created namespaces/tables would otherwise block the catalog
+             delete and leave it orphaned.
         """
         catalog_name = personal_catalog_name(username)
         user_principal_role = personal_principal_role(username)
@@ -166,9 +173,17 @@ class PolarisUserManager:
             f"principal {username}",
             self._polaris.delete_principal(username),
         )
+        # 3. Drop the personal catalog. Use drop_catalog (not delete_catalog)
+        # so any user-created namespaces/tables AND the catalog_admin role
+        # provisioned by create_user are emptied first — Polaris rejects
+        # DELETE on a non-empty catalog and safe_delete would silently swallow
+        # that error, leaving the catalog orphaned.
+        # drop_catalog's internal steps each go through safe_delete, but wrap
+        # the outer call too so a structural failure (e.g., the method itself
+        # raising before its first safe_delete) doesn't break teardown.
         await self._polaris.safe_delete(
             f"catalog {catalog_name}",
-            self._polaris.delete_catalog(catalog_name),
+            self._polaris.drop_catalog(catalog_name),
         )
 
         logger.info("Deleted Polaris assets for user %s", username)

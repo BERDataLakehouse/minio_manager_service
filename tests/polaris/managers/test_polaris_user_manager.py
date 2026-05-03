@@ -106,8 +106,13 @@ class TestCreateUser:
 class TestDeleteUser:
     @pytest.mark.asyncio
     async def test_delete_user_reverse_creation_order(self, manager, polaris_service):
-        """Delete principal_role → principal → catalog (reverse of create order)."""
-        # Track call order
+        """Delete principal_role → principal → drop_catalog (reverse of create order).
+
+        ``drop_catalog`` (not ``delete_catalog``) is used so the personal
+        catalog's namespaces and the ``catalog_admin`` role are emptied
+        first. Otherwise Polaris would 4xx and ``safe_delete`` would
+        silently leave the catalog orphaned.
+        """
         call_order = []
         polaris_service.delete_principal_role.side_effect = lambda *a, **k: (
             call_order.append("role") or None
@@ -115,7 +120,7 @@ class TestDeleteUser:
         polaris_service.delete_principal.side_effect = lambda *a, **k: (
             call_order.append("principal") or None
         )
-        polaris_service.delete_catalog.side_effect = lambda *a, **k: (
+        polaris_service.drop_catalog.side_effect = lambda *a, **k: (
             call_order.append("catalog") or None
         )
 
@@ -123,7 +128,10 @@ class TestDeleteUser:
 
         polaris_service.delete_principal_role.assert_called_once_with("alice_role")
         polaris_service.delete_principal.assert_called_once_with("alice")
-        polaris_service.delete_catalog.assert_called_once_with("user_alice")
+        polaris_service.drop_catalog.assert_called_once_with("user_alice")
+        # delete_catalog is intentionally NOT called directly — drop_catalog
+        # is the only correct teardown for a non-empty personal catalog.
+        polaris_service.delete_catalog.assert_not_called()
         assert call_order == ["role", "principal", "catalog"]
 
     @pytest.mark.asyncio
@@ -140,32 +148,50 @@ class TestDeleteUser:
 
         polaris_service.delete_principal_role.assert_called_once()
         polaris_service.delete_principal.assert_called_once()
-        polaris_service.delete_catalog.assert_called_once()
+        polaris_service.drop_catalog.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_delete_user_continues_after_principal_failure(
         self, manager, polaris_service
     ):
-        """Failure on principal delete doesn't block catalog delete."""
+        """Failure on principal delete doesn't block drop_catalog."""
         polaris_service.delete_principal.side_effect = PolarisOperationError(
             "no", status=500
         )
 
         await manager.delete_user("alice")
 
-        polaris_service.delete_catalog.assert_called_once_with("user_alice")
+        polaris_service.drop_catalog.assert_called_once_with("user_alice")
 
     @pytest.mark.asyncio
     async def test_delete_user_continues_after_catalog_failure(
         self, manager, polaris_service
     ):
-        """A catalog-delete failure is logged and swallowed."""
-        polaris_service.delete_catalog.side_effect = PolarisOperationError(
+        """A drop_catalog failure is logged and swallowed."""
+        polaris_service.drop_catalog.side_effect = PolarisOperationError(
             "no", status=500
         )
 
-        # Should NOT raise
+        # Should NOT raise — drop_catalog itself is best-effort, but even an
+        # outright failure of the call must not propagate.
         await manager.delete_user("alice")
+
+    @pytest.mark.asyncio
+    async def test_delete_user_drops_catalog_with_full_cleanup(
+        self, manager, polaris_service
+    ):
+        """delete_user delegates to drop_catalog so namespaces + roles are emptied first.
+
+        Regression guard for the production hazard where the personal
+        catalog still contained the ``catalog_admin`` role (and
+        potentially user-created tables/namespaces), causing
+        ``DELETE /catalogs/user_alice`` to fail and leaving the catalog
+        orphaned forever.
+        """
+        await manager.delete_user("alice")
+
+        polaris_service.drop_catalog.assert_called_once_with("user_alice")
+        polaris_service.delete_catalog.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_delete_user_revokes_tenant_role_bindings_first(
@@ -197,7 +223,7 @@ class TestDeleteUser:
         # Then the standard cleanup runs.
         polaris_service.delete_principal_role.assert_called_once_with("alice_role")
         polaris_service.delete_principal.assert_called_once_with("alice")
-        polaris_service.delete_catalog.assert_called_once_with("user_alice")
+        polaris_service.drop_catalog.assert_called_once_with("user_alice")
 
     @pytest.mark.asyncio
     async def test_delete_user_continues_when_listing_bindings_fails(
@@ -214,7 +240,7 @@ class TestDeleteUser:
         polaris_service.revoke_principal_role_from_principal.assert_not_called()
         polaris_service.delete_principal_role.assert_called_once_with("alice_role")
         polaris_service.delete_principal.assert_called_once_with("alice")
-        polaris_service.delete_catalog.assert_called_once_with("user_alice")
+        polaris_service.drop_catalog.assert_called_once_with("user_alice")
 
     @pytest.mark.asyncio
     async def test_delete_user_continues_after_individual_revoke_failure(
@@ -235,4 +261,4 @@ class TestDeleteUser:
 
         assert polaris_service.revoke_principal_role_from_principal.call_count == 2
         polaris_service.delete_principal.assert_called_once()
-        polaris_service.delete_catalog.assert_called_once()
+        polaris_service.drop_catalog.assert_called_once()
