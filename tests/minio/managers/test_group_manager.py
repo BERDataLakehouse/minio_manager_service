@@ -1056,8 +1056,6 @@ class TestGetUserGroups:
     @pytest.mark.asyncio
     async def test_get_user_groups_user_not_found(self, group_manager_instance):
         """Test get_user_groups raises GroupNotFoundError when user does not exist."""
-        from service.exceptions import GroupNotFoundError
-
         group_manager_instance._executor._execute_command.return_value = CommandResult(
             success=False,
             stdout="",

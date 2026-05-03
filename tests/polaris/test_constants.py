@@ -1,5 +1,7 @@
 """Tests for the polaris.constants module."""
 
+from collections.abc import Iterable
+
 from polaris.constants import (
     ICEBERG_STORAGE_SUBDIRECTORY,
     PERSONAL_CATALOG_ADMIN_ROLE,
@@ -114,7 +116,6 @@ class TestDedupGroupsPreferringWrite:
 
     def test_accepts_any_iterable(self):
         """Helper takes Iterable[str], not specifically list."""
-        from collections.abc import Iterable
 
         def gen() -> Iterable[str]:
             yield "teamA"

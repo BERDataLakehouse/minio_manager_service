@@ -1,7 +1,7 @@
 """Tests for the TenantManager class."""
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, create_autospec
+from unittest.mock import AsyncMock, MagicMock, create_autospec
 
 import pytest
 
@@ -25,8 +25,6 @@ from service.kb_auth import AdminPermission, KBaseUser
 
 
 def _make_config():
-    from unittest.mock import MagicMock
-
     cfg = MagicMock()
     cfg.default_bucket = "cdm-lake"
     cfg.tenant_general_warehouse_prefix = "tenant-general-warehouse"
