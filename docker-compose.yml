@@ -129,12 +129,12 @@ services:
       - QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://postgres:5432/polaris
       - QUARKUS_DATASOURCE_USERNAME=hive
       - QUARKUS_DATASOURCE_PASSWORD=hivepassword
-      - POLARIS_REALM_NAME=default-realm
+      - POLARIS_REALM_CONTEXT_REALMS=POLARIS
       - AWS_REGION=us-east-1
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8181/q/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8182/q/health"]
       interval: 10s
       timeout: 5s
       retries: 5
