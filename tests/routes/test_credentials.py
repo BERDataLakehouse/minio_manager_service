@@ -1,8 +1,9 @@
 """
 Tests for the routes.credentials module.
 
-Routes are thin wrappers around CredentialService, so these tests
-verify routing, response models, and correct delegation.
+Routes orchestrate two backend services and the polaris-state ensure
+helper. The unified `CredentialsResponse` carries MinIO + Polaris fields
+so JupyterHub gets everything in one round-trip.
 """
 
 import os
@@ -12,6 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from credentials.polaris_store import PolarisCredentialRecord
 from routes.credentials import (
     CredentialsResponse,
     get_credentials,
@@ -35,17 +37,45 @@ def mock_mc_path():
 
 @pytest.fixture
 def mock_app_state():
-    """Create a mock application state with credential_service."""
+    """Create a mock AppState with the per-backend services + Polaris managers.
+
+    The credentials routes call:
+      - app_state.s3_credential_service.get_or_create / rotate (MinIO)
+      - ensure_user_polaris_state (uses polaris_user_manager,
+        polaris_group_manager, group_manager)
+      - app_state.polaris_credential_service.get_or_create / rotate (Polaris)
+    """
     app_state = MagicMock(spec=AppState)
 
-    # Mock credential service
-    app_state.credential_service = AsyncMock()
-    app_state.credential_service.get_or_create = AsyncMock(
-        return_value=("testuser", "test-secret-key-123")
+    app_state.s3_credential_service = AsyncMock()
+    app_state.s3_credential_service.get_or_create = AsyncMock(
+        return_value=("testuser", "minio-cached")
     )
-    app_state.credential_service.rotate = AsyncMock(
-        return_value=("testuser", "rotated-secret-key-456")
+    app_state.s3_credential_service.rotate = AsyncMock(
+        return_value=("testuser", "minio-rotated")
     )
+
+    app_state.polaris_credential_service = AsyncMock()
+    app_state.polaris_credential_service.get_or_create = AsyncMock(
+        return_value=PolarisCredentialRecord(
+            client_id="polaris-cid",
+            client_secret="polaris-cached",
+            personal_catalog="user_testuser",
+        )
+    )
+    app_state.polaris_credential_service.rotate = AsyncMock(
+        return_value=PolarisCredentialRecord(
+            client_id="polaris-cid",
+            client_secret="polaris-rotated",
+            personal_catalog="user_testuser",
+        )
+    )
+
+    # ensure_user_polaris_state queries these.
+    app_state.polaris_user_manager = AsyncMock()
+    app_state.polaris_group_manager = AsyncMock()
+    app_state.group_manager = AsyncMock()
+    app_state.group_manager.get_user_groups = AsyncMock(return_value=["globalusers"])
 
     return app_state
 
@@ -75,57 +105,48 @@ def client(test_app, mock_app_state):
 # === CREDENTIALS RESPONSE MODEL TESTS ===
 
 
+_VALID_KW = dict(
+    username="testuser",
+    access_key="testuser",
+    secret_key="test-secret-key-123456",
+    polaris_client_id="polaris-cid",
+    polaris_client_secret="polaris-secret-456",
+    personal_catalog="user_testuser",
+    tenant_catalogs=["tenant_globalusers"],
+)
+
+
 class TestCredentialsResponse:
     """Tests for CredentialsResponse model."""
 
     def test_credentials_response_valid(self):
-        """Test creating a valid CredentialsResponse."""
-        response = CredentialsResponse(
-            username="testuser",
-            access_key="testuser",
-            secret_key="test-secret-key-123456",
-        )
+        response = CredentialsResponse(**_VALID_KW)
         assert response.username == "testuser"
         assert response.access_key == "testuser"
         assert response.secret_key == "test-secret-key-123456"
+        assert response.polaris_client_id == "polaris-cid"
+        assert response.polaris_client_secret == "polaris-secret-456"
+        assert response.personal_catalog == "user_testuser"
+        assert response.tenant_catalogs == ["tenant_globalusers"]
 
     def test_credentials_response_strips_whitespace(self):
-        """Test that CredentialsResponse strips whitespace."""
-        response = CredentialsResponse(
-            username="  testuser  ",
-            access_key="  testuser  ",
-            secret_key="test-secret-key-123456",
-        )
+        kw = _VALID_KW | {"username": "  testuser  ", "access_key": "  testuser  "}
+        response = CredentialsResponse(**kw)
         assert response.username == "testuser"
         assert response.access_key == "testuser"
 
     def test_credentials_response_frozen(self):
-        """Test that CredentialsResponse is immutable."""
-        response = CredentialsResponse(
-            username="testuser",
-            access_key="testuser",
-            secret_key="test-secret-key-123456",
-        )
+        response = CredentialsResponse(**_VALID_KW)
         with pytest.raises(Exception):
             response.username = "changed"
 
     def test_credentials_response_username_min_length(self):
-        """Test username minimum length validation."""
         with pytest.raises(ValueError):
-            CredentialsResponse(
-                username="",
-                access_key="testuser",
-                secret_key="test-secret-key-123456",
-            )
+            CredentialsResponse(**(_VALID_KW | {"username": ""}))
 
     def test_credentials_response_secret_key_min_length(self):
-        """Test secret_key minimum length validation."""
         with pytest.raises(ValueError):
-            CredentialsResponse(
-                username="testuser",
-                access_key="testuser",
-                secret_key="short",
-            )
+            CredentialsResponse(**(_VALID_KW | {"secret_key": "short"}))
 
 
 # === GET CREDENTIALS ENDPOINT TESTS ===
@@ -134,38 +155,56 @@ class TestCredentialsResponse:
 class TestGetCredentialsEndpoint:
     """Tests for GET /credentials/ endpoint."""
 
-    def test_get_credentials_delegates_to_service(self, client, mock_app_state):
-        """Test that get_credentials delegates to credential_service."""
+    def test_get_credentials_returns_full_bundle(self, client, mock_app_state):
+        """Response carries MinIO + Polaris credential material in one body."""
         response = client.get("/credentials/")
 
         assert response.status_code == 200
         data = response.json()
         assert data["username"] == "testuser"
+        # MinIO half
         assert data["access_key"] == "testuser"
-        assert data["secret_key"] == "test-secret-key-123"
+        assert data["secret_key"] == "minio-cached"
+        # Polaris half
+        assert data["polaris_client_id"] == "polaris-cid"
+        assert data["polaris_client_secret"] == "polaris-cached"
+        assert data["personal_catalog"] == "user_testuser"
+        assert data["tenant_catalogs"] == ["tenant_globalusers"]
 
-        mock_app_state.credential_service.get_or_create.assert_called_once_with(
+    def test_get_credentials_invokes_both_backends(self, client, mock_app_state):
+        """The route calls the S3 service AND the Polaris service in get_or_create mode."""
+        client.get("/credentials/")
+
+        mock_app_state.s3_credential_service.get_or_create.assert_called_once_with(
+            "testuser"
+        )
+        # Polaris credential lookup uses the catalog name returned by ensure_user_polaris_state.
+        mock_app_state.polaris_credential_service.get_or_create.assert_called_once_with(
+            username="testuser", personal_catalog="user_testuser"
+        )
+        # ensure_user_polaris_state invoked the personal-asset provisioner.
+        mock_app_state.polaris_user_manager.create_user.assert_called_once_with(
             "testuser"
         )
 
-    def test_get_credentials_idempotent(self, client, mock_app_state):
-        """Test that multiple calls delegate to service consistently."""
-        response1 = client.get("/credentials/")
-        response2 = client.get("/credentials/")
-
-        assert response1.json() == response2.json()
-        assert mock_app_state.credential_service.get_or_create.call_count == 2
-
     def test_get_credentials_response_format(self, client, mock_app_state):
-        """Test response has exactly the expected fields."""
+        """Response body has exactly the expected fields."""
         response = client.get("/credentials/")
         data = response.json()
 
-        assert set(data.keys()) == {"username", "access_key", "secret_key"}
+        assert set(data.keys()) == {
+            "username",
+            "access_key",
+            "secret_key",
+            "polaris_client_id",
+            "polaris_client_secret",
+            "personal_catalog",
+            "tenant_catalogs",
+        }
 
     @pytest.mark.asyncio
     async def test_get_credentials_async(self, mock_app_state):
-        """Test get_credentials async function directly."""
+        """Direct async call to the route function."""
         mock_request = MagicMock()
 
         with patch("routes.credentials.get_app_state", return_value=mock_app_state):
@@ -173,15 +212,15 @@ class TestGetCredentialsEndpoint:
             response = await get_credentials(user, mock_request)
 
             assert response.username == "alice"
-            mock_app_state.credential_service.get_or_create.assert_called_once_with(
+            mock_app_state.s3_credential_service.get_or_create.assert_called_once_with(
                 "alice"
             )
 
     @pytest.mark.asyncio
     async def test_get_credentials_propagates_errors(self, mock_app_state):
-        """Test that service errors propagate through the route."""
+        """Service errors propagate through the route."""
         mock_request = MagicMock()
-        mock_app_state.credential_service.get_or_create.side_effect = Exception(
+        mock_app_state.s3_credential_service.get_or_create.side_effect = Exception(
             "Service failure"
         )
 
@@ -197,20 +236,23 @@ class TestGetCredentialsEndpoint:
 class TestRotateCredentialsEndpoint:
     """Tests for POST /credentials/rotate endpoint."""
 
-    def test_rotate_credentials_delegates_to_service(self, client, mock_app_state):
-        """Test that rotate delegates to credential_service."""
+    def test_rotate_credentials_rotates_both_backends(self, client, mock_app_state):
+        """Both MinIO and Polaris are rotated, and the response shows both."""
         response = client.post("/credentials/rotate")
 
         assert response.status_code == 200
         data = response.json()
-        assert data["username"] == "testuser"
-        assert data["secret_key"] == "rotated-secret-key-456"
+        assert data["secret_key"] == "minio-rotated"
+        assert data["polaris_client_secret"] == "polaris-rotated"
 
-        mock_app_state.credential_service.rotate.assert_called_once_with("testuser")
+        mock_app_state.s3_credential_service.rotate.assert_called_once_with("testuser")
+        mock_app_state.polaris_credential_service.rotate.assert_called_once_with(
+            username="testuser", personal_catalog="user_testuser"
+        )
 
     @pytest.mark.asyncio
     async def test_rotate_credentials_async(self, mock_app_state):
-        """Test rotate_credentials async function directly."""
+        """Direct async call to rotate_credentials."""
         mock_request = MagicMock()
 
         with patch("routes.credentials.get_app_state", return_value=mock_app_state):
@@ -218,13 +260,13 @@ class TestRotateCredentialsEndpoint:
             response = await rotate_credentials(user, mock_request)
 
             assert response.username == "alice"
-            mock_app_state.credential_service.rotate.assert_called_once_with("alice")
+            mock_app_state.s3_credential_service.rotate.assert_called_once_with("alice")
 
     @pytest.mark.asyncio
     async def test_rotate_credentials_propagates_errors(self, mock_app_state):
-        """Test that service errors propagate through the route."""
+        """Service errors propagate through the route."""
         mock_request = MagicMock()
-        mock_app_state.credential_service.rotate.side_effect = Exception(
+        mock_app_state.s3_credential_service.rotate.side_effect = Exception(
             "Rotation failed"
         )
 

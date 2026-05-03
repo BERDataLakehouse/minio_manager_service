@@ -37,7 +37,7 @@ class TestAppStateNamedTuple:
             polaris_user_manager=MagicMock(),
             polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
-            credential_service=MagicMock(),
+            s3_credential_service=MagicMock(),
             tenant_manager=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
@@ -45,7 +45,7 @@ class TestAppStateNamedTuple:
         assert state.auth is not None
         assert state.polaris_service is not None
         assert state.polaris_credential_service is not None
-        assert state.credential_service is not None
+        assert state.s3_credential_service is not None
         assert state.tenant_manager is not None
 
     def test_app_state_with_polaris(self):
@@ -61,7 +61,7 @@ class TestAppStateNamedTuple:
             polaris_user_manager=MagicMock(),
             polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
-            credential_service=MagicMock(),
+            s3_credential_service=MagicMock(),
             tenant_manager=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
@@ -208,7 +208,7 @@ class TestBuildApp:
             state = app.state._minio_manager_state
             assert state.polaris_service is not None
             assert state.polaris_credential_service is not None
-            assert state.credential_service is not None
+            assert state.s3_credential_service is not None
             # Verify Polaris was called with correct args
             call_args = mock_polaris_cls.call_args[0]
             assert call_args[0] == "http://polaris:8181"
@@ -300,7 +300,7 @@ class TestDestroyAppState:
             polaris_user_manager=MagicMock(),
             polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
-            credential_service=MagicMock(),
+            s3_credential_service=MagicMock(),
             tenant_manager=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
@@ -346,7 +346,7 @@ class TestDestroyAppState:
             polaris_user_manager=MagicMock(),
             polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
-            credential_service=MagicMock(),
+            s3_credential_service=MagicMock(),
             tenant_manager=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",

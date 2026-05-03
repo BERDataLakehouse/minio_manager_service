@@ -13,8 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from minio.managers.user_manager import GLOBAL_USER_GROUP, REFDATA_TENANT_RO_GROUP
-from polaris.constants import dedup_groups_preferring_write
+from polaris.orchestration import ensure_user_polaris_state
 from s3.models.user import UserModel
 from s3.utils.validators import validate_group_name
 from service.app_state import get_app_state
@@ -254,30 +253,25 @@ async def create_user(
       1. ``minio.user_manager.create_user`` — MinIO IAM user, policies,
          home directories, default group memberships (``globalusers``,
          optionally ``refdataro``).
-      2. ``polaris.user_manager.create_user`` — personal Iceberg catalog +
-         principal + ``catalog_admin`` role + ``{username}_role``.
-      3. ``polaris.group_manager.add_user_to_group`` for each MinIO default
-         group the user joined — keeps the Polaris principal-role bindings in
-         sync with the MinIO membership.
+      2. ``polaris.orchestration.ensure_user_polaris_state`` — provisions
+         personal Polaris assets and mirrors the user's actual MinIO group
+         memberships into Polaris role bindings (queried directly from
+         the group manager so default groups added by step 1, and any
+         future additions to that default set, are mirrored without code
+         changes here).
     """
     app_state = get_app_state(request)
 
     # 1. MinIO side.
     user_info = await app_state.user_manager.create_user(username=username)
 
-    # 2. Polaris personal assets.
-    await app_state.polaris_user_manager.create_user(username=username)
-
-    # 3. Mirror default-group memberships into Polaris. UserManager.create_user
-    # always adds to GLOBAL_USER_GROUP and best-effort adds to
-    # REFDATA_TENANT_RO_GROUP (skipped silently if absent), so we mirror
-    # whichever the user actually joined per `user_info.groups`.
-    user_groups = set(user_info.groups or ())
-    for group_name in (GLOBAL_USER_GROUP, REFDATA_TENANT_RO_GROUP):
-        if group_name in user_groups:
-            await app_state.polaris_group_manager.add_user_to_group(
-                username, group_name
-            )
+    # 2. Polaris personal assets + mirror MinIO group memberships.
+    await ensure_user_polaris_state(
+        username,
+        polaris_user_manager=app_state.polaris_user_manager,
+        polaris_group_manager=app_state.polaris_group_manager,
+        group_manager=app_state.group_manager,
+    )
 
     response = UserManagementResponse(
         username=user_info.username,
@@ -306,10 +300,15 @@ async def rotate_user_credentials(
     request: Request,
     authenticated_user=Depends(require_admin),
 ):
-    """Rotate credentials for a user."""
+    """Rotate MinIO credentials for a user.
+
+    This endpoint rotates the MinIO IAM credentials only. To also rotate
+    Polaris credentials, the user calls ``POST /credentials/rotate``
+    (which composes both backends).
+    """
     app_state = get_app_state(request)
 
-    access_key, secret_key = await app_state.credential_service.rotate(username)
+    access_key, secret_key = await app_state.s3_credential_service.rotate(username)
 
     user_info = await app_state.user_manager.get_user(username)
 
@@ -345,8 +344,8 @@ async def delete_user(
     """Delete a user account.
 
     Tear-down order:
-      1. Cached MinIO and Polaris credentials (so a later retry after a
-         partial failure doesn't trip on the missing user/principal).
+      1. Cached credentials for both backends (so a later retry after a
+         partial failure doesn't trip on the missing identity).
       2. Polaris user — drops principal role, principal, and personal catalog.
          Done before MinIO so the Polaris bindings can't reference a
          deleted MinIO IAM identity.
@@ -354,8 +353,8 @@ async def delete_user(
     """
     app_state = get_app_state(request)
 
-    # 1. Credentials cache cleanup.
-    await app_state.credential_service.delete_credentials(username)
+    # 1. Credentials cache cleanup (each backend has its own cache).
+    await app_state.s3_credential_service.delete_credentials(username)
     await app_state.polaris_credential_service.delete_credentials(username)
 
     # 2. Polaris assets (idempotent / 404-tolerant).
@@ -641,7 +640,7 @@ async def rotate_all_credentials(
 
     for username in all_usernames:
         try:
-            await app_state.credential_service.rotate(username)
+            await app_state.s3_credential_service.rotate(username)
             users_rotated += 1
         except Exception as e:
             logger.warning(f"Failed to rotate credentials for user {username}: {e}")
@@ -959,7 +958,6 @@ async def ensure_all_polaris_resources(
     exclusion lists honour the same convention as ``regenerate-policies``.
     """
     app_state = get_app_state(request)
-    polaris_user_manager = app_state.polaris_user_manager
     polaris_group_manager = app_state.polaris_group_manager
     errors: list[MigrationError] = []
     provisioned_users: list[str] = []
@@ -1010,21 +1008,17 @@ async def ensure_all_polaris_resources(
 
     for username in target_usernames:
         try:
-            await polaris_user_manager.create_user(username)
-
-            user_groups = await app_state.group_manager.get_user_groups(username)
-            # Same dedup the live provisioning path uses: when a user is in
-            # both the {group} and {group}ro variants, only bind the higher-
-            # privilege role once. Then drop excluded base groups so this
-            # endpoint's exclusion semantics are consistent across both phases.
-            for base_group, is_ro in dedup_groups_preferring_write(user_groups).items():
-                if base_group in exclude_groups:
-                    continue
-                # Reconstruct the canonical group name so PolarisGroupManager's
-                # internal normalisation maps to the right writer/reader role.
-                group_name = f"{base_group}ro" if is_ro else base_group
-                await polaris_group_manager.add_user_to_group(username, group_name)
-
+            # Same orchestration the live POST /management/users and
+            # /credentials/* paths run, so backfill produces the same
+            # end-state as live provisioning. exclude_groups is honored
+            # inside the helper for endpoint consistency.
+            await ensure_user_polaris_state(
+                username,
+                polaris_user_manager=app_state.polaris_user_manager,
+                polaris_group_manager=app_state.polaris_group_manager,
+                group_manager=app_state.group_manager,
+                exclude_groups=exclude_groups,
+            )
             provisioned_users.append(username)
         except Exception as e:
             logger.warning(f"Failed to provision Polaris for user {username}: {e}")

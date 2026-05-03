@@ -12,15 +12,15 @@ from typing import NamedTuple
 
 from fastapi import FastAPI, Request
 
-from credentials.service import CredentialService
-from credentials.store import CredentialStore
+from credentials.polaris_service import PolarisCredentialService
+from credentials.polaris_store import PolarisCredentialStore
+from credentials.s3_service import S3CredentialService
+from credentials.s3_store import S3CredentialStore
 from minio.managers.group_manager import GroupManager
 from minio.managers.policy_manager import PolicyManager
 from minio.managers.sharing_manager import SharingManager
 from minio.managers.tenant_manager import TenantManager
 from minio.managers.user_manager import UserManager
-from polaris.credential_service import PolarisCredentialService
-from polaris.credential_store import PolarisCredentialStore
 from polaris.managers.group_manager import PolarisGroupManager
 from polaris.managers.user_manager import PolarisUserManager
 from polaris.polaris_service import PolarisService
@@ -49,7 +49,7 @@ class AppState(NamedTuple):
     polaris_user_manager: PolarisUserManager
     polaris_group_manager: PolarisGroupManager
     polaris_credential_service: PolarisCredentialService
-    credential_service: CredentialService
+    s3_credential_service: S3CredentialService
     tenant_manager: TenantManager
     users_sql_warehouse_base: str
     tenant_sql_warehouse_base: str
@@ -94,7 +94,7 @@ async def build_app(app: FastAPI) -> None:
     logger.info("Database pool initialized")
 
     # Initialize stores backed by the shared pool
-    credential_store = CredentialStore(
+    s3_credential_store = S3CredentialStore(
         pool=db_pool.pool,
         encryption_key=not_falsy(
             os.getenv("MMS_DB_ENCRYPTION_KEY"), "MMS_DB_ENCRYPTION_KEY"
@@ -190,13 +190,15 @@ async def build_app(app: FastAPI) -> None:
     )
     logger.info("S3 managers initialized")
 
-    # Initialize credential service (coordinates lock + S3 + DB)
-    credential_service = CredentialService(
+    # Initialize the per-backend credential services. The route layer
+    # composes both with the Polaris-state ensure helper so /credentials/*
+    # returns a unified MinIO + Polaris bundle.
+    s3_credential_service = S3CredentialService(
         user_manager=user_manager,
-        credential_store=credential_store,
+        credential_store=s3_credential_store,
         lock_manager=lock_manager,
     )
-    logger.info("Credential service initialized")
+    logger.info("S3 credential service initialized")
 
     # Initialize profile client and tenant manager
     profile_client = KBaseUserProfileClient(auth_url, pool=db_pool.pool)
@@ -223,7 +225,7 @@ async def build_app(app: FastAPI) -> None:
         polaris_user_manager=polaris_user_manager,
         polaris_group_manager=polaris_group_manager,
         polaris_credential_service=polaris_credential_service,
-        credential_service=credential_service,
+        s3_credential_service=s3_credential_service,
         tenant_manager=tenant_manager,
         users_sql_warehouse_base=users_sql_warehouse_base,
         tenant_sql_warehouse_base=tenant_sql_warehouse_base,

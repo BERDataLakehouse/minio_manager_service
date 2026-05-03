@@ -3,7 +3,7 @@
 import logging
 from typing import Any, Protocol
 
-from polaris.credential_store import PolarisCredentialRecord, PolarisCredentialStore
+from credentials.polaris_store import PolarisCredentialRecord, PolarisCredentialStore
 from s3.core.distributed_lock import DistributedLockManager
 from service.exceptions import PolarisOperationError
 

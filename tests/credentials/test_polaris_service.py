@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from polaris.credential_service import PolarisCredentialService
-from polaris.credential_store import PolarisCredentialRecord
+from credentials.polaris_service import PolarisCredentialService
+from credentials.polaris_store import PolarisCredentialRecord
 from service.exceptions import PolarisOperationError
 
 

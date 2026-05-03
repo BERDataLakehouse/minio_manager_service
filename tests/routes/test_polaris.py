@@ -8,7 +8,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from routes.polaris import router
-from polaris.credential_store import PolarisCredentialRecord
+from credentials.polaris_store import PolarisCredentialRecord
+from polaris.managers.group_manager import PolarisGroupManager
+from polaris.managers.user_manager import PolarisUserManager
 from service import app_state
 from service.dependencies import auth
 from service.exception_handlers import universal_error_handler
@@ -44,7 +46,13 @@ def mock_polaris_service():
 
 @pytest.fixture
 def mock_app_state_obj(mock_polaris_service):
-    """Create a mock application state with Polaris service."""
+    """Create a mock application state with Polaris service.
+
+    The PolarisUserManager / PolarisGroupManager are *real* instances wired
+    to the mocked PolarisService so the existing assertions on
+    ``mock_polaris_service.*`` calls still verify the full route → helper →
+    manager → service chain.
+    """
     state = MagicMock()
 
     # Pre-built warehouse base URLs (mirrors AppState.build_app()).
@@ -55,8 +63,16 @@ def mock_app_state_obj(mock_polaris_service):
     state.group_manager = AsyncMock()
     state.group_manager.get_user_groups = AsyncMock(return_value=[])
 
-    # Polaris service
+    # Polaris service + real managers pointing at it.
     state.polaris_service = mock_polaris_service
+    state.polaris_user_manager = PolarisUserManager(
+        polaris_service=mock_polaris_service,
+        users_sql_warehouse_base=state.users_sql_warehouse_base,
+    )
+    state.polaris_group_manager = PolarisGroupManager(
+        polaris_service=mock_polaris_service,
+        tenant_sql_warehouse_base=state.tenant_sql_warehouse_base,
+    )
     state.polaris_credential_service = AsyncMock()
     state.polaris_credential_service.get_or_create = AsyncMock(
         return_value=PolarisCredentialRecord(

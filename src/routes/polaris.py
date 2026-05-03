@@ -11,15 +11,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from polaris.constants import (
-    ICEBERG_STORAGE_SUBDIRECTORY,
-    PERSONAL_CATALOG_ADMIN_ROLE,
     dedup_groups_preferring_write,
     personal_catalog_name,
-    personal_principal_role,
     tenant_catalog_name,
-    tenant_reader_principal_role,
-    tenant_writer_principal_role,
 )
+from polaris.orchestration import ensure_user_polaris_state
 from service import app_state
 from service.dependencies import auth, require_admin
 from service.kb_auth import AdminPermission, KBaseUser
@@ -91,96 +87,6 @@ def _authorize_polaris_provision(username: str, authenticated_user: KBaseUser) -
         )
 
 
-async def _ensure_polaris_user_resources(
-    username: str,
-    app_state_obj: app_state.AppState,
-) -> tuple[str, list[str]]:
-    """Ensure Polaris catalog/principal/roles exist and return tenant catalogs.
-
-    All operations are idempotent: ``create_*`` methods on
-    :class:`PolarisService` swallow 409 (already exists), and
-    ``grant_*`` calls perform a check-first to avoid duplicate-binding errors.
-
-    Returns:
-        ``(personal_catalog_name, tenant_catalog_names)`` — the tenant list is
-        deduplicated and order-preserving.
-    """
-    polaris = app_state_obj.polaris_service
-
-    # Personal catalog uses SQL warehouse path with /iceberg/ subdirectory.
-    # Iceberg uses Polaris for catalog-level isolation instead of governance prefixes.
-    # The /iceberg/ path has its own IAM statement separate from the u_{username}__*
-    # governed path, added by policy_creator._create_default_user_home_policy().
-    catalog_name = personal_catalog_name(username)
-    storage_location = (
-        f"{app_state_obj.users_sql_warehouse_base}/{username}/"
-        f"{ICEBERG_STORAGE_SUBDIRECTORY}/"
-    )
-
-    # 1. Create personal catalog
-    await polaris.create_catalog(name=catalog_name, storage_location=storage_location)
-
-    # 2. Create principal
-    await polaris.create_principal(name=username)
-
-    # 3. Create catalog_admin role in the personal catalog
-    await polaris.create_catalog_role(
-        catalog=catalog_name, role_name=PERSONAL_CATALOG_ADMIN_ROLE
-    )
-
-    # 4. Grant CATALOG_MANAGE_CONTENT on the catalog to the catalog role
-    await polaris.grant_catalog_privilege(
-        catalog=catalog_name,
-        role_name=PERSONAL_CATALOG_ADMIN_ROLE,
-        privilege="CATALOG_MANAGE_CONTENT",
-    )
-
-    # 5. Create a principal role for the user
-    user_principal_role = personal_principal_role(username)
-    await polaris.create_principal_role(role_name=user_principal_role)
-
-    # 6. Assign the catalog role to the principal role
-    await polaris.grant_catalog_role_to_principal_role(
-        catalog=catalog_name,
-        catalog_role=PERSONAL_CATALOG_ADMIN_ROLE,
-        principal_role=user_principal_role,
-    )
-
-    # 7. Assign the principal role to the principal
-    await polaris.grant_principal_role_to_principal(
-        principal=username, principal_role=user_principal_role
-    )
-
-    # 8. Discover group memberships and grant tenant access. Must run AFTER the
-    # principal is created above because grant_principal_role_to_principal
-    # requires the principal to exist.
-    user_groups = await app_state_obj.group_manager.get_user_groups(username)
-    deduped = dedup_groups_preferring_write(user_groups)
-
-    tenant_catalogs: list[str] = []
-    for base_group, is_ro in deduped.items():
-        tenant_catalog = tenant_catalog_name(base_group)
-        tenant_catalogs.append(tenant_catalog)
-
-        # Ensure the tenant catalog and roles exist (idempotent). This handles
-        # groups that were created before Polaris was integrated.
-        tenant_storage_location = (
-            f"{app_state_obj.tenant_sql_warehouse_base}/{base_group}/"
-            f"{ICEBERG_STORAGE_SUBDIRECTORY}/"
-        )
-        await polaris.ensure_tenant_catalog(base_group, tenant_storage_location)
-
-        # Grant the appropriate principal role for this group
-        tenant_principal_role = (
-            tenant_reader_principal_role(base_group)
-            if is_ro
-            else tenant_writer_principal_role(base_group)
-        )
-        await polaris.grant_principal_role_to_principal(username, tenant_principal_role)
-
-    return catalog_name, tenant_catalogs
-
-
 # ===== PROVISIONING ROUTES =====
 
 
@@ -213,8 +119,11 @@ async def provision_polaris_user(
     """
     _authorize_polaris_provision(username, authenticated_user)
 
-    catalog_name, tenant_catalogs = await _ensure_polaris_user_resources(
-        username, app_state_obj
+    catalog_name, tenant_catalogs = await ensure_user_polaris_state(
+        username,
+        polaris_user_manager=app_state_obj.polaris_user_manager,
+        polaris_group_manager=app_state_obj.polaris_group_manager,
+        group_manager=app_state_obj.group_manager,
     )
     creds = await app_state_obj.polaris_credential_service.get_or_create(
         username=username,
@@ -246,8 +155,11 @@ async def rotate_polaris_credentials(
     """
     _authorize_polaris_provision(username, authenticated_user)
 
-    catalog_name, tenant_catalogs = await _ensure_polaris_user_resources(
-        username, app_state_obj
+    catalog_name, tenant_catalogs = await ensure_user_polaris_state(
+        username,
+        polaris_user_manager=app_state_obj.polaris_user_manager,
+        polaris_group_manager=app_state_obj.polaris_group_manager,
+        group_manager=app_state_obj.group_manager,
     )
     creds = await app_state_obj.polaris_credential_service.rotate(
         username=username,
