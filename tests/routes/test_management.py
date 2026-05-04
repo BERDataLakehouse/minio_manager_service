@@ -16,11 +16,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from s3.models.policy import PolicyDocument, PolicyModel, PolicyTarget
 
+from credentials.polaris_store import PolarisCredentialRecord
 from s3.models.user import UserModel
 from routes.management import (
+    EnsurePolarisResponse,
     GroupManagementResponse,
     GroupNamesResponse,
+    MigrationError,
+    RegeneratePoliciesResponse,
     ResourceDeleteResponse,
     RotateAllCredentialsResponse,
     UserListResponse,
@@ -104,6 +109,53 @@ def mock_app_state():
     app_state.s3_credential_service.rotate = AsyncMock(
         return_value=("user1", "new-secret-key")
     )
+    app_state.polaris_credential_service = AsyncMock()
+    app_state.polaris_credential_service.delete_credentials = AsyncMock()
+    # create_user / rotate-credentials populate the response with the
+    # Polaris half too, so the credential service must return a valid
+    # record on get_or_create AND rotate.
+    _polaris_record = PolarisCredentialRecord(
+        client_id="polaris-cid",
+        client_secret="polaris-secret",
+        personal_catalog="user_user1",
+    )
+    app_state.polaris_credential_service.get_or_create = AsyncMock(
+        return_value=_polaris_record
+    )
+    app_state.polaris_credential_service.rotate = AsyncMock(
+        return_value=_polaris_record
+    )
+
+    # Mock policy manager
+    app_state.policy_manager = AsyncMock()
+    mock_policy = PolicyModel(
+        policy_name="user-home-user1",
+        policy_document=PolicyDocument(
+            version="2012-10-17",
+            statement=[],
+        ),
+    )
+    app_state.policy_manager.list_all_policies = AsyncMock(return_value=[mock_policy])
+    app_state.policy_manager.resource_exists = AsyncMock(return_value=True)
+    app_state.policy_manager._get_policy_attached_entities = AsyncMock(
+        return_value={PolicyTarget.USER: [], PolicyTarget.GROUP: []}
+    )
+    app_state.policy_manager.detach_policy_from_user = AsyncMock()
+    app_state.policy_manager.detach_policy_from_group = AsyncMock()
+    app_state.policy_manager.delete_resource = AsyncMock(return_value=True)
+
+    # Mock Polaris stack — managers are the orchestration layer the routes
+    # call directly. The raw PolarisService is teardown-only and not on
+    # AppState, so it is not mocked here.
+    app_state.polaris_user_manager = AsyncMock()
+    app_state.polaris_user_manager.create_user = AsyncMock()
+    app_state.polaris_user_manager.delete_user = AsyncMock()
+    app_state.polaris_group_manager = AsyncMock()
+    app_state.polaris_group_manager.ensure_catalog = AsyncMock()
+    app_state.polaris_group_manager.create_group = AsyncMock()
+    app_state.polaris_group_manager.delete_group = AsyncMock()
+    app_state.polaris_group_manager.add_user_to_group = AsyncMock()
+    app_state.polaris_group_manager.remove_user_from_group = AsyncMock()
 
     # Mock tenant manager
     app_state.tenant_manager = AsyncMock()
@@ -176,8 +228,10 @@ class TestUserManagementResponse:
         """Test creating a valid UserManagementResponse."""
         response = UserManagementResponse(
             username="testuser",
-            access_key="testuser",
-            secret_key="secret-key",
+            s3_access_key="testuser",
+            s3_secret_key="secret-key",
+            polaris_client_id="polaris-cid",
+            polaris_client_secret="polaris-secret",
             home_paths=["s3a://bucket/users/testuser/"],
             groups=[],
             total_policies=2,
@@ -187,6 +241,10 @@ class TestUserManagementResponse:
         )
         assert response.username == "testuser"
         assert response.operation == "create"
+        assert response.s3_access_key == "testuser"
+        assert response.s3_secret_key == "secret-key"
+        assert response.polaris_client_id == "polaris-cid"
+        assert response.polaris_client_secret == "polaris-secret"
 
 
 class TestGroupManagementResponse:
@@ -277,26 +335,43 @@ class TestCreateUserEndpoint:
         assert data["operation"] == "create"
 
     def test_create_user_includes_secret_key(self, client, mock_app_state):
-        """Test that create returns secret key."""
+        """Test that create returns the full S3 + Polaris credential bundle."""
         response = client.post("/management/users/newuser")
 
         assert response.status_code == 201
         data = response.json()
-        assert "secret_key" in data
-        assert data["secret_key"] == "secret-key-123"
+        # S3 IAM half
+        assert data["s3_secret_key"] == "secret-key-123"
+        assert data["s3_access_key"] == "newuser"
+        # Polaris OAuth half — fixture returns a fixed record
+        assert data["polaris_client_id"] == "polaris-cid"
+        assert data["polaris_client_secret"] == "polaris-secret"
 
 
 class TestRotateUserCredentialsEndpoint:
     """Tests for rotate_user_credentials endpoint."""
 
     def test_rotate_credentials_success(self, client, mock_app_state):
-        """Test rotating credentials successfully."""
+        """Test rotating credentials returns the rotated S3 + Polaris bundle."""
         response = client.post("/management/users/user1/rotate-credentials")
 
         assert response.status_code == 200
         data = response.json()
         assert data["operation"] == "rotate"
-        assert data["secret_key"] == "new-secret-key"
+        # S3 IAM half (fixture returns ('user1', 'new-secret-key') on rotate)
+        assert data["s3_secret_key"] == "new-secret-key"
+        # Polaris half (fixture returns the shared PolarisCredentialRecord)
+        assert data["polaris_client_id"] == "polaris-cid"
+        assert data["polaris_client_secret"] == "polaris-secret"
+
+    def test_rotate_credentials_rotates_both_backends(self, client, mock_app_state):
+        """Both S3 and Polaris rotate calls fire — admin rotation must be full-bundle."""
+        client.post("/management/users/user1/rotate-credentials")
+
+        mock_app_state.s3_credential_service.rotate.assert_called_once_with("user1")
+        mock_app_state.polaris_credential_service.rotate.assert_called_once_with(
+            "user1"
+        )
 
 
 class TestDeleteUserEndpoint:
@@ -312,11 +387,14 @@ class TestDeleteUserEndpoint:
         assert data["resource_name"] == "user1"
 
     def test_delete_user_cleans_up_credential_db(self, client, mock_app_state):
-        """Test deleting a user also deletes their credential DB record."""
+        """Test deleting a user also deletes their credential DB records."""
         response = client.delete("/management/users/user1")
 
         assert response.status_code == 200
         mock_app_state.s3_credential_service.delete_credentials.assert_called_once_with(
+            "user1"
+        )
+        mock_app_state.polaris_credential_service.delete_credentials.assert_called_once_with(
             "user1"
         )
 
@@ -340,6 +418,19 @@ class TestDeleteUserEndpoint:
 
         assert response.status_code == 500
         # MinIO user should NOT be deleted if credential cleanup failed first
+        mock_app_state.user_manager.delete_resource.assert_not_called()
+
+    def test_delete_user_polaris_credential_cleanup_failure_propagates(
+        self, client, mock_app_state
+    ):
+        """Test Polaris credential cleanup failure propagates as a server error."""
+        mock_app_state.polaris_credential_service.delete_credentials.side_effect = (
+            Exception("DB error")
+        )
+
+        response = client.delete("/management/users/user1")
+
+        assert response.status_code == 500
         mock_app_state.user_manager.delete_resource.assert_not_called()
 
 
@@ -472,6 +563,70 @@ class TestListGroupNamesEndpoint:
             response = await list_group_names(mock_request, mock_user)
 
             assert response.group_names == ["g1", "g2"]
+            assert response.total_count == 2
+
+
+class TestListUserNamesEndpoint:
+    """Tests for list_user_names endpoint (admin-only, lightweight)."""
+
+    def test_list_user_names_success(self, client, mock_app_state):
+        """Test listing usernames successfully."""
+        mock_app_state.user_manager.list_resources.return_value = [
+            "user1",
+            "user2",
+            "user3",
+        ]
+
+        response = client.get("/management/users/names")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["usernames"] == ["user1", "user2", "user3"]
+        assert data["total_count"] == 3
+
+    def test_list_user_names_empty(self, client, mock_app_state):
+        """Test listing usernames when none exist."""
+        mock_app_state.user_manager.list_resources.return_value = []
+
+        response = client.get("/management/users/names")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 0
+        assert data["usernames"] == []
+
+    def test_list_user_names_response_model_validation(self, client, mock_app_state):
+        """Test that response matches UserNamesResponse model."""
+        mock_app_state.user_manager.list_resources.return_value = ["testuser"]
+
+        response = client.get("/management/users/names")
+
+        assert response.status_code == 200
+        parsed = UserNamesResponse(**response.json())
+        assert parsed.usernames == ["testuser"]
+        assert parsed.total_count == 1
+
+    def test_list_user_names_does_not_call_get_user(self, client, mock_app_state):
+        """Test that the lightweight endpoint does NOT call get_user for each user."""
+        mock_app_state.user_manager.list_resources.return_value = ["u1", "u2"]
+
+        response = client.get("/management/users/names")
+
+        assert response.status_code == 200
+        mock_app_state.user_manager.get_user.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_list_user_names_async(self, mock_app_state):
+        """Test list_user_names function directly."""
+        mock_request = MagicMock()
+        mock_user = KBaseUser(user="admin", admin_perm=AdminPermission.FULL)
+
+        mock_app_state.user_manager.list_resources.return_value = ["a", "b"]
+
+        with patch("routes.management.get_app_state", return_value=mock_app_state):
+            response = await list_user_names(mock_request, mock_user)
+
+            assert response.usernames == ["a", "b"]
             assert response.total_count == 2
 
 
@@ -680,68 +835,150 @@ class TestManagementIntegration:
         assert data["performed_by"] == "admin"
 
 
-class TestListUserNamesEndpoint:
-    """Tests for list_user_names endpoint (admin-only, lightweight)."""
+# === POLARIS INTEGRATION TESTS ===
 
-    def test_list_user_names_success(self, client, mock_app_state):
-        """Test listing usernames successfully."""
-        mock_app_state.user_manager.list_resources.return_value = [
-            "user1",
-            "user2",
-            "user3",
-        ]
 
-        response = client.get("/management/users/names")
+class TestPolarisOrchestration:
+    """Tests asserting management routes delegate to the Polaris managers.
+
+    The actual Polaris orchestration (catalog ensure, principal create,
+    role bind/revoke) lives in PolarisUserManager and PolarisGroupManager
+    and is unit-tested in tests/polaris/managers/. These tests only verify
+    that route handlers call the right manager methods at the right time.
+    """
+
+    def test_create_user_delegates_to_polaris_user_manager(
+        self, client, mock_app_state
+    ):
+        """Test create_user runs MinIO create then mirrors into Polaris.
+
+        The Polaris mirror queries the user's *actual* MinIO group memberships
+        via group_manager.get_user_groups (not user_info.groups, which
+        UserManager.create_user hardcodes to []), so default groups joined
+        by create_user are picked up correctly.
+        """
+        # Have the MinIO group manager report the groups the user just joined.
+        mock_app_state.group_manager.get_user_groups = AsyncMock(
+            return_value=["globalusers", "refdataro"]
+        )
+
+        response = client.post("/management/users/newuser")
+
+        assert response.status_code == 201
+        mock_app_state.polaris_user_manager.create_user.assert_called_once_with(
+            "newuser"
+        )
+        # Both default groups mirrored.
+        mock_app_state.polaris_group_manager.add_user_to_group.assert_any_call(
+            "newuser", "globalusers"
+        )
+        mock_app_state.polaris_group_manager.add_user_to_group.assert_any_call(
+            "newuser", "refdataro"
+        )
+
+    def test_create_user_skips_polaris_mirror_for_groups_not_joined(
+        self, client, mock_app_state
+    ):
+        """If MinIO didn't add the user to refdataro (group missing), skip Polaris mirror."""
+        mock_app_state.group_manager.get_user_groups = AsyncMock(
+            return_value=["globalusers"]  # only globalusers, no refdataro
+        )
+
+        response = client.post("/management/users/newuser")
+
+        assert response.status_code == 201
+        mock_app_state.polaris_group_manager.add_user_to_group.assert_called_once_with(
+            "newuser", "globalusers"
+        )
+
+    def test_delete_user_polaris_first_then_minio(self, client, mock_app_state):
+        """Test delete_user tears down Polaris before MinIO."""
+        response = client.delete("/management/users/user1")
 
         assert response.status_code == 200
-        data = response.json()
-        assert data["usernames"] == ["user1", "user2", "user3"]
-        assert data["total_count"] == 3
+        mock_app_state.polaris_user_manager.delete_user.assert_called_once_with("user1")
+        mock_app_state.user_manager.delete_resource.assert_called_once_with("user1")
 
-    def test_list_user_names_empty(self, client, mock_app_state):
-        """Test listing usernames when none exist."""
-        mock_app_state.user_manager.list_resources.return_value = []
+    def test_create_group_delegates_to_polaris_group_manager(
+        self, client, mock_app_state
+    ):
+        """Test create_group runs MinIO create then PolarisGroupManager.create_group."""
+        response = client.post("/management/groups/newgroup")
 
-        response = client.get("/management/users/names")
+        assert response.status_code == 201
+        mock_app_state.polaris_group_manager.create_group.assert_called_once_with(
+            group_name="newgroup", creator="admin"
+        )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total_count"] == 0
-        assert data["usernames"] == []
-
-    def test_list_user_names_response_model_validation(self, client, mock_app_state):
-        """Test that response matches UserNamesResponse model."""
-        mock_app_state.user_manager.list_resources.return_value = ["testuser"]
-
-        response = client.get("/management/users/names")
-
-        assert response.status_code == 200
-        parsed = UserNamesResponse(**response.json())
-        assert parsed.usernames == ["testuser"]
-        assert parsed.total_count == 1
-
-    def test_list_user_names_does_not_call_get_user(self, client, mock_app_state):
-        """Test that the lightweight endpoint does NOT call get_user for each user."""
-        mock_app_state.user_manager.list_resources.return_value = ["u1", "u2"]
-
-        response = client.get("/management/users/names")
+    def test_add_member_delegates_to_polaris_group_manager(
+        self, client, mock_app_state
+    ):
+        """Test add_group_member mirrors the MinIO add into Polaris."""
+        response = client.post("/management/groups/group1/members/user2")
 
         assert response.status_code == 200
-        mock_app_state.user_manager.get_user.assert_not_called()
+        mock_app_state.polaris_group_manager.add_user_to_group.assert_called_once_with(
+            "user2", "group1"
+        )
 
-    @pytest.mark.asyncio
-    async def test_list_user_names_async(self, mock_app_state):
-        """Test list_user_names function directly."""
-        mock_request = MagicMock()
-        mock_user = KBaseUser(user="admin", admin_perm=AdminPermission.FULL)
+    def test_add_ro_member_passes_ro_group_name_to_polaris(
+        self, client, mock_app_state
+    ):
+        """The ``{group}ro`` suffix is preserved; PolarisGroupManager normalises it."""
+        response = client.post("/management/groups/group1ro/members/user2")
 
-        mock_app_state.user_manager.list_resources.return_value = ["a", "b"]
+        assert response.status_code == 200
+        mock_app_state.polaris_group_manager.add_user_to_group.assert_called_once_with(
+            "user2", "group1ro"
+        )
 
-        with patch("routes.management.get_app_state", return_value=mock_app_state):
-            response = await list_user_names(mock_request, mock_user)
+    def test_remove_member_delegates_to_polaris_group_manager(
+        self, client, mock_app_state
+    ):
+        """Test remove_group_member mirrors the MinIO remove into Polaris."""
+        response = client.delete("/management/groups/group1/members/user1")
 
-            assert response.usernames == ["a", "b"]
-            assert response.total_count == 2
+        assert response.status_code == 200
+        mock_app_state.polaris_group_manager.remove_user_from_group.assert_called_once_with(
+            "user1", "group1"
+        )
+
+    def test_delete_group_polaris_first_then_minio(self, client, mock_app_state):
+        """Test delete_group tears down Polaris before MinIO."""
+        response = client.delete("/management/groups/group1")
+
+        assert response.status_code == 200
+        mock_app_state.polaris_group_manager.delete_group.assert_called_once_with(
+            "group1"
+        )
+        mock_app_state.group_manager.delete_resource.assert_called_once_with("group1")
+
+    def test_polaris_error_propagates_on_create_group(self, client, mock_app_state):
+        """Test PolarisGroupManager errors propagate and cause group creation to fail."""
+        mock_app_state.polaris_group_manager.create_group.side_effect = Exception(
+            "Polaris unavailable"
+        )
+        response = client.post("/management/groups/newgroup")
+        assert response.status_code == 500
+
+    def test_polaris_error_propagates_on_add_member(self, client, mock_app_state):
+        """Test PolarisGroupManager errors propagate and cause add member to fail."""
+        mock_app_state.polaris_group_manager.add_user_to_group.side_effect = Exception(
+            "Polaris unavailable"
+        )
+        response = client.post("/management/groups/group1/members/user2")
+        assert response.status_code == 500
+
+    def test_polaris_error_propagates_on_remove_member(self, client, mock_app_state):
+        """Test PolarisGroupManager errors propagate and cause remove member to fail."""
+        mock_app_state.polaris_group_manager.remove_user_from_group.side_effect = (
+            Exception("Polaris unavailable")
+        )
+        response = client.delete("/management/groups/group1/members/user1")
+        assert response.status_code == 500
+
+
+# === MIGRATION ENDPOINT TESTS ===
 
 
 class TestRegeneratePoliciesEndpoint:
@@ -881,7 +1118,431 @@ class TestRegeneratePoliciesEndpoint:
         data = response.json()
         assert data["users_updated"] == 0
         assert data["groups_updated"] == 0
+        assert data["users_skipped"] == []
+        assert data["groups_skipped"] == []
         assert data["errors"] == []
+
+    def test_regenerate_policies_empty_body_behaves_like_no_body(
+        self, migration_client, migration_app_state
+    ):
+        """Posting an empty JSON object should behave the same as no body."""
+        response = migration_client.post(
+            "/management/migrate/regenerate-policies", json={}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_updated"] == 2
+        assert data["groups_updated"] == 4
+        assert data["users_skipped"] == []
+        assert data["groups_skipped"] == []
+        assert data["errors"] == []
+
+    def test_regenerate_policies_excludes_users(
+        self, migration_client, migration_app_state
+    ):
+        """exclude_users skips matching users and reports them in users_skipped."""
+        response = migration_client.post(
+            "/management/migrate/regenerate-policies",
+            json={"exclude_users": ["alice"]},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_updated"] == 1
+        assert data["users_skipped"] == ["alice"]
+
+        calls = migration_app_state.policy_manager.regenerate_user_home_policy.call_args_list
+        assert len(calls) == 1
+        assert calls[0].args == ("bob",)
+
+    def test_regenerate_policies_excludes_unknown_users_silently(
+        self, migration_client, migration_app_state
+    ):
+        """Unknown excluded usernames are silently ignored and not echoed back."""
+        response = migration_client.post(
+            "/management/migrate/regenerate-policies",
+            json={"exclude_users": ["ghost", "nobody"]},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_updated"] == 2
+        assert data["users_skipped"] == []
+
+    def test_regenerate_policies_excludes_groups_skips_rw_and_ro(
+        self, migration_client, migration_app_state
+    ):
+        """Excluding a base group skips both its RW and RO policies."""
+        response = migration_client.post(
+            "/management/migrate/regenerate-policies",
+            json={"exclude_groups": ["team1"]},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["groups_updated"] == 2
+        assert data["groups_skipped"] == ["team1"]
+
+        calls = migration_app_state.policy_manager.regenerate_group_home_policy.call_args_list
+        assert len(calls) == 2
+        assert calls[0].kwargs == {"group_name": "team2", "read_only": False}
+        assert calls[1].kwargs == {
+            "group_name": "team2ro",
+            "read_only": True,
+            "path_target": "team2",
+        }
+
+    def test_regenerate_policies_excludes_users_and_groups_combined(
+        self, migration_client, migration_app_state
+    ):
+        """exclude_users and exclude_groups can be combined in one request."""
+        response = migration_client.post(
+            "/management/migrate/regenerate-policies",
+            json={
+                "exclude_users": ["alice", "ghost"],
+                "exclude_groups": ["team2", "missing-group"],
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_updated"] == 1
+        assert data["groups_updated"] == 2
+        assert data["users_skipped"] == ["alice"]
+        assert data["groups_skipped"] == ["team2"]
+
+
+class TestEnsurePolarisResourcesEndpoint:
+    """Tests for ensure_all_polaris_resources migration endpoint.
+
+    The endpoint delegates to PolarisGroupManager.ensure_catalog,
+    PolarisUserManager.create_user, and PolarisGroupManager.add_user_to_group.
+    Those methods' internals are unit-tested in tests/polaris/managers/.
+    """
+
+    @pytest.fixture
+    def polaris_migration_state(self, mock_app_state):
+        """App state with two users in one base group + RO sibling."""
+        mock_app_state.user_manager.list_resources = AsyncMock(
+            return_value=["alice", "bob"]
+        )
+        mock_app_state.group_manager.list_resources = AsyncMock(
+            return_value=["team1", "team1ro"]
+        )
+        mock_app_state.group_manager.get_user_groups = AsyncMock(return_value=["team1"])
+        return mock_app_state
+
+    @pytest.fixture
+    def polaris_migration_client(self, test_app, polaris_migration_state):
+        with patch(
+            "routes.management.get_app_state",
+            return_value=polaris_migration_state,
+        ):
+            yield TestClient(test_app, raise_server_exceptions=False)
+
+    def test_ensure_polaris_success(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Test successful Polaris resource provisioning."""
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources"
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_provisioned"] == 2
+        assert data["groups_provisioned"] == 1  # only base group team1
+        # Per-resource lists let operators verify exactly which resources
+        # completed (counts alone don't say which).
+        assert data["provisioned_users"] == ["alice", "bob"]
+        assert data["provisioned_groups"] == ["team1"]
+        assert data["errors"] == []
+
+    def test_ensure_polaris_calls_ensure_catalog_for_base_groups_only(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """RO siblings are skipped; only base groups get ensure_catalog."""
+        polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
+
+        polaris_group_manager = polaris_migration_state.polaris_group_manager
+        polaris_group_manager.ensure_catalog.assert_called_once_with("team1")
+
+    def test_ensure_polaris_creates_user_via_polaris_user_manager(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Each user gets PolarisUserManager.create_user called once."""
+        polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
+
+        polaris_user_manager = polaris_migration_state.polaris_user_manager
+        create_calls = polaris_user_manager.create_user.call_args_list
+        assert [c.args[0] for c in create_calls] == ["alice", "bob"]
+
+    def test_ensure_polaris_mirrors_existing_group_memberships(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Each user's existing MinIO group memberships get mirrored into Polaris."""
+        polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
+
+        polaris_group_manager = polaris_migration_state.polaris_group_manager
+        # Both users are in team1, so each gets one add_user_to_group call.
+        polaris_group_manager.add_user_to_group.assert_any_call("alice", "team1")
+        polaris_group_manager.add_user_to_group.assert_any_call("bob", "team1")
+        assert polaris_group_manager.add_user_to_group.call_count == 2
+
+    def test_ensure_polaris_user_error_continues_to_remaining_users(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """A failure on one user is recorded and the next user is still processed."""
+        polaris_migration_state.polaris_user_manager.create_user.side_effect = [
+            Exception("Polaris down for alice"),
+            None,  # bob succeeds
+        ]
+
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources"
+        )
+
+        data = response.json()
+        assert data["users_provisioned"] == 1
+        assert any(e["resource_name"] == "alice" for e in data["errors"])
+
+    def test_ensure_polaris_group_error_continues_to_remaining_groups(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """A failure on one group is recorded and the next group is still processed."""
+        polaris_migration_state.group_manager.list_resources.return_value = [
+            "team1",
+            "team1ro",
+            "team2",
+            "team2ro",
+        ]
+        polaris_migration_state.polaris_group_manager.ensure_catalog.side_effect = [
+            Exception("team1 failed"),
+            None,  # team2 succeeds
+        ]
+
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources"
+        )
+
+        data = response.json()
+        assert data["groups_provisioned"] == 1
+        # The successful group surfaces in provisioned_groups; the failed one
+        # surfaces in errors. Operators can diff these to see exactly which
+        # backfilled.
+        assert data["provisioned_groups"] == ["team2"]
+        assert any(
+            e["resource_type"] == "group" and e["resource_name"] == "team1"
+            for e in data["errors"]
+        )
+
+    def test_ensure_polaris_empty_system(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """No users or groups → all-zero response with no errors."""
+        polaris_migration_state.user_manager.list_resources.return_value = []
+        polaris_migration_state.group_manager.list_resources.return_value = []
+
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources"
+        )
+
+        data = response.json()
+        assert data["users_provisioned"] == 0
+        assert data["groups_provisioned"] == 0
+        assert data["errors"] == []
+
+    # ── exclusion semantics (mirror regenerate-policies) ──────────────────
+
+    def test_ensure_polaris_empty_body_behaves_like_no_body(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Posting an empty JSON body works the same as posting no body at all."""
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources",
+            json={"exclude_users": [], "exclude_groups": []},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_provisioned"] == 2
+        assert data["groups_provisioned"] == 1
+        assert data["users_skipped"] == []
+        assert data["groups_skipped"] == []
+
+    def test_ensure_polaris_excludes_users(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """exclude_users skips matching users entirely (no Polaris user calls)."""
+        polaris_user_manager = polaris_migration_state.polaris_user_manager
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources",
+            json={"exclude_users": ["alice"]},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_provisioned"] == 1  # only bob
+        assert data["users_skipped"] == ["alice"]
+        # alice was never sent to PolarisUserManager.create_user
+        create_calls = polaris_user_manager.create_user.call_args_list
+        assert [c.args[0] for c in create_calls] == ["bob"]
+
+    def test_ensure_polaris_excludes_unknown_users_silently(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Excluding a non-existent user is silent — only present users surface in users_skipped."""
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources",
+            json={"exclude_users": ["nobody", "alice"]},
+        )
+
+        data = response.json()
+        # "nobody" doesn't exist; only "alice" is reported as actually skipped.
+        assert data["users_skipped"] == ["alice"]
+        assert data["users_provisioned"] == 1
+
+    def test_ensure_polaris_excludes_groups_skips_catalog_and_role_bindings(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """exclude_groups skips both ensure_catalog AND per-user role bindings on that base."""
+        polaris_group_manager = polaris_migration_state.polaris_group_manager
+        # Add a second base group so we can verify only team1 is skipped.
+        polaris_migration_state.group_manager.list_resources.return_value = [
+            "team1",
+            "team1ro",
+            "team2",
+            "team2ro",
+        ]
+        # Both users belong to team1 (the excluded one) AND team2.
+        polaris_migration_state.group_manager.get_user_groups.return_value = [
+            "team1",
+            "team2",
+        ]
+
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources",
+            json={"exclude_groups": ["team1"]},
+        )
+
+        data = response.json()
+        assert data["groups_skipped"] == ["team1"]
+        assert data["groups_provisioned"] == 1  # only team2
+
+        # ensure_catalog called only for team2.
+        ensure_calls = polaris_group_manager.ensure_catalog.call_args_list
+        assert [c.args[0] for c in ensure_calls] == ["team2"]
+
+        # No add_user_to_group call targeted team1 (or team1ro by extension —
+        # iteration only sees team1 here per the mock, but the base-group
+        # filter would catch team1ro too in real data).
+        add_calls = polaris_group_manager.add_user_to_group.call_args_list
+        assert all(c.args[1] != "team1" for c in add_calls)
+        # Each user still got the team2 binding mirrored.
+        assert any(c.args == ("alice", "team2") for c in add_calls)
+        assert any(c.args == ("bob", "team2") for c in add_calls)
+
+    def test_ensure_polaris_excludes_groups_skips_ro_sibling_bindings(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """A user who's only in team1ro doesn't get the reader binding when team1 is excluded."""
+        polaris_group_manager = polaris_migration_state.polaris_group_manager
+        polaris_migration_state.group_manager.get_user_groups.return_value = ["team1ro"]
+
+        polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources",
+            json={"exclude_groups": ["team1"]},
+        )
+
+        # No add_user_to_group calls at all — team1ro normalises to base team1
+        # which is excluded.
+        polaris_group_manager.add_user_to_group.assert_not_called()
+
+    def test_ensure_polaris_excludes_users_and_groups_combined(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """Combining exclude_users and exclude_groups behaves as the union of both filters."""
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources",
+            json={"exclude_users": ["alice"], "exclude_groups": ["team1"]},
+        )
+
+        data = response.json()
+        assert data["users_skipped"] == ["alice"]
+        assert data["groups_skipped"] == ["team1"]
+        assert data["users_provisioned"] == 1  # only bob
+        assert data["groups_provisioned"] == 0  # team1 was the only base group
+
+    def test_ensure_polaris_dedups_writer_and_reader_variants(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        """A user in both team1 AND team1ro gets only the writer binding once.
+
+        Mirrors the dedup-preferring-write semantics that the live
+        /polaris/user_provision endpoint uses, so backfill produces the
+        same end-state as a fresh provision.
+        """
+        polaris_migration_state.group_manager.get_user_groups.return_value = [
+            "team1",
+            "team1ro",
+        ]
+        polaris_group_manager = polaris_migration_state.polaris_group_manager
+
+        polaris_migration_client.post("/management/migrate/ensure-polaris-resources")
+
+        # Each user gets exactly one binding (writer "team1"), not two.
+        add_calls = polaris_group_manager.add_user_to_group.call_args_list
+        per_user_groups = {
+            user: [c.args[1] for c in add_calls if c.args[0] == user]
+            for user in ("alice", "bob")
+        }
+        assert per_user_groups == {"alice": ["team1"], "bob": ["team1"]}
+
+
+class TestMigrationResponseModels:
+    """Tests for migration response model validation."""
+
+    def test_migration_error_model(self):
+        error = MigrationError(
+            resource_type="user", resource_name="alice", error="Something broke"
+        )
+        assert error.resource_type == "user"
+        assert error.resource_name == "alice"
+
+    def test_regenerate_policies_response_model(self):
+        response = RegeneratePoliciesResponse(
+            users_updated=5,
+            groups_updated=3,
+            errors=[],
+            performed_by="admin",
+            timestamp=datetime.now(),
+        )
+        assert response.users_updated == 5
+        assert response.groups_updated == 3
+
+    def test_ensure_polaris_response_model(self):
+        response = EnsurePolarisResponse(
+            users_provisioned=10,
+            groups_provisioned=4,
+            provisioned_users=["alice", "bob"],
+            provisioned_groups=["team1", "team2"],
+            users_skipped=["sysuser"],
+            groups_skipped=["legacy"],
+            errors=[
+                MigrationError(
+                    resource_type="user", resource_name="bob", error="timeout"
+                )
+            ],
+            performed_by="admin",
+            timestamp=datetime.now(),
+        )
+        assert response.users_provisioned == 10
+        assert response.provisioned_users == ["alice", "bob"]
+        assert response.provisioned_groups == ["team1", "team2"]
+        assert response.users_skipped == ["sysuser"]
+        assert response.groups_skipped == ["legacy"]
+        assert len(response.errors) == 1
 
 
 class TestRotateAllCredentialsEndpoint:
@@ -894,6 +1555,15 @@ class TestRotateAllCredentialsEndpoint:
         )
         mock_app_state.s3_credential_service.rotate = AsyncMock(
             return_value=("alice", "new-secret")
+        )
+        # Polaris rotate is exercised per-user alongside S3 rotate. Default
+        # success — individual tests override side_effect for failure cases.
+        mock_app_state.polaris_credential_service.rotate = AsyncMock(
+            return_value=PolarisCredentialRecord(
+                client_id="polaris-cid",
+                client_secret="polaris-secret",
+                personal_catalog="user_alice",
+            )
         )
         return mock_app_state
 
@@ -917,15 +1587,51 @@ class TestRotateAllCredentialsEndpoint:
     ):
         rotate_client.post("/management/credentials/rotate-all-credentials")
 
-        calls = rotate_app_state.s3_credential_service.rotate.call_args_list
-        assert len(calls) == 2
-        assert calls[0].args == ("alice",)
-        assert calls[1].args == ("bob",)
+        s3_calls = rotate_app_state.s3_credential_service.rotate.call_args_list
+        assert len(s3_calls) == 2
+        assert s3_calls[0].args == ("alice",)
+        assert s3_calls[1].args == ("bob",)
 
-    def test_rotate_all_error_continues(self, rotate_client, rotate_app_state):
+        # Polaris rotates alongside S3 — both backends every user.
+        polaris_calls = (
+            rotate_app_state.polaris_credential_service.rotate.call_args_list
+        )
+        assert len(polaris_calls) == 2
+        assert polaris_calls[0].args == ("alice",)
+        assert polaris_calls[1].args == ("bob",)
+
+    def test_rotate_all_s3_error_continues(self, rotate_client, rotate_app_state):
+        """S3 failure on one user doesn't block Polaris on that user or other users.
+
+        ``users_rotated`` only counts users where BOTH backends succeeded;
+        the alice S3 failure → alice counts as failed even though her
+        Polaris rotation succeeded.
+        """
         rotate_app_state.s3_credential_service.rotate.side_effect = [
             Exception("alice rotate failed"),
             ("bob", "new-secret"),
+        ]
+
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_rotated"] == 1  # only bob fully succeeded
+        assert data["users_failed"] == 1  # alice partial failure
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["resource_name"] == "alice"
+        assert data["errors"][0]["resource_type"] == "user_s3"
+        assert "alice rotate failed" in data["errors"][0]["error"]
+
+    def test_rotate_all_polaris_error_continues(self, rotate_client, rotate_app_state):
+        """Polaris failure is reported with resource_type ``user_polaris``."""
+        rotate_app_state.polaris_credential_service.rotate.side_effect = [
+            Exception("alice polaris failed"),
+            PolarisCredentialRecord(
+                client_id="polaris-cid",
+                client_secret="polaris-secret",
+                personal_catalog="user_bob",
+            ),
         ]
 
         response = rotate_client.post("/management/credentials/rotate-all-credentials")
@@ -936,12 +1642,47 @@ class TestRotateAllCredentialsEndpoint:
         assert data["users_failed"] == 1
         assert len(data["errors"]) == 1
         assert data["errors"][0]["resource_name"] == "alice"
-        assert data["errors"][0]["resource_type"] == "user"
-        assert "alice rotate failed" in data["errors"][0]["error"]
+        assert data["errors"][0]["resource_type"] == "user_polaris"
+
+    def test_rotate_all_both_backends_fail_for_same_user(
+        self, rotate_client, rotate_app_state
+    ):
+        """A single user with both backends failing produces two error rows.
+
+        Counted once in ``users_failed`` (it's still one user), but each
+        backend's error is preserved so operators can retry just the
+        failing backend.
+        """
+        rotate_app_state.s3_credential_service.rotate.side_effect = [
+            Exception("alice s3 failed"),
+            ("bob", "new-secret"),
+        ]
+        rotate_app_state.polaris_credential_service.rotate.side_effect = [
+            Exception("alice polaris failed"),
+            PolarisCredentialRecord(
+                client_id="polaris-cid",
+                client_secret="polaris-secret",
+                personal_catalog="user_bob",
+            ),
+        ]
+
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_rotated"] == 1  # bob ok
+        assert data["users_failed"] == 1  # alice (both halves failed but one user)
+        assert len(data["errors"]) == 2
+        types = {e["resource_type"] for e in data["errors"]}
+        assert types == {"user_s3", "user_polaris"}
 
     def test_rotate_all_all_fail(self, rotate_client, rotate_app_state):
+        """All users, all backends fail → 2 users × 2 backends = 4 error rows."""
         rotate_app_state.s3_credential_service.rotate.side_effect = Exception(
-            "rotate failed"
+            "s3 rotate failed"
+        )
+        rotate_app_state.polaris_credential_service.rotate.side_effect = Exception(
+            "polaris rotate failed"
         )
 
         response = rotate_client.post("/management/credentials/rotate-all-credentials")
@@ -950,7 +1691,14 @@ class TestRotateAllCredentialsEndpoint:
         data = response.json()
         assert data["users_rotated"] == 0
         assert data["users_failed"] == 2
-        assert len(data["errors"]) == 2
+        assert len(data["errors"]) == 4
+        # Half S3, half Polaris.
+        s3_errs = [e for e in data["errors"] if e["resource_type"] == "user_s3"]
+        polaris_errs = [
+            e for e in data["errors"] if e["resource_type"] == "user_polaris"
+        ]
+        assert len(s3_errs) == 2
+        assert len(polaris_errs) == 2
 
     def test_rotate_all_no_users(self, rotate_client, rotate_app_state):
         rotate_app_state.user_manager.list_resources.return_value = []

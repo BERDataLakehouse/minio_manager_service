@@ -1,19 +1,21 @@
 """Tests for the routes.polaris module."""
 
 import os
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from routes.polaris import router
+from credentials.polaris_store import PolarisCredentialRecord
+from polaris.managers.group_manager import PolarisGroupManager
+from polaris.managers.user_manager import PolarisUserManager
 from service import app_state
 from service.dependencies import auth
 from service.exception_handlers import universal_error_handler
 from service.exceptions import PolarisOperationError
 from service.kb_auth import AdminPermission, KBaseUser
-from routes.polaris import router
 
 
 # === FIXTURES ===
@@ -44,7 +46,13 @@ def mock_polaris_service():
 
 @pytest.fixture
 def mock_app_state_obj(mock_polaris_service):
-    """Create a mock application state with Polaris service."""
+    """Create a mock application state with Polaris service.
+
+    The PolarisUserManager / PolarisGroupManager are *real* instances wired
+    to the mocked PolarisService so the existing assertions on
+    ``mock_polaris_service.*`` calls still verify the full route → helper →
+    manager → service chain.
+    """
     state = MagicMock()
 
     # Pre-built warehouse base URLs (mirrors AppState.build_app()).
@@ -55,18 +63,26 @@ def mock_app_state_obj(mock_polaris_service):
     state.group_manager = AsyncMock()
     state.group_manager.get_user_groups = AsyncMock(return_value=[])
 
-    # Polaris service
+    # Polaris service + real managers pointing at it.
     state.polaris_service = mock_polaris_service
+    state.polaris_user_manager = PolarisUserManager(
+        polaris_service=mock_polaris_service,
+        users_sql_warehouse_base=state.users_sql_warehouse_base,
+    )
+    state.polaris_group_manager = PolarisGroupManager(
+        polaris_service=mock_polaris_service,
+        tenant_sql_warehouse_base=state.tenant_sql_warehouse_base,
+    )
     state.polaris_credential_service = AsyncMock()
     state.polaris_credential_service.get_or_create = AsyncMock(
-        return_value=SimpleNamespace(
+        return_value=PolarisCredentialRecord(
             client_id="test-client-id",
             client_secret="test-client-secret",
             personal_catalog="user_testuser",
         )
     )
     state.polaris_credential_service.rotate = AsyncMock(
-        return_value=SimpleNamespace(
+        return_value=PolarisCredentialRecord(
             client_id="rotated-client-id",
             client_secret="rotated-client-secret",
             personal_catalog="user_testuser",
@@ -165,8 +181,7 @@ class TestProvisionPolarisUser:
             principal="testuser", principal_role="testuser_role"
         )
         mock_app_state_obj.polaris_credential_service.get_or_create.assert_called_once_with(
-            username="testuser",
-            personal_catalog="user_testuser",
+            "testuser"
         )
 
     def test_provision_other_user_catalog_forbidden(
@@ -372,8 +387,7 @@ class TestRotatePolarisCredentials:
         assert data["client_secret"] == "rotated-client-secret"
         assert data["personal_catalog"] == "user_testuser"
         mock_app_state_obj.polaris_credential_service.rotate.assert_called_once_with(
-            username="testuser",
-            personal_catalog="user_testuser",
+            "testuser"
         )
 
     def test_rotate_other_user_forbidden(self, mock_app_state_obj, regular_user):
@@ -392,8 +406,7 @@ class TestRotatePolarisCredentials:
 
         assert response.status_code == 200
         mock_app_state_obj.polaris_credential_service.rotate.assert_called_once_with(
-            username="otheruser",
-            personal_catalog="user_otheruser",
+            "otheruser"
         )
 
     def test_rotate_credentials_unexpected_error_sanitised(

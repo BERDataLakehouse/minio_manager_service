@@ -100,6 +100,10 @@ def mock_tenant_manager():
 def mock_app_state(mock_tenant_manager):
     app_state = MagicMock()
     app_state.tenant_manager = mock_tenant_manager
+    # Tenant routes mirror MinIO membership changes into Polaris.
+    app_state.polaris_group_manager = AsyncMock()
+    app_state.polaris_group_manager.add_user_to_group = AsyncMock()
+    app_state.polaris_group_manager.remove_user_from_group = AsyncMock()
     return app_state
 
 
@@ -213,6 +217,33 @@ class TestMembers:
         )
         assert resp.status_code == 204
         mock_tenant_manager.remove_member.assert_called_once()
+
+    def test_add_member_polaris_grant_before_revoke(self, admin_client, mock_app_state):
+        """Polaris ops on a permission flip are ordered grant-then-revoke so
+        the user never observes a window with neither role bound."""
+        # Use a single tracker mock so we can assert call order across
+        # add_user_to_group and remove_user_from_group.
+        tracker = MagicMock()
+        mock_app_state.polaris_group_manager.add_user_to_group = AsyncMock(
+            side_effect=lambda *a, **kw: tracker.add_user_to_group(*a)
+        )
+        mock_app_state.polaris_group_manager.remove_user_from_group = AsyncMock(
+            side_effect=lambda *a, **kw: tracker.remove_user_from_group(*a)
+        )
+
+        resp = admin_client.post(
+            "/tenants/t1/members/bob?permission=read_only",
+            headers={"Authorization": "Bearer tok"},
+        )
+        assert resp.status_code == 200
+
+        # Grant target (t1ro) must come BEFORE revoke opposite (t1).
+        from unittest.mock import call
+
+        assert tracker.method_calls == [
+            call.add_user_to_group("bob", "t1ro"),
+            call.remove_user_from_group("bob", "t1"),
+        ]
 
 
 # ── Stewards ──────────────────────────────────────────────────────────────
