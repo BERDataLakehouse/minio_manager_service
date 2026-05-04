@@ -56,7 +56,9 @@ async def get_credentials(
     app_state = get_app_state(request)
     username = authenticated_user.user
 
-    access_key, secret_key = await app_state.credential_service.get_or_create(username)
+    access_key, secret_key = await app_state.s3_credential_service.get_or_create(
+        username
+    )
 
     return CredentialsResponse(
         username=username,
@@ -83,7 +85,7 @@ async def rotate_credentials(
     app_state = get_app_state(request)
     username = authenticated_user.user
 
-    access_key, secret_key = await app_state.credential_service.rotate(username)
+    access_key, secret_key = await app_state.s3_credential_service.rotate(username)
 
     return CredentialsResponse(
         username=username,

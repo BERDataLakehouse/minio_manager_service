@@ -1,7 +1,7 @@
 """
 Tests for the routes.credentials module.
 
-Routes are thin wrappers around CredentialService, so these tests
+Routes are thin wrappers around S3CredentialService, so these tests
 verify routing, response models, and correct delegation.
 """
 
@@ -35,15 +35,15 @@ def mock_mc_path():
 
 @pytest.fixture
 def mock_app_state():
-    """Create a mock application state with credential_service."""
+    """Create a mock application state with s3_credential_service."""
     app_state = MagicMock(spec=AppState)
 
-    # Mock credential service
-    app_state.credential_service = AsyncMock()
-    app_state.credential_service.get_or_create = AsyncMock(
+    # Mock S3 credential service
+    app_state.s3_credential_service = AsyncMock()
+    app_state.s3_credential_service.get_or_create = AsyncMock(
         return_value=("testuser", "test-secret-key-123")
     )
-    app_state.credential_service.rotate = AsyncMock(
+    app_state.s3_credential_service.rotate = AsyncMock(
         return_value=("testuser", "rotated-secret-key-456")
     )
 
@@ -144,7 +144,7 @@ class TestGetCredentialsEndpoint:
         assert data["access_key"] == "testuser"
         assert data["secret_key"] == "test-secret-key-123"
 
-        mock_app_state.credential_service.get_or_create.assert_called_once_with(
+        mock_app_state.s3_credential_service.get_or_create.assert_called_once_with(
             "testuser"
         )
 
@@ -154,7 +154,7 @@ class TestGetCredentialsEndpoint:
         response2 = client.get("/credentials/")
 
         assert response1.json() == response2.json()
-        assert mock_app_state.credential_service.get_or_create.call_count == 2
+        assert mock_app_state.s3_credential_service.get_or_create.call_count == 2
 
     def test_get_credentials_response_format(self, client, mock_app_state):
         """Test response has exactly the expected fields."""
@@ -173,7 +173,7 @@ class TestGetCredentialsEndpoint:
             response = await get_credentials(user, mock_request)
 
             assert response.username == "alice"
-            mock_app_state.credential_service.get_or_create.assert_called_once_with(
+            mock_app_state.s3_credential_service.get_or_create.assert_called_once_with(
                 "alice"
             )
 
@@ -181,7 +181,7 @@ class TestGetCredentialsEndpoint:
     async def test_get_credentials_propagates_errors(self, mock_app_state):
         """Test that service errors propagate through the route."""
         mock_request = MagicMock()
-        mock_app_state.credential_service.get_or_create.side_effect = Exception(
+        mock_app_state.s3_credential_service.get_or_create.side_effect = Exception(
             "Service failure"
         )
 
@@ -206,7 +206,7 @@ class TestRotateCredentialsEndpoint:
         assert data["username"] == "testuser"
         assert data["secret_key"] == "rotated-secret-key-456"
 
-        mock_app_state.credential_service.rotate.assert_called_once_with("testuser")
+        mock_app_state.s3_credential_service.rotate.assert_called_once_with("testuser")
 
     @pytest.mark.asyncio
     async def test_rotate_credentials_async(self, mock_app_state):
@@ -218,13 +218,13 @@ class TestRotateCredentialsEndpoint:
             response = await rotate_credentials(user, mock_request)
 
             assert response.username == "alice"
-            mock_app_state.credential_service.rotate.assert_called_once_with("alice")
+            mock_app_state.s3_credential_service.rotate.assert_called_once_with("alice")
 
     @pytest.mark.asyncio
     async def test_rotate_credentials_propagates_errors(self, mock_app_state):
         """Test that service errors propagate through the route."""
         mock_request = MagicMock()
-        mock_app_state.credential_service.rotate.side_effect = Exception(
+        mock_app_state.s3_credential_service.rotate.side_effect = Exception(
             "Rotation failed"
         )
 

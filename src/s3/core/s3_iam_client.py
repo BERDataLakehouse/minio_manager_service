@@ -8,7 +8,7 @@ from urllib.parse import unquote
 import aiobotocore.session
 from botocore.exceptions import ClientError
 
-from s3.exceptions import IamPolicyNotFoundError
+from s3.exceptions import IamGroupNotFoundError, IamPolicyNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -278,12 +278,21 @@ class S3IAMClient:
         logger.info("Removed user %s from group %s", username, group_name)
 
     async def list_users_in_group(self, group_name: str) -> list[str]:
-        """Return the usernames of all users in a group."""
-        users = []
-        paginator = self._client.get_paginator("get_group")
-        async for page in paginator.paginate(GroupName=group_name):
-            users.extend(u["UserName"] for u in page["Users"])
-        return users
+        """Return the usernames of all users in a group.
+
+        Raises:
+            IamGroupNotFoundError: if the group does not exist.
+        """
+        try:
+            users = []
+            paginator = self._client.get_paginator("get_group")
+            async for page in paginator.paginate(GroupName=group_name):
+                users.extend(u["UserName"] for u in page["Users"])
+            return users
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "NoSuchEntity":
+                raise IamGroupNotFoundError(group_name) from e
+            raise
 
     async def list_groups_for_user(self, username: str) -> list[str]:
         """Return the names of all groups the user belongs to."""

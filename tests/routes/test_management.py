@@ -100,8 +100,8 @@ def mock_app_state():
     app_state.group_manager.delete_resource = AsyncMock(return_value=True)
 
     # Mock credential service
-    app_state.credential_service = AsyncMock()
-    app_state.credential_service.rotate = AsyncMock(
+    app_state.s3_credential_service = AsyncMock()
+    app_state.s3_credential_service.rotate = AsyncMock(
         return_value=("user1", "new-secret-key")
     )
 
@@ -316,7 +316,7 @@ class TestDeleteUserEndpoint:
         response = client.delete("/management/users/user1")
 
         assert response.status_code == 200
-        mock_app_state.credential_service.delete_credentials.assert_called_once_with(
+        mock_app_state.s3_credential_service.delete_credentials.assert_called_once_with(
             "user1"
         )
 
@@ -332,7 +332,7 @@ class TestDeleteUserEndpoint:
         self, client, mock_app_state
     ):
         """Test that credential cleanup failure propagates as a server error."""
-        mock_app_state.credential_service.delete_credentials.side_effect = Exception(
+        mock_app_state.s3_credential_service.delete_credentials.side_effect = Exception(
             "DB error"
         )
 
@@ -984,7 +984,7 @@ class TestRotateAllCredentialsEndpoint:
         mock_app_state.user_manager.list_resources = AsyncMock(
             return_value=["alice", "bob"]
         )
-        mock_app_state.credential_service.rotate = AsyncMock(
+        mock_app_state.s3_credential_service.rotate = AsyncMock(
             return_value=("alice", "new-secret")
         )
         return mock_app_state
@@ -1009,13 +1009,13 @@ class TestRotateAllCredentialsEndpoint:
     ):
         rotate_client.post("/management/credentials/rotate-all-credentials")
 
-        calls = rotate_app_state.credential_service.rotate.call_args_list
+        calls = rotate_app_state.s3_credential_service.rotate.call_args_list
         assert len(calls) == 2
         assert calls[0].args == ("alice",)
         assert calls[1].args == ("bob",)
 
     def test_rotate_all_error_continues(self, rotate_client, rotate_app_state):
-        rotate_app_state.credential_service.rotate.side_effect = [
+        rotate_app_state.s3_credential_service.rotate.side_effect = [
             Exception("alice rotate failed"),
             ("bob", "new-secret"),
         ]
@@ -1032,7 +1032,7 @@ class TestRotateAllCredentialsEndpoint:
         assert "alice rotate failed" in data["errors"][0]["error"]
 
     def test_rotate_all_all_fail(self, rotate_client, rotate_app_state):
-        rotate_app_state.credential_service.rotate.side_effect = Exception(
+        rotate_app_state.s3_credential_service.rotate.side_effect = Exception(
             "rotate failed"
         )
 

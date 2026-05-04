@@ -1,6 +1,6 @@
 """Shared async connection pool for all PostgreSQL stores.
 
-All stores (CredentialStore, UserProfileStore, TenantMetadataStore) receive
+All stores (S3CredentialStore, UserProfileStore, TenantMetadataStore) receive
 the shared pool at construction time rather than creating their own.
 """
 
@@ -55,7 +55,7 @@ class DatabasePool:
         """Create and open the shared connection pool.
 
         Also verifies that the pgcrypto extension is installed (required by
-        CredentialStore for encrypted secret storage).
+        S3CredentialStore for encrypted secret storage).
         """
         conninfo = make_conninfo(
             host=host, port=port, dbname=dbname, user=user, password=password
@@ -65,7 +65,7 @@ class DatabasePool:
         )
         await pool.open()
 
-        # Verify pgcrypto is available (required by CredentialStore)
+        # Verify pgcrypto is available (required by S3CredentialStore)
         async with pool.connection() as conn:
             cur = await conn.execute(
                 "SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto'"

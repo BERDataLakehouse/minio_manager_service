@@ -12,7 +12,7 @@ import aiobotocore.session
 from botocore.exceptions import ClientError
 
 from s3.core.s3_iam_client import S3IAMClient
-from s3.exceptions import IamPolicyNotFoundError
+from s3.exceptions import IamGroupNotFoundError, IamPolicyNotFoundError
 
 ENDPOINT = "http://localhost:9050"
 ACCESS_KEY = "test_access_key"
@@ -333,6 +333,19 @@ async def run(client: S3IAMClient):
         ok("list_users_in_group")
     except Exception as e:
         fail("list_users_in_group", e)
+
+    try:
+        await client.list_users_in_group("inttest-nobody")
+        fail(
+            "list_users_in_group raises IamGroupNotFoundError for nonexistent group",
+            "no exception raised",
+        )
+    except IamGroupNotFoundError:
+        ok("list_users_in_group raises IamGroupNotFoundError for nonexistent group")
+    except Exception as e:
+        fail(
+            "list_users_in_group raises IamGroupNotFoundError for nonexistent group", e
+        )
 
     try:
         user_groups = await client.list_groups_for_user(USERNAME)
