@@ -1116,6 +1116,7 @@ class TestDeleteCleanup:
     ):
         """Test _pre_delete_cleanup detaches and deletes policy for main and read-only groups."""
         group_manager_instance._policy_manager = mock_policy_manager
+        group_manager_instance._flush_group_members = AsyncMock()
 
         # Mock resource_exists to return True for read-only group
         with patch.object(
@@ -1142,6 +1143,9 @@ class TestDeleteCleanup:
         mock_policy_manager.delete_group_policy.assert_any_call(
             "testgroupro", read_only=True
         )
+        # Should flush members from both main and RO groups before mc rm.
+        group_manager_instance._flush_group_members.assert_any_await("testgroup")
+        group_manager_instance._flush_group_members.assert_any_await("testgroupro")
 
     @pytest.mark.asyncio
     async def test_pre_delete_cleanup_detach_fails_continues(
@@ -1152,6 +1156,7 @@ class TestDeleteCleanup:
             "Detach failed"
         )
         group_manager_instance._policy_manager = mock_policy_manager
+        group_manager_instance._flush_group_members = AsyncMock()
 
         # Should not raise
         await group_manager_instance._pre_delete_cleanup("testgroup")
@@ -1166,6 +1171,7 @@ class TestDeleteCleanup:
         """Test _pre_delete_cleanup continues if policy deletion fails."""
         mock_policy_manager.delete_group_policy.side_effect = Exception("Delete failed")
         group_manager_instance._policy_manager = mock_policy_manager
+        group_manager_instance._flush_group_members = AsyncMock()
 
         # Should not raise
         await group_manager_instance._pre_delete_cleanup("testgroup")
@@ -1176,6 +1182,7 @@ class TestDeleteCleanup:
     ):
         """Test _pre_delete_cleanup handles case when read-only group doesn't exist."""
         group_manager_instance._policy_manager = mock_policy_manager
+        group_manager_instance._flush_group_members = AsyncMock()
 
         # Mock resource_exists to return False for read-only group
         with patch.object(
@@ -1187,6 +1194,76 @@ class TestDeleteCleanup:
         assert mock_policy_manager.detach_policy_from_group.call_count == 1
         # Should still call delete_group_policy
         mock_policy_manager.delete_group_policy.assert_called_once_with("testgroup")
+        # Main group is flushed; RO group is skipped because it does not exist.
+        group_manager_instance._flush_group_members.assert_awaited_once_with(
+            "testgroup"
+        )
+
+    @pytest.mark.asyncio
+    async def test_flush_group_members_removes_all_in_one_call(
+        self, group_manager_instance
+    ):
+        """_flush_group_members issues one batched mc rm with every member."""
+        group_manager_instance._fetch_group_members = AsyncMock(
+            return_value=["alice", "bob"]
+        )
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=True,
+            stdout="",
+            stderr="",
+            return_code=0,
+            command="mc admin group rm",
+        )
+
+        await group_manager_instance._flush_group_members("testgroup")
+
+        cmd_args = group_manager_instance._executor._execute_command.call_args.args[0]
+        assert "rm" in cmd_args
+        assert "testgroup" in cmd_args
+        assert "alice" in cmd_args and "bob" in cmd_args
+
+    @pytest.mark.asyncio
+    async def test_flush_group_members_empty_is_noop(self, group_manager_instance):
+        """Empty groups skip the mc subprocess call entirely."""
+        group_manager_instance._fetch_group_members = AsyncMock(return_value=[])
+
+        await group_manager_instance._flush_group_members("testgroup")
+
+        group_manager_instance._executor._execute_command.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_flush_group_members_swallows_group_not_found(
+        self, group_manager_instance
+    ):
+        """If the group is gone, treat the flush as a no-op (idempotent cleanup)."""
+        group_manager_instance._fetch_group_members = AsyncMock(
+            side_effect=GroupNotFoundError("nope")
+        )
+
+        await group_manager_instance._flush_group_members("testgroup")
+
+        group_manager_instance._executor._execute_command.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_flush_group_members_logs_warning_on_mc_failure(
+        self, group_manager_instance, caplog
+    ):
+        """A failed mc rm logs a warning instead of raising — cleanup must keep going."""
+        group_manager_instance._fetch_group_members = AsyncMock(return_value=["alice"])
+        group_manager_instance._executor._execute_command.return_value = CommandResult(
+            success=False,
+            stdout="",
+            stderr="boom",
+            return_code=1,
+            command="mc admin group rm",
+        )
+
+        await group_manager_instance._flush_group_members("testgroup")
+
+        assert any(
+            "Failed to flush members from group testgroup" in r.message
+            for r in caplog.records
+        )
 
     @pytest.mark.asyncio
     async def test_post_delete_cleanup_success(
