@@ -37,14 +37,16 @@ def mock_mc_path():
 
 @pytest.fixture
 def mock_app_state():
-    """Create a mock AppState exposing only the two per-backend services.
+    """Create a mock AppState exposing the per-backend services + the
+    managers ``ensure_user_polaris_state`` needs.
 
-    The credentials routes are a two-line orchestration:
+    The credentials routes orchestrate three things:
       - app_state.s3_credential_service.get_or_create / rotate (MinIO)
       - app_state.polaris_credential_service.get_or_create / rotate (Polaris)
-
-    Each service self-bootstraps its own identity on cache miss, so the
-    route doesn't need access to the underlying managers.
+      - polaris.orchestration.ensure_user_polaris_state (self-heals tenant
+        catalogs by mirroring the user's MinIO group memberships into
+        Polaris) — needs polaris_user_manager, polaris_group_manager, and
+        group_manager.
     """
     app_state = MagicMock(spec=AppState)
 
@@ -71,6 +73,14 @@ def mock_app_state():
             personal_catalog="user_testuser",
         )
     )
+
+    # Managers consumed by ensure_user_polaris_state. Default behaviour is
+    # "user is in no extra groups", so the helper just bootstraps personal
+    # state — keeping the existing tests focused on credential flow.
+    app_state.polaris_user_manager = AsyncMock()
+    app_state.polaris_group_manager = AsyncMock()
+    app_state.group_manager = AsyncMock()
+    app_state.group_manager.get_user_groups = AsyncMock(return_value=[])
 
     return app_state
 
@@ -182,6 +192,22 @@ class TestGetCredentialsEndpoint:
             "testuser"
         )
 
+    def test_get_credentials_self_heals_polaris_state(self, client, mock_app_state):
+        """The route invokes ensure_user_polaris_state so missing tenant
+        catalogs (e.g. after a Polaris volume wipe) get recreated and the
+        user's MinIO group memberships get rebound to Polaris principal
+        roles. Without this, /credentials/ would happily return a Polaris
+        credential that points at a catalog Polaris doesn't have."""
+        with patch(
+            "routes.credentials.ensure_user_polaris_state", new_callable=AsyncMock
+        ) as mock_ensure:
+            mock_ensure.return_value = ("user_testuser", [])
+            client.get("/credentials/")
+
+        mock_ensure.assert_awaited_once()
+        # Username is the first positional arg.
+        assert mock_ensure.await_args.args[0] == "testuser"
+
     def test_get_credentials_response_format(self, client, mock_app_state):
         """Response body has exactly the expected fields."""
         response = client.get("/credentials/")
@@ -242,6 +268,17 @@ class TestRotateCredentialsEndpoint:
         mock_app_state.polaris_credential_service.rotate.assert_called_once_with(
             "testuser"
         )
+
+    def test_rotate_credentials_self_heals_polaris_state(self, client, mock_app_state):
+        """Rotation also self-heals tenant catalogs; mirrors the GET path."""
+        with patch(
+            "routes.credentials.ensure_user_polaris_state", new_callable=AsyncMock
+        ) as mock_ensure:
+            mock_ensure.return_value = ("user_testuser", [])
+            client.post("/credentials/rotate")
+
+        mock_ensure.assert_awaited_once()
+        assert mock_ensure.await_args.args[0] == "testuser"
 
     @pytest.mark.asyncio
     async def test_rotate_credentials_async(self, mock_app_state):

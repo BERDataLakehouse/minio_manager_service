@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from credentials.polaris_store import PolarisCredentialRecord
+from polaris.orchestration import ensure_user_polaris_state
 from service.app_state import get_app_state
 from service.dependencies import auth
 from service.kb_auth import KBaseUser
@@ -93,6 +94,16 @@ async def get_credentials(
     s3_access_key, s3_secret_key = await app_state.s3_credential_service.get_or_create(
         username
     )
+    # Self-heal Polaris state — also creates any missing tenant catalogs the
+    # user belongs to, and rebinds principal roles. Without this, a Polaris
+    # volume wipe would leave tenant catalogs broken until someone hits
+    # /polaris/user_provision/{username}.
+    await ensure_user_polaris_state(
+        username,
+        polaris_user_manager=app_state.polaris_user_manager,
+        polaris_group_manager=app_state.polaris_group_manager,
+        group_manager=app_state.group_manager,
+    )
     polaris_record = await app_state.polaris_credential_service.get_or_create(username)
 
     return _to_response(username, s3_access_key, s3_secret_key, polaris_record)
@@ -120,6 +131,14 @@ async def rotate_credentials(
 
     s3_access_key, s3_secret_key = await app_state.s3_credential_service.rotate(
         username
+    )
+    # Self-heal Polaris state before rotation so a wiped/missing tenant
+    # catalog gets recreated and rebound. Mirrors the unified GET path.
+    await ensure_user_polaris_state(
+        username,
+        polaris_user_manager=app_state.polaris_user_manager,
+        polaris_group_manager=app_state.polaris_group_manager,
+        group_manager=app_state.group_manager,
     )
     polaris_record = await app_state.polaris_credential_service.rotate(username)
 
