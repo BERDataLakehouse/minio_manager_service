@@ -22,7 +22,7 @@ Source policy prefix → entity and inline policy name:
 Every user must have both a home and a system policy. The script aborts before
 making any changes if that is not the case.
 
-Notable arguments: 
+Notable arguments:
 
 --dst-path-prefix:
     IAM path prefix applied to every created user and group (default:
@@ -33,6 +33,12 @@ Notable arguments:
     to match whatever prefix the MMS deployment uses so that the migrated entities
     are indistinguishable from ones the service would have created itself. The
     prefix must start and end with "/".
+
+--exclude-users:
+    Usernames to skip entirely. Excluded users are removed from the migration
+    before the completeness check, so they will not cause an abort even if their
+    policies are incomplete. Excluded usernames are also not added as group members
+    on the target, even if they appear in a group on the source.
 
 
 Usage:
@@ -143,6 +149,7 @@ async def migrate(
     dst_secret_key: str,
     dst_path_prefix: str,
     dry_run: bool,
+    exclude_users: set[str] | None = None,
 ) -> None:
     print("\n── 1. Connecting to source MinIO via mc ─────────────────────────────")
     mc_setup_alias(mc_path, src_endpoint, src_access_key, src_secret_key)
@@ -171,6 +178,13 @@ async def migrate(
             group_policies[group_name] = mc_get_policy_doc(mc_path, policy_name)
         else:
             print(f"  skipping non-MMS policy: {policy_name}")
+
+    if exclude_users:
+        for username in sorted(exclude_users):
+            had_home = user_home_policies.pop(username, None) is not None
+            had_system = user_system_policies.pop(username, None) is not None
+            if had_home or had_system:
+                print(f"  excluding user: {username}")
 
     usernames = set(user_home_policies) | set(user_system_policies)
     group_names = set(group_policies)
@@ -234,6 +248,9 @@ async def migrate(
             )
             print(f"    set inline policy '{GROUP_INLINE}'")
             for member in group_members[group_name]:
+                if exclude_users and member in exclude_users:
+                    print(f"    skipping excluded member: {member}")
+                    continue
                 await client.add_user_to_group(member, group_name)
                 print(f"    added member: {member}")
 
@@ -268,6 +285,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print what would be done without making any changes",
     )
+    p.add_argument(
+        "--exclude-users",
+        nargs="*",
+        default=[],
+        metavar="USERNAME",
+        help="Usernames to exclude from migration",
+    )
     return p.parse_args()
 
 
@@ -285,6 +309,7 @@ if __name__ == "__main__":
                 dst_secret_key=args.dst_secret_key,
                 dst_path_prefix=args.dst_path_prefix,
                 dry_run=args.dry_run,
+                exclude_users=set(args.exclude_users),
             )
         )
     except Exception as e:
