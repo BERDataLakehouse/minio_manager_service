@@ -153,7 +153,9 @@ async def run(
         fetched = await um.get_user(USERNAME)
         assert fetched.username == USERNAME
         assert fetched.s3_access_key, "get_user must return a non-empty s3_access_key"
-        assert fetched.s3_secret_key == "<redacted>", "get_user must redact s3_secret_key"
+        assert fetched.s3_secret_key == "<redacted>", (
+            "get_user must redact s3_secret_key"
+        )
 
         assert (
             f"s3a://{BUCKET}/users-general-warehouse/{USERNAME}/" in fetched.home_paths
