@@ -1,13 +1,14 @@
 """
-Credential Management Routes for the MinIO Manager API.
+Credential Management Routes for the BERDL Data Governance API.
 
-This module provides the primary JupyterHub integration endpoints for credential
-management. These are the core endpoints that JupyterHub calls to obtain temporary
-S3 credentials for users.
+Primary JupyterHub integration. Each call returns a unified bundle of S3
+IAM credentials AND Polaris OAuth credentials. Both per-backend services
+self-bootstrap their underlying identity on cache miss, so the route is a
+two-line orchestration: fetch S3 creds, fetch Polaris creds.
 
-GET /credentials returns cached credentials from the database, creating the user
-and storing credentials on first access. POST /credentials/rotate explicitly
-rotates credentials and updates the cache.
+Catalog metadata (personal_catalog, tenant_catalogs) is intentionally
+NOT in the response — fetch it from ``GET /polaris/effective-access/me``
+to keep this endpoint focused on credential material.
 """
 
 import logging
@@ -16,6 +17,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from credentials.polaris_store import PolarisCredentialRecord
+from polaris.orchestration import ensure_user_polaris_state
 from service.app_state import get_app_state
 from service.dependencies import auth
 from service.kb_auth import KBaseUser
@@ -25,70 +28,118 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/credentials", tags=["credentials"])
 
 
-# ===== RESPONSE MODELS =====
+# ===== RESPONSE MODEL =====
 
 
 class CredentialsResponse(BaseModel):
-    """Primary response model for credential operations."""
+    """Combined S3 IAM + Polaris OAuth credential bundle."""
 
     model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
 
     username: Annotated[str, Field(description="Username", min_length=1)]
-    access_key: Annotated[str, Field(description="MinIO access key (same as username)")]
-    secret_key: Annotated[str, Field(description="MinIO secret key", min_length=8)]
+    # S3 IAM
+    s3_access_key: Annotated[str, Field(description="S3 access key (same as username)")]
+    s3_secret_key: Annotated[str, Field(description="S3 secret key", min_length=8)]
+    # Polaris OAuth
+    polaris_client_id: Annotated[
+        str, Field(description="Polaris OAuth client ID", min_length=1)
+    ]
+    polaris_client_secret: Annotated[
+        str, Field(description="Polaris OAuth client secret", min_length=1)
+    ]
+
+
+# ===== HELPER =====
+
+
+def _to_response(
+    username: str,
+    s3_access_key: str,
+    s3_secret_key: str,
+    polaris_record: PolarisCredentialRecord,
+) -> CredentialsResponse:
+    return CredentialsResponse(
+        username=username,
+        s3_access_key=s3_access_key,
+        s3_secret_key=s3_secret_key,  # type: ignore
+        polaris_client_id=polaris_record.client_id,
+        polaris_client_secret=polaris_record.client_secret,
+    )
+
+
+# ===== ROUTES =====
 
 
 @router.get(
     "/",
     response_model=CredentialsResponse,
-    summary="Get MinIO credentials",
+    summary="Get S3 + Polaris credentials",
     description=(
-        "Returns cached MinIO credentials for the authenticated user. "
-        "Creates the user and stores credentials on first access. "
-        "Subsequent calls return the same credentials until explicitly rotated."
+        "Returns cached S3 and Polaris credentials for the authenticated "
+        "user. Both per-backend services self-bootstrap their identity on "
+        "first access (S3: creates the MinIO user + joins default groups + "
+        "attaches policies; Polaris: provisions the personal catalog + "
+        "principal + admin role). Subsequent calls return the same "
+        "credentials until explicitly rotated."
     ),
 )
 async def get_credentials(
     authenticated_user: Annotated[KBaseUser, Depends(auth)],
     request: Request,
 ):
-    """Get idempotent MinIO credentials (cache-first with distributed lock)."""
+    """Cache-first on both backends; bootstraps each on miss."""
     app_state = get_app_state(request)
     username = authenticated_user.user
 
-    access_key, secret_key = await app_state.s3_credential_service.get_or_create(
+    s3_access_key, s3_secret_key = await app_state.s3_credential_service.get_or_create(
         username
     )
-
-    return CredentialsResponse(
-        username=username,
-        access_key=access_key,
-        secret_key=secret_key,  # type: ignore
+    # Self-heal Polaris state — also creates any missing tenant catalogs the
+    # user belongs to, and rebinds principal roles. Without this, a Polaris
+    # volume wipe would leave tenant catalogs broken until someone hits
+    # /polaris/user_provision/{username}.
+    await ensure_user_polaris_state(
+        username,
+        polaris_user_manager=app_state.polaris_user_manager,
+        polaris_group_manager=app_state.polaris_group_manager,
+        group_manager=app_state.group_manager,
     )
+    polaris_record = await app_state.polaris_credential_service.get_or_create(username)
+
+    return _to_response(username, s3_access_key, s3_secret_key, polaris_record)
 
 
 @router.post(
     "/rotate",
     response_model=CredentialsResponse,
-    summary="Rotate MinIO credentials",
+    summary="Rotate S3 + Polaris credentials",
     description=(
-        "Explicitly rotates the MinIO credentials for the authenticated user. "
-        "Deletes the cached credentials, generates new ones in MinIO, "
-        "and stores the new credentials in the cache."
+        "Force-rotates S3 and Polaris credentials for the authenticated "
+        "user. Each backend invalidates its cache, mints a new secret, and "
+        "stores the new value. Both services self-bootstrap the underlying "
+        "identity if it doesn't exist yet, so an admin can rotate a user "
+        "that was created before either backend was integrated."
     ),
 )
 async def rotate_credentials(
     authenticated_user: Annotated[KBaseUser, Depends(auth)],
     request: Request,
 ):
-    """Force-rotate MinIO credentials and update cache."""
+    """Force-rotate both backends."""
     app_state = get_app_state(request)
     username = authenticated_user.user
 
-    access_key, secret_key = await app_state.s3_credential_service.rotate(username)
-
-    return CredentialsResponse(
-        username=username,
-        access_key=access_key,
-        secret_key=secret_key,  # type: ignore
+    s3_access_key, s3_secret_key = await app_state.s3_credential_service.rotate(
+        username
     )
+    # Self-heal Polaris state before rotation so a wiped/missing tenant
+    # catalog gets recreated and rebound. Mirrors the unified GET path.
+    await ensure_user_polaris_state(
+        username,
+        polaris_user_manager=app_state.polaris_user_manager,
+        polaris_group_manager=app_state.polaris_group_manager,
+        group_manager=app_state.group_manager,
+    )
+    polaris_record = await app_state.polaris_credential_service.rotate(username)
+
+    return _to_response(username, s3_access_key, s3_secret_key, polaris_record)

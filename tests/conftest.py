@@ -447,7 +447,7 @@ def test_client(mock_app):
 
 @pytest.fixture
 def mock_credential_store():
-    """Create a mock S3CredentialStore for testing."""
+    """Create a mock CredentialStore for testing."""
     store = MagicMock(spec=S3CredentialStore)
     store.get_credentials = AsyncMock(return_value=None)
     store.store_credentials = AsyncMock()

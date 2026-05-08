@@ -39,8 +39,9 @@ import logging
 from collections import defaultdict
 from typing import Dict, List
 
-from service.exceptions import PolicyOperationError
+from polaris.constants import ICEBERG_STORAGE_SUBDIRECTORY
 from s3.models.s3_config import S3Config
+from service.exceptions import PolicyOperationError
 from s3.models.policy import (
     PolicyAction,
     PolicyDocument,

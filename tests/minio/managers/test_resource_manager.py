@@ -479,6 +479,18 @@ class TestDeleteResource:
 
         assert result is False
 
+    @pytest.mark.asyncio
+    async def test_delete_resource_invalid_name_returns_false(
+        self,
+        resource_manager,
+        mock_executor,
+    ):
+        """Test delete_resource handles validation errors."""
+        result = await resource_manager.delete_resource("   ")
+
+        assert result is False
+        mock_executor._execute_command.assert_not_called()
+
 
 # =============================================================================
 # Test Cleanup Hooks
@@ -509,6 +521,15 @@ class TestCleanupHooks:
 
 class TestAbstractMethods:
     """Tests for abstract method implementations."""
+
+    def test_base_abstract_method_bodies_are_noops(self, resource_manager):
+        """Test abstract method bodies remain inert when called directly."""
+        assert ResourceManager._get_resource_type(resource_manager) is None
+        assert ResourceManager._validate_resource_name(resource_manager, "name") is None
+        assert ResourceManager._build_exists_command(resource_manager, "name") is None
+        assert ResourceManager._build_list_command(resource_manager) is None
+        assert ResourceManager._build_delete_command(resource_manager, "name") is None
+        assert ResourceManager._parse_list_output(resource_manager, "") is None
 
     def test_get_resource_type(self, resource_manager):
         """Test _get_resource_type implementation."""
