@@ -64,8 +64,8 @@ def mock_app_state():
     app_state.user_manager.get_user = AsyncMock(
         return_value=UserModel(
             username="user1",
-            access_key="user1",
-            secret_key=None,
+            s3_access_key="user1",
+            s3_secret_key=None,
             home_paths=["s3a://bucket/users/user1/"],
             groups=[],
             total_policies=2,
@@ -73,8 +73,8 @@ def mock_app_state():
     )
     mock_created_user = MagicMock()
     mock_created_user.username = "newuser"
-    mock_created_user.access_key = "newuser"
-    mock_created_user.secret_key = "secret-key-123"
+    mock_created_user.s3_access_key = "newuser"
+    mock_created_user.s3_secret_key = "secret-key-123"
     mock_created_user.home_paths = ["s3a://bucket/users/newuser/"]
     mock_created_user.groups = []
     mock_created_user.total_policies = 2

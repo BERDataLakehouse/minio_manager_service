@@ -310,8 +310,8 @@ async def create_user(
 
     response = UserManagementResponse(
         username=user_info.username,
-        s3_access_key=user_info.access_key,
-        s3_secret_key=str(user_info.secret_key),
+        s3_access_key=user_info.s3_access_key,
+        s3_secret_key=str(user_info.s3_secret_key),
         polaris_client_id=polaris_record.client_id,
         polaris_client_secret=polaris_record.client_secret,
         home_paths=user_info.home_paths,

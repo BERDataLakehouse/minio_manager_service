@@ -187,8 +187,8 @@ class UserManager:
 
         return UserModel(
             username=username,
-            access_key=access_key_id,
-            secret_key=secret_key,
+            s3_access_key=access_key_id,
+            s3_secret_key=secret_key,
             home_paths=self._get_user_home_paths(username),
             groups=[],
             user_policies=[home_policy, system_policy],
@@ -224,8 +224,8 @@ class UserManager:
 
         return UserModel(
             username=username,
-            access_key=access_key_ids[0] if access_key_ids else "",
-            secret_key="<redacted>",  # Don't return secret in GET requests
+            s3_access_key=access_key_ids[0] if access_key_ids else "",
+            s3_secret_key="<redacted>",  # Don't return secret in GET requests
             home_paths=self._get_user_home_paths(username),
             groups=user_groups,
             user_policies=[home_policy, system_policy],

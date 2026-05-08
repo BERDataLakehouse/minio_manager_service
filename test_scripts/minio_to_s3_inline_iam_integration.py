@@ -203,6 +203,10 @@ def mc_remove_group(group_name: str) -> None:
     mc("admin", "group", "remove", SRC_ALIAS, group_name, check=False)
 
 
+def mc_remove_user_from_group(group_name: str, username: str) -> None:
+    mc("admin", "group", "remove", SRC_ALIAS, group_name, username)
+
+
 # ── Setup and teardown ────────────────────────────────────────────────────────
 
 
@@ -422,6 +426,56 @@ async def run_and_verify(client: S3IAMClient, name: str) -> None:
     await verify(client)
 
 
+async def check_exclude_users(client: S3IAMClient) -> None:
+    """Verify that --exclude-users skips the named users and their group memberships."""
+    print("\n--- Checking --exclude-users skips bob ---")
+
+    # Add bob to the source group so the test can verify he is filtered out of
+    # group membership on the target when excluded.
+    mc_create_group(GROUP, [USER_BOB])
+
+    # Start from a clean target so bob's absence is unambiguous.
+    await teardown_ceph_target(client)
+
+    try:
+        try:
+            run_migration("--exclude-users", USER_BOB)
+            ok("migration with --exclude-users succeeds")
+        except Exception as e:
+            fail("migration with --exclude-users succeeds", e)
+
+        try:
+            assert await client.user_exists(USER_ALICE), "alice should be migrated"
+            ok("exclude-users: alice is migrated")
+        except Exception as e:
+            fail("exclude-users: alice is migrated", e)
+
+        try:
+            assert not await client.user_exists(USER_BOB), "bob should be excluded"
+            ok("exclude-users: bob is not migrated")
+        except Exception as e:
+            fail("exclude-users: bob is not migrated", e)
+
+        try:
+            assert await client.group_exists(GROUP), "group should still be migrated"
+            ok("exclude-users: researchers group is migrated")
+        except Exception as e:
+            fail("exclude-users: researchers group is migrated", e)
+
+        try:
+            members = await client.list_users_in_group(GROUP)
+            assert USER_ALICE in members, f"alice should be a member, got {members}"
+            assert USER_BOB not in members, f"bob should not be a member, got {members}"
+            ok("exclude-users: group membership skips excluded bob")
+        except Exception as e:
+            fail("exclude-users: group membership skips excluded bob", e)
+    finally:
+        # Restore source group to its original alice-only state for subsequent tests.
+        mc_remove_user_from_group(GROUP, USER_BOB)
+
+    await teardown_ceph_target(client)
+
+
 async def check_incomplete_policies(client: S3IAMClient) -> None:
     """Add charlie who has only a home policy, then verify the migration aborts."""
     print("\n--- Checking incomplete policy detection… ---")
@@ -465,6 +519,7 @@ async def main() -> None:
             setup_minio_source()
             await run_and_verify(client, "initial migration succeeds")
             await run_and_verify(client, "migration re-run succeeds (idempotent)")
+            await check_exclude_users(client)
             await check_incomplete_policies(client)
         finally:
             teardown_minio_source()
