@@ -204,9 +204,9 @@ def assert_user_entry(
         globalusersro by create_group.
     """
     assert user["username"] == username
-    assert user["access_key"], "access_key must be non-empty"
-    assert user["secret_key"] == "<redacted>", (
-        f"expected secret_key '<redacted>', got {user['secret_key']!r}"
+    assert user["s3_access_key"], "s3_access_key must be non-empty"
+    assert user["s3_secret_key"] == "<redacted>", (
+        f"expected s3_secret_key '<redacted>', got {user['s3_secret_key']!r}"
     )
     assert set(user["home_paths"]) == {
         f"s3a://{BUCKET}/{USERS_GENERAL_PREFIX}/{username}/",
