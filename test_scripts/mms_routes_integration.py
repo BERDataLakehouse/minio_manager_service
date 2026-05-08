@@ -78,10 +78,12 @@ def assert_user_accessible_paths(
         f"s3a://{BUCKET}/{USERS_GENERAL_PREFIX}/{username}/",
         f"s3a://{BUCKET}/{USERS_SQL_PREFIX}/{username}/",
         f"s3a://{BUCKET}/{USERS_SQL_PREFIX}/{username}/u_{username}__*/",
+        f"s3a://{BUCKET}/{USERS_SQL_PREFIX}/{username}/iceberg/",
         # globalusers group paths
         f"s3a://{BUCKET}/{TENANT_GENERAL_PREFIX}/{GLOBALUSERS}/",
         f"s3a://{BUCKET}/{TENANT_SQL_PREFIX}/{GLOBALUSERS}/",
         f"s3a://{BUCKET}/{TENANT_SQL_PREFIX}/{GLOBALUSERS}/{GLOBALUSERS}_*/",
+        f"s3a://{BUCKET}/{TENANT_SQL_PREFIX}/{GLOBALUSERS}/iceberg/",
         # System policy paths
         f"s3a://{SPARK_LOGS_BUCKET}/{SPARK_LOGS_PREFIX}/{username}/",
         f"s3a://{TASK_SERVICE_BUCKET}/logs/",
@@ -119,6 +121,8 @@ def check_user_policy(policy: dict, username: str) -> None:
         f"{S3_ARN}{BUCKET}/{sql_base}/{gov}*/*",
         f"{S3_ARN}{BUCKET}/{sql_base}",
         f"{S3_ARN}{BUCKET}/{sql_base}/*",
+        f"{S3_ARN}{BUCKET}/{sql_base}/iceberg",
+        f"{S3_ARN}{BUCKET}/{sql_base}/iceberg/*",
         f"{S3_ARN}{BUCKET}/{gen_base}",
         f"{S3_ARN}{BUCKET}/{gen_base}/*",
     }
@@ -174,6 +178,8 @@ def check_group_policy(policy: dict, group_name: str) -> None:
         f"{S3_ARN}{BUCKET}/{sql_base}/{gov}*/*",
         f"{S3_ARN}{BUCKET}/{sql_base}",
         f"{S3_ARN}{BUCKET}/{sql_base}/*",
+        f"{S3_ARN}{BUCKET}/{sql_base}/iceberg",
+        f"{S3_ARN}{BUCKET}/{sql_base}/iceberg/*",
         f"{S3_ARN}{BUCKET}/{gen_base}",
         f"{S3_ARN}{BUCKET}/{gen_base}/*",
     }
@@ -315,8 +321,8 @@ def test_credentials(
             assert body["username"] == expected_user, (
                 f"expected username '{expected_user}', got '{body['username']}'"
             )
-            assert body["access_key"], "access_key must be non-empty"
-            assert body["secret_key"], "secret_key must be non-empty"
+            assert body["s3_access_key"], "s3_access_key must be non-empty"
+            assert body["s3_secret_key"], "s3_secret_key must be non-empty"
             if label == "standard":
                 standard_creds = body
             ok(f"GET /credentials/ returns credentials ({label})")
@@ -329,13 +335,13 @@ def test_credentials(
         r = mms("POST", "/credentials/rotate", token=standard_token)
         assert r.status_code == 200, f"expected 200, got {r.status_code}: {r.text}"
         rotated_creds = r.json()
-        assert rotated_creds["access_key"], "rotated access_key must be non-empty"
-        assert rotated_creds["secret_key"], "rotated secret_key must be non-empty"
-        assert rotated_creds["access_key"] != standard_creds["access_key"], (
-            "rotated access_key must differ from original"
+        assert rotated_creds["s3_access_key"], "rotated s3_access_key must be non-empty"
+        assert rotated_creds["s3_secret_key"], "rotated s3_secret_key must be non-empty"
+        assert rotated_creds["s3_access_key"] != standard_creds["s3_access_key"], (
+            "rotated s3_access_key must differ from original"
         )
-        assert rotated_creds["secret_key"] != standard_creds["secret_key"], (
-            "rotated secret_key must differ from original"
+        assert rotated_creds["s3_secret_key"] != standard_creds["s3_secret_key"], (
+            "rotated s3_secret_key must differ from original"
         )
         ok("POST /credentials/rotate returns new credentials")
     except Exception as e:
@@ -346,11 +352,11 @@ def test_credentials(
         r = mms("GET", "/credentials/", token=standard_token)
         assert r.status_code == 200, f"expected 200, got {r.status_code}: {r.text}"
         body = r.json()
-        assert body["access_key"] == rotated_creds["access_key"], (
-            "access_key after rotation must match rotated credentials"
+        assert body["s3_access_key"] == rotated_creds["s3_access_key"], (
+            "s3_access_key after rotation must match rotated credentials"
         )
-        assert body["secret_key"] == rotated_creds["secret_key"], (
-            "secret_key after rotation must match rotated credentials"
+        assert body["s3_secret_key"] == rotated_creds["s3_secret_key"], (
+            "s3_secret_key after rotation must match rotated credentials"
         )
         ok("GET /credentials/ after rotation returns rotated credentials")
     except Exception as e:
@@ -416,8 +422,8 @@ def test_workspaces(standard_token: str, standard_user: str) -> None:
         body = r.json()
         assert body["username"] == standard_user
         assert_user_accessible_paths(body["accessible_paths"], standard_user)
-        assert body["total_paths"] == 9, (
-            f"expected total_paths 9, got {body['total_paths']}"
+        assert body["total_paths"] == 11, (
+            f"expected total_paths 11, got {body['total_paths']}"
         )
         ok("GET /workspaces/me/accessible-paths returns paths including home")
     except Exception as e:
@@ -564,8 +570,8 @@ def test_management_users(
         assert r.status_code == 201, f"expected 201, got {r.status_code}: {r.text}"
         body = r.json()
         assert body["username"] == EPHEMERAL_USER
-        assert body["access_key"], "access_key must be non-empty"
-        assert body["secret_key"], "secret_key must be non-empty"
+        assert body["s3_access_key"], "s3_access_key must be non-empty"
+        assert body["s3_secret_key"], "s3_secret_key must be non-empty"
         assert set(body["home_paths"]) == {
             f"s3a://{BUCKET}/{USERS_GENERAL_PREFIX}/{EPHEMERAL_USER}/",
             f"s3a://{BUCKET}/{USERS_SQL_PREFIX}/{EPHEMERAL_USER}/",
@@ -613,8 +619,8 @@ def test_management_users(
         assert r.status_code == 201, f"expected 201, got {r.status_code}: {r.text}"
         body = r.json()
         assert body["username"] == standard_user
-        assert body["access_key"], "access_key must be non-empty"
-        assert body["secret_key"], "secret_key must be non-empty"
+        assert body["s3_access_key"], "s3_access_key must be non-empty"
+        assert body["s3_secret_key"], "s3_secret_key must be non-empty"
         assert set(body["home_paths"]) == {
             f"s3a://{BUCKET}/{USERS_GENERAL_PREFIX}/{standard_user}/",
             f"s3a://{BUCKET}/{USERS_SQL_PREFIX}/{standard_user}/",
@@ -647,8 +653,8 @@ def test_management_users(
         assert r.status_code == 200, f"expected 200, got {r.status_code}: {r.text}"
         body = r.json()
         assert body["username"] == standard_user
-        assert body["access_key"], "access_key must be non-empty"
-        assert body["secret_key"], "secret_key must be non-empty"
+        assert body["s3_access_key"], "s3_access_key must be non-empty"
+        assert body["s3_secret_key"], "s3_secret_key must be non-empty"
         assert set(body["home_paths"]) == {
             f"s3a://{BUCKET}/{USERS_GENERAL_PREFIX}/{standard_user}/",
             f"s3a://{BUCKET}/{USERS_SQL_PREFIX}/{standard_user}/",
@@ -882,6 +888,7 @@ def test_workspaces_group(
             f"s3a://{BUCKET}/{TENANT_GENERAL_PREFIX}/{GROUP_NAME}/",
             f"s3a://{BUCKET}/{TENANT_SQL_PREFIX}/{GROUP_NAME}/",
             f"s3a://{BUCKET}/{TENANT_SQL_PREFIX}/{GROUP_NAME}/{GROUP_NAME}_*/",
+            f"s3a://{BUCKET}/{TENANT_SQL_PREFIX}/{GROUP_NAME}/iceberg/",
         }, f"unexpected group accessible_paths: {body['accessible_paths']}"
         ok("GET /workspaces/me/groups/{group_name} returns group workspace")
     except Exception as e:
