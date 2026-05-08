@@ -87,7 +87,7 @@ class S3CredentialService:
         if not user_exists:
             logger.info(f"Auto-creating user {username} for credential request")
             user_model = await self._user_manager.create_user(username=username)
-            return user_model.access_key, user_model.secret_key
+            return user_model.s3_access_key, user_model.s3_secret_key
         return await self._user_manager.get_or_rotate_user_credentials(username)
 
     async def delete_credentials(self, username: str) -> None:

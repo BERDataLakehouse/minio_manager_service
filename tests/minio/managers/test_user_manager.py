@@ -314,8 +314,8 @@ class TestCreateUser:
         result = await user_manager.create_user("testuser")
 
         assert result.username == "testuser"
-        assert result.access_key == "testuser"
-        assert result.secret_key is not None  # Auto-generated
+        assert result.s3_access_key == "testuser"
+        assert result.s3_secret_key is not None  # Auto-generated
         assert len(result.home_paths) == 2
         mock_policy_manager.ensure_user_policies.assert_called_once_with("testuser")
         mock_policy_manager.attach_user_policies.assert_called_once_with("testuser")
@@ -340,7 +340,7 @@ class TestCreateUser:
 
         result = await user_manager.create_user("testuser", password="mypassword123")
 
-        assert result.secret_key == "mypassword123"
+        assert result.s3_secret_key == "mypassword123"
 
     @pytest.mark.asyncio
     async def test_creates_user_idempotent(
@@ -541,7 +541,7 @@ class TestGetUser:
         result = await user_manager.get_user("testuser")
 
         assert result.username == "testuser"
-        assert result.secret_key == "<redacted>"  # Should be redacted
+        assert result.s3_secret_key == "<redacted>"  # Should be redacted
         assert result.user_policies == [
             sample_user_home_policy,
             sample_user_system_policy,
@@ -998,7 +998,7 @@ class TestEdgeCases:
 
         result = await user_manager.create_user("testuser", password="12345678")
 
-        assert result.secret_key == "12345678"
+        assert result.s3_secret_key == "12345678"
 
     @pytest.mark.asyncio
     async def test_handles_empty_group_list(

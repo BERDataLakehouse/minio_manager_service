@@ -43,8 +43,8 @@ def mock_user_manager():
         return_value=("testuser", "rotated-secret-123")
     )
     mock_user_model = MagicMock()
-    mock_user_model.access_key = "testuser"
-    mock_user_model.secret_key = "created-secret-456"
+    mock_user_model.s3_access_key = "testuser"
+    mock_user_model.s3_secret_key = "created-secret-456"
     mgr.create_user = AsyncMock(return_value=mock_user_model)
     return mgr
 
