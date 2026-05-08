@@ -101,7 +101,7 @@ docker compose logs -f minio-manager
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MINIO_ENDPOINT` | Yes | - | Ceph RadosGW endpoint URL (e.g., `http://ceph:8080`) |
+| `MINIO_ENDPOINT` | Yes | - | S3 endpoint URL (e.g., `http://ceph:8080`) |
 | `MINIO_ROOT_USER` | Yes | - | S3/IAM access key |
 | `MINIO_ROOT_PASSWORD` | Yes | - | S3/IAM secret key |
 | `MMS_IAM_PATH_PREFIX` | No | `/data_governance_service` | IAM path prefix applied to all managed users and groups. Used to scope and list only service-managed entities (e.g. `PathPrefix` filtering). Must start and end with `/`. |
@@ -133,7 +133,9 @@ Users can then use credentials to:
 
 ## Inline Policy Model
 
-Unlike the previous MinIO implementation (which used named managed policies attached to users/groups), the Ceph implementation uses **inline policies** — policies embedded directly on the IAM entity they govern.
+Unlike the previous MinIO implementation (which used named managed policies attached to 
+users/groups), the S3 implementation uses **inline policies** — policies embedded directly on
+the IAM entity they govern.
 
 | Entity | Inline policy name | Purpose |
 |--------|--------------------|---------|
@@ -145,7 +147,7 @@ Inline policies are regenerated in place whenever access changes (e.g. a sharing
 
 ## Migration from MinIO
 
-A migration script is provided for moving IAM entities from a MinIO deployment to Ceph RadosGW:
+A migration script is provided for moving IAM entities from a MinIO deployment to S3:
 
 ```bash
 PYTHONPATH=src python migrations/minio_to_s3_inline_iam.py \
@@ -159,11 +161,16 @@ PYTHONPATH=src python migrations/minio_to_s3_inline_iam.py \
     [--dry-run]
 ```
 
-The script reads named policies from MinIO via the `mc` CLI, derives user/group entities from the policy name prefixes (`user-home-policy-*`, `user-system-policy-*`, `group-policy-*`), creates the corresponding IAM entities on the Ceph target, and sets their inline policies. It is idempotent and safe to re-run.
+The script reads named policies from MinIO via the `mc` CLI, derives user/group entities
+from the policy name prefixes
+(`user-home-policy-*`, `user-system-policy-*`, `group-policy-*`), creates the
+corresponding IAM entities on the S3 target, and sets their inline policies.
+It is idempotent and safe to re-run.
 
 ## Database Migrations
 
-The service uses Alembic for database schema management. Migrations run automatically on application startup (upgrade to head), so no manual steps are needed for normal deployments.
+The service uses Alembic for database schema management. Migrations run automatically on
+application startup (upgrade to head), so no manual steps are needed for normal deployments.
 
 For manual migration management inside the container:
 

@@ -855,7 +855,7 @@ class EnsurePolarisResponse(BaseModel):
     summary="Regenerate all IAM policies",
     description=(
         "**Write operation.** Force-regenerates `home` and `system` policies for every user "
-        "and `group` policies every base group (RW + RO) in the system from the current "
+        "and `group` policies for every base group (RW + RO) in the system from the current "
         "template, replacing the previously stored policy in S3 IAM. "
         "Use this to roll out a template change — e.g., adding the Iceberg "
         "sub-path statement so existing policies grant access to the new "
