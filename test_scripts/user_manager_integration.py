@@ -60,8 +60,8 @@ async def run(
     try:
         user = await um.create_user(USERNAME)
         assert user.username == USERNAME
-        assert user.access_key, "access_key must be non-empty"
-        assert user.secret_key, "secret_key must be non-empty"
+        assert user.s3_access_key, "s3_access_key must be non-empty"
+        assert user.s3_secret_key, "s3_secret_key must be non-empty"
         assert any(f"/{USERNAME}/" in p for p in user.home_paths), (
             f"home_paths must contain a path for {USERNAME}: {user.home_paths}"
         )
@@ -152,8 +152,10 @@ async def run(
     try:
         fetched = await um.get_user(USERNAME)
         assert fetched.username == USERNAME
-        assert fetched.access_key, "get_user must return a non-empty access_key"
-        assert fetched.secret_key == "<redacted>", "get_user must redact secret_key"
+        assert fetched.s3_access_key, "get_user must return a non-empty s3_access_key"
+        assert fetched.s3_secret_key == "<redacted>", (
+            "get_user must redact s3_secret_key"
+        )
 
         assert (
             f"s3a://{BUCKET}/users-general-warehouse/{USERNAME}/" in fetched.home_paths
@@ -245,7 +247,7 @@ async def run(
         fail("get_or_rotate raises for missing user", e)
 
     try:
-        old_key = (await um.get_user(USERNAME)).access_key
+        old_key = (await um.get_user(USERNAME)).s3_access_key
         new_key_id, new_secret = await um.get_or_rotate_user_credentials(USERNAME)
         assert new_key_id, "rotated key_id must be non-empty"
         assert new_secret, "rotated secret must be non-empty"
