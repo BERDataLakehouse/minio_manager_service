@@ -27,14 +27,14 @@ class BaseUserModel(BaseModel):
             examples=["john.doe", "admin", "data_scientist_01"],
         ),
     ]
-    access_key: Annotated[
-        str, Field(description="MinIO access key for API authentication")
+    s3_access_key: Annotated[
+        str, Field(description="S3 access key for API authentication")
     ]
-    secret_key: Annotated[
+    s3_secret_key: Annotated[
         Optional[str],
         Field(
             default=None,
-            description="MinIO secret key (only returned during creation/rotation for security)",
+            description="S3 secret key (only returned during creation/rotation for security)",
         ),
     ] = None
 

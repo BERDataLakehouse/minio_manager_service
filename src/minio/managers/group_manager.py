@@ -211,6 +211,30 @@ class GroupManager(ResourceManager[GroupModel]):
 
     # === Pre/Post Delete Cleanup Overrides ===
 
+    async def _flush_group_members(self, group_name: str) -> None:
+        """Remove every user from ``group_name`` so ``mc admin group rm`` can succeed.
+
+        ``mc admin group rm`` refuses to delete a non-empty group, and the
+        creator (plus any later-added members) is still bound at delete
+        time. Issued as a single batched ``mc admin group rm <group> <users...>``
+        which mc treats as idempotent per-user.
+        """
+        try:
+            members = await self._fetch_group_members(group_name)
+        except GroupNotFoundError:
+            return
+        if not members:
+            return
+        cmd_args = self._command_builder.build_group_command(
+            GroupAction.RM, group_name, members
+        )
+        result = await self._executor._execute_command(cmd_args)
+        if not result.success:
+            self.logger.warning(
+                f"Failed to flush members from group {group_name}: {result.stderr}"
+            )
+        self._invalidate_members(group_name)
+
     async def _pre_delete_cleanup(self, name: str, force: bool = False) -> None:
         """Clean up group resources before deletion.
 
@@ -227,6 +251,10 @@ class GroupManager(ResourceManager[GroupModel]):
             await self.policy_manager.delete_group_policy(name)
         except Exception as e:
             self.logger.warning(f"Failed to delete group policy: {e}")
+
+        # Empty the main group; mc admin group rm (run by delete_resource
+        # right after this hook) refuses non-empty groups.
+        await self._flush_group_members(name)
 
         # Clean up read-only group if it exists
         ro_group_name = f"{name}ro"
@@ -252,6 +280,9 @@ class GroupManager(ResourceManager[GroupModel]):
                 )
             except Exception as e:
                 self.logger.warning(f"Failed to delete read-only group policy: {e}")
+
+            # Empty the RO group before mc admin group rm.
+            await self._flush_group_members(ro_group_name)
 
             # Delete the read-only group itself
             try:

@@ -238,16 +238,16 @@ def sample_user_data():
 
     def _create_user(
         username: str = "testuser",
-        access_key: str = "test_access_key",
-        secret_key: str = "test_secret_key",
+        s3_access_key: str = "test_access_key",
+        s3_secret_key: str = "test_secret_key",
         policies: List[str] = None,
         groups: List[str] = None,
         accessible_paths: List[str] = None,
     ) -> UserModel:
         return UserModel(
             username=username,
-            access_key=access_key,
-            secret_key=secret_key,
+            s3_access_key=s3_access_key,
+            s3_secret_key=s3_secret_key,
             policies=policies or [],
             groups=groups or [],
             accessible_paths=accessible_paths or [],
@@ -447,7 +447,7 @@ def test_client(mock_app):
 
 @pytest.fixture
 def mock_credential_store():
-    """Create a mock S3CredentialStore for testing."""
+    """Create a mock CredentialStore for testing."""
     store = MagicMock(spec=S3CredentialStore)
     store.get_credentials = AsyncMock(return_value=None)
     store.store_credentials = AsyncMock()

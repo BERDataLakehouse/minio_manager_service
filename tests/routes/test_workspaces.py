@@ -63,8 +63,8 @@ def sample_user_model():
     """Create a sample UserModel."""
     return UserModel(
         username="testuser",
-        access_key="TESTKEY",
-        secret_key="TESTSECRET",
+        s3_access_key="TESTKEY",
+        s3_secret_key="TESTSECRET",
         home_paths=["s3a://test-bucket/users-sql-warehouse/testuser/"],
         groups=["group1", "group2"],
         user_policies=[],
@@ -123,7 +123,7 @@ class TestGetMyWorkspace:
         assert response.status_code == 200
         data = response.json()
         assert data["username"] == "testuser"
-        assert data["access_key"] == "TESTKEY"
+        assert data["s3_access_key"] == "TESTKEY"
 
     def test_get_my_workspace_user_not_found(
         self, client, mock_app_state, mock_authenticated_user
