@@ -222,8 +222,8 @@ class UserManager(ResourceManager[UserModel]):
 
             return UserModel(
                 username=username,
-                access_key=username,  # access key is always the username
-                secret_key=password,
+                s3_access_key=username,  # access key is always the username
+                s3_secret_key=password,
                 home_paths=home_paths,
                 groups=[],  # No groups assigned during creation
                 user_policies=[home_policy, system_policy],
@@ -274,8 +274,8 @@ class UserManager(ResourceManager[UserModel]):
 
             return UserModel(
                 username=username,
-                access_key=username,  # access key is always the username
-                secret_key="<redacted>",  # Don't return secret in GET requests
+                s3_access_key=username,  # access key is always the username
+                s3_secret_key="<redacted>",  # Don't return secret in GET requests
                 home_paths=self._get_user_home_paths(username),
                 groups=user_groups,
                 user_policies=[user_policy, system_policy],

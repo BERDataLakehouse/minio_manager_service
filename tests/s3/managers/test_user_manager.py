@@ -210,8 +210,8 @@ async def test_skips_refdata_ro_add_when_group_missing(
 async def test_create_user_returns_user_model_with_credentials(user_manager):
     result = await user_manager.create_user("alice")
     assert result.username == "alice"
-    assert result.access_key == "KEY123"
-    assert result.secret_key == "secret123"
+    assert result.s3_access_key == "KEY123"
+    assert result.s3_secret_key == "secret123"
 
 
 async def test_create_user_returns_user_model_with_home_paths(user_manager):
@@ -239,13 +239,13 @@ async def test_get_user_raises_if_not_exists(user_manager, mock_iam_client):
 async def test_get_user_returns_access_key_from_iam(user_manager, mock_iam_client):
     mock_iam_client.list_access_key_ids.return_value = ["IAMKEY456"]
     result = await user_manager.get_user("alice")
-    assert result.access_key == "IAMKEY456"
+    assert result.s3_access_key == "IAMKEY456"
 
 
 async def test_get_user_empty_access_key_when_no_keys(user_manager, mock_iam_client):
     mock_iam_client.list_access_key_ids.return_value = []
     result = await user_manager.get_user("alice")
-    assert result.access_key == ""
+    assert result.s3_access_key == ""
 
 
 async def test_get_user_aggregates_paths_from_home_and_system_policies(
