@@ -232,6 +232,64 @@ class UserManager(ResourceManager[UserModel]):
                 accessible_paths=home_paths,  # user home path is accessible via newly created policy
             )
 
+    async def create_service_user(self, username: str) -> UserModel:
+        """
+        Create a minimal MinIO user intended for use as a non-human service
+        identity (e.g. the per-tenant Trino reader, ``trino-{group}-svc``).
+
+        Differs from :meth:`create_user` by deliberately skipping the
+        user-onboarding side effects that don't apply to service identities:
+        no per-user MinIO policies, no S3 home/system directories, and no
+        auto-add to ``globalusers`` / ``refdataro``. The caller is expected
+        to add the resulting user to the appropriate tenant ``{group}ro``
+        group separately, which is where its read-only access scope comes
+        from.
+        """
+        async with self.operation_context("create_service_user"):
+            validate_username(username)
+            password = self._generate_secure_password()
+
+            # MinIO's `mc admin user add` updates the password for an existing
+            # user. Always issuing it keeps the returned secret in sync with
+            # MinIO when this helper is used to recover from partial backfills.
+            cmd_args = self._command_builder.build_user_command(
+                UserAction.ADD, username, password
+            )
+            result = await self._executor._execute_command(cmd_args)
+            if not result.success:
+                raise UserOperationError(
+                    f"Failed to create/update MinIO service user: {result.stderr}"
+                )
+
+            return UserModel(
+                username=username,
+                s3_access_key=username,
+                s3_secret_key=password,
+                home_paths=[],
+                groups=[],
+                user_policies=[],
+                group_policies=[],
+                total_policies=0,
+                accessible_paths=[],
+            )
+
+    async def delete_service_user(self, username: str) -> None:
+        """
+        Delete a MinIO service user. Tolerates user-not-found.
+
+        Counterpart to :meth:`create_service_user`. Skips the policy-detach
+        and home-directory cleanup that the generic :meth:`delete_resource`
+        does because service users never had those resources.
+        """
+        if not await self.resource_exists(username):
+            return
+        cmd_args = self._command_builder.build_user_command(UserAction.REMOVE, username)
+        result = await self._executor._execute_command(cmd_args)
+        if not result.success:
+            raise UserOperationError(
+                f"Failed to delete MinIO service user: {result.stderr}"
+            )
+
     async def get_user(self, username: str) -> UserModel:
         """
         Retrieve comprehensive information about an existing user including all policies and access rights.

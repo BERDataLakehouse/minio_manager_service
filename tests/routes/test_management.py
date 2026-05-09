@@ -145,17 +145,56 @@ def mock_app_state():
     app_state.policy_manager.delete_resource = AsyncMock(return_value=True)
 
     # Mock Polaris stack — managers are the orchestration layer the routes
-    # call directly. The raw PolarisService is teardown-only and not on
-    # AppState, so it is not mocked here.
+    # call directly. PolarisService is now also on AppState because the
+    # service-identity teardown calls delete_principal directly on it.
+    app_state.polaris_service = AsyncMock()
+    app_state.polaris_service.delete_principal = AsyncMock()
     app_state.polaris_user_manager = AsyncMock()
     app_state.polaris_user_manager.create_user = AsyncMock()
     app_state.polaris_user_manager.delete_user = AsyncMock()
+    app_state.polaris_user_manager.reset_credentials = AsyncMock(
+        return_value={"credentials": {"clientId": "svc-cid", "clientSecret": "svc-sec"}}
+    )
     app_state.polaris_group_manager = AsyncMock()
     app_state.polaris_group_manager.ensure_catalog = AsyncMock()
     app_state.polaris_group_manager.create_group = AsyncMock()
     app_state.polaris_group_manager.delete_group = AsyncMock()
     app_state.polaris_group_manager.add_user_to_group = AsyncMock()
     app_state.polaris_group_manager.remove_user_from_group = AsyncMock()
+
+    # Mock per-tenant Trino service-identity dependencies. The service identity
+    # orchestration also calls user_manager.create_service_user /
+    # delete_service_user and group_manager.add/remove_user_to_group on the
+    # IAM side; those mocks already exist above.
+    app_state.user_manager.create_service_user = AsyncMock(
+        return_value=UserModel(
+            username="trino-newgroup-svc",
+            s3_access_key="trino-newgroup-svc",
+            s3_secret_key="svc-secret",
+            home_paths=[],
+            groups=[],
+            total_policies=0,
+        )
+    )
+    app_state.user_manager.delete_service_user = AsyncMock()
+    app_state.group_manager.add_user_to_group = AsyncMock()
+    app_state.group_manager.remove_user_from_group = AsyncMock()
+    app_state.s3_credential_store = AsyncMock()
+    app_state.s3_credential_store.store_credentials = AsyncMock()
+    app_state.s3_credential_store.delete_credentials = AsyncMock()
+    app_state.polaris_credential_store = AsyncMock()
+    app_state.polaris_credential_store.store_credentials = AsyncMock()
+    app_state.polaris_credential_store.delete_credentials = AsyncMock()
+
+    # Trino catalog reconciler — used by create_group / delete_group routes
+    # to issue CREATE / DROP CATALOG against Trino as platform_admin.
+    app_state.trino_catalog_reconciler = AsyncMock()
+    app_state.trino_catalog_reconciler.reconcile_tenant = AsyncMock(
+        return_value="newgroup"
+    )
+    app_state.trino_catalog_reconciler.deprovision_tenant = AsyncMock(
+        return_value="newgroup"
+    )
 
     # Mock tenant manager
     app_state.tenant_manager = AsyncMock()
@@ -1406,6 +1445,162 @@ class TestEnsurePolarisResourcesEndpoint:
             for user in ("alice", "bob")
         }
         assert per_user_groups == {"alice": ["team1"], "bob": ["team1"]}
+
+
+class TestReconcileTrinoCatalogsEndpoint:
+    """Tests for POST /management/migrate/reconcile-trino-catalogs."""
+
+    @pytest.fixture
+    def trino_migration_state(self, mock_app_state):
+        mock_app_state.group_manager.list_resources = AsyncMock(
+            return_value=["team1", "team1ro", "team2", "team2ro"]
+        )
+        mock_app_state.user_manager.resource_exists = AsyncMock(return_value=True)
+
+        async def create_service_user(username):
+            return UserModel(
+                username=username,
+                s3_access_key=username,
+                s3_secret_key=f"{username}-secret",
+                home_paths=[],
+                groups=[],
+                total_policies=0,
+            )
+
+        mock_app_state.user_manager.create_service_user = AsyncMock(
+            side_effect=create_service_user
+        )
+
+        async def get_s3_credentials(username):
+            return (username, f"{username}-secret")
+
+        async def get_polaris_credentials(username):
+            group = username.removeprefix("trino-").removesuffix("-svc")
+            return PolarisCredentialRecord(
+                client_id=f"{username}-cid",
+                client_secret=f"{username}-psec",
+                personal_catalog=f"tenant_{group}",
+            )
+
+        mock_app_state.s3_credential_store.get_credentials = AsyncMock(
+            side_effect=get_s3_credentials
+        )
+        mock_app_state.polaris_credential_store.get_credentials = AsyncMock(
+            side_effect=get_polaris_credentials
+        )
+
+        async def reconcile(group_name):
+            return group_name
+
+        mock_app_state.trino_catalog_reconciler.reconcile_tenant = AsyncMock(
+            side_effect=reconcile
+        )
+        return mock_app_state
+
+    @pytest.fixture
+    def trino_migration_client(self, test_app, trino_migration_state):
+        with patch(
+            "routes.management.get_app_state",
+            return_value=trino_migration_state,
+        ):
+            yield TestClient(test_app, raise_server_exceptions=False)
+
+    def test_reconcile_trino_catalogs_ensures_identity_then_reconciles(
+        self, trino_migration_client, trino_migration_state
+    ):
+        response = trino_migration_client.post(
+            "/management/migrate/reconcile-trino-catalogs"
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["service_identities"] == ["team1", "team2"]
+        assert data["reconciled"] == ["team1", "team2"]
+        assert data["errors"] == []
+        trino_migration_state.group_manager.add_user_to_group.assert_any_call(
+            "trino-team1-svc", "team1ro"
+        )
+        trino_migration_state.polaris_group_manager.add_user_to_group.assert_any_call(
+            "trino-team1-svc", "team1ro"
+        )
+        trino_migration_state.trino_catalog_reconciler.reconcile_tenant.assert_any_call(
+            "team1"
+        )
+
+    def test_reconcile_trino_catalogs_missing_credentials_are_provisioned(
+        self, trino_migration_client, trino_migration_state
+    ):
+        trino_migration_state.s3_credential_store.get_credentials = AsyncMock(
+            return_value=None
+        )
+        trino_migration_state.polaris_credential_store.get_credentials = AsyncMock(
+            return_value=None
+        )
+
+        response = trino_migration_client.post(
+            "/management/migrate/reconcile-trino-catalogs"
+        )
+
+        assert response.status_code == 200
+        assert response.json()["errors"] == []
+        trino_migration_state.user_manager.create_service_user.assert_any_call(
+            "trino-team1-svc"
+        )
+        trino_migration_state.polaris_user_manager.reset_credentials.assert_any_call(
+            "trino-team1-svc"
+        )
+        trino_migration_state.s3_credential_store.store_credentials.assert_called()
+        trino_migration_state.polaris_credential_store.store_credentials.assert_called()
+
+    def test_reconcile_trino_catalogs_excludes_groups(
+        self, trino_migration_client, trino_migration_state
+    ):
+        response = trino_migration_client.post(
+            "/management/migrate/reconcile-trino-catalogs",
+            json={"exclude_groups": ["team1"]},
+        )
+
+        data = response.json()
+        assert data["service_identities"] == ["team2"]
+        assert data["reconciled"] == ["team2"]
+        assert data["skipped"] == ["team1"]
+        trino_migration_state.trino_catalog_reconciler.reconcile_tenant.assert_called_once_with(
+            "team2"
+        )
+
+    def test_reconcile_trino_catalogs_identity_error_skips_reconcile(
+        self, trino_migration_client, trino_migration_state
+    ):
+        trino_migration_state.s3_credential_store.get_credentials = AsyncMock(
+            side_effect=Exception("credential DB unavailable")
+        )
+
+        response = trino_migration_client.post(
+            "/management/migrate/reconcile-trino-catalogs"
+        )
+
+        data = response.json()
+        assert data["reconciled"] == []
+        assert len(data["errors"]) == 2
+        assert data["errors"][0]["resource_type"] == "trino_service_identity"
+        trino_migration_state.trino_catalog_reconciler.reconcile_tenant.assert_not_called()
+
+    def test_reconcile_trino_catalogs_reconcile_error_reports_catalog_failure(
+        self, trino_migration_client, trino_migration_state
+    ):
+        trino_migration_state.trino_catalog_reconciler.reconcile_tenant = AsyncMock(
+            side_effect=Exception("Trino admin token mismatch")
+        )
+
+        response = trino_migration_client.post(
+            "/management/migrate/reconcile-trino-catalogs"
+        )
+
+        data = response.json()
+        assert data["service_identities"] == ["team1", "team2"]
+        assert data["reconciled"] == []
+        assert len(data["errors"]) == 2
+        assert data["errors"][0]["resource_type"] == "trino_catalog"
 
 
 class TestMigrationResponseModels:

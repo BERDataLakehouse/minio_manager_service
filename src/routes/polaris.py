@@ -15,7 +15,8 @@ user.
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.security.utils import get_authorization_scheme_param
 from pydantic import BaseModel, ConfigDict, Field
 
 from polaris.constants import (
@@ -24,6 +25,8 @@ from polaris.constants import (
     tenant_catalog_name,
 )
 from polaris.orchestration import ensure_user_polaris_state
+from polaris.service_identity import ensure_tenant_trino_service
+from s3.models.tenant import TenantSummaryResponse
 from service import app_state
 from service.dependencies import auth, require_admin
 from service.kb_auth import AdminPermission, KBaseUser
@@ -93,6 +96,13 @@ def _authorize_polaris_provision(username: str, authenticated_user: KBaseUser) -
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only provision your own Polaris catalog",
         )
+
+
+def _extract_token(request: Request) -> str:
+    """Extract the bearer token from the Authorization header."""
+    header = request.headers.get("Authorization", "")
+    _, credentials = get_authorization_scheme_param(header)
+    return credentials
 
 
 # ===== PROVISIONING ROUTES =====
@@ -202,6 +212,73 @@ async def get_effective_access_for_user(
 ) -> PolarisEffectiveAccessResponse:
     """Return a user's effective Polaris access. Requires admin."""
     return await _effective_access_response(username, app_state_obj)
+
+
+class ReconcileTrinoCatalogResponse(BaseModel):
+    """Result of force-reconciling a single tenant's Trino catalog."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    tenant_name: str
+    tenant_alias: str
+
+
+@router.get(
+    "/management/tenants",
+    response_model=list[TenantSummaryResponse],
+    summary="List tenants for Polaris management",
+    description=(
+        "Admin tenant listing used by one-shot Polaris/Trino maintenance tooling. "
+        "Returns the same tenant summary shape as ``GET /tenants``."
+    ),
+)
+async def list_management_tenants(
+    request: Request,
+    app_state_obj: Annotated[app_state.AppState, Depends(app_state.get_app_state)],
+    authenticated_user: Annotated[KBaseUser, Depends(require_admin)],
+) -> list[TenantSummaryResponse]:
+    """List tenants with metadata for admin maintenance scripts."""
+    return await app_state_obj.tenant_manager.list_tenants(
+        authenticated_user.user, _extract_token(request)
+    )
+
+
+@router.post(
+    "/management/tenants/{tenant_name}/reconcile-trino",
+    response_model=ReconcileTrinoCatalogResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Force-reconcile a single tenant Trino catalog",
+    description=(
+        "Ensure the service identity for ``tenant_name``, then drop and recreate "
+        "the Trino catalog from the credentials persisted in MMS. Idempotent. "
+        "Use cases:\n"
+        "- after rotating the per-tenant service principal credential\n"
+        "- recovery after a partial-failure during regular tenant create\n"
+        "- ad-hoc admin force-recreate.\n"
+        "For bulk reconcile across all tenants use "
+        "``POST /management/migrate/reconcile-trino-catalogs``."
+    ),
+)
+async def reconcile_tenant_trino_catalog(
+    tenant_name: str,
+    app_state_obj: Annotated[app_state.AppState, Depends(app_state.get_app_state)],
+    _authenticated_user: Annotated[KBaseUser, Depends(require_admin)],
+) -> ReconcileTrinoCatalogResponse:
+    """Force-reconcile one tenant's Trino catalog. Admin only."""
+    await ensure_tenant_trino_service(
+        group_name=tenant_name,
+        user_manager=app_state_obj.user_manager,
+        group_manager=app_state_obj.group_manager,
+        polaris_group_manager=app_state_obj.polaris_group_manager,
+        polaris_user_manager=app_state_obj.polaris_user_manager,
+        s3_credential_store=app_state_obj.s3_credential_store,
+        polaris_credential_store=app_state_obj.polaris_credential_store,
+    )
+    alias = await app_state_obj.trino_catalog_reconciler.reconcile_tenant(tenant_name)
+    return ReconcileTrinoCatalogResponse(
+        tenant_name=tenant_name,
+        tenant_alias=alias,
+    )
 
 
 async def _effective_access_response(

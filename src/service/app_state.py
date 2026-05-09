@@ -24,6 +24,7 @@ from minio.managers.user_manager import UserManager
 from polaris.managers.group_manager import PolarisGroupManager
 from polaris.managers.user_manager import PolarisUserManager
 from polaris.polaris_service import PolarisService
+from polaris.trino_reconciler import TrinoCatalogReconciler
 from s3.core.distributed_lock import DistributedLockManager
 from s3.core.s3_client import S3Client
 from s3.models.s3_config import S3Config
@@ -45,10 +46,14 @@ class AppState(NamedTuple):
     group_manager: GroupManager
     policy_manager: PolicyManager
     sharing_manager: SharingManager
+    polaris_service: PolarisService
     polaris_user_manager: PolarisUserManager
     polaris_group_manager: PolarisGroupManager
     polaris_credential_service: PolarisCredentialService
+    polaris_credential_store: PolarisCredentialStore
     s3_credential_service: S3CredentialService
+    s3_credential_store: S3CredentialStore
+    trino_catalog_reconciler: TrinoCatalogReconciler
     tenant_manager: TenantManager
     users_sql_warehouse_base: str
     tenant_sql_warehouse_base: str
@@ -199,6 +204,18 @@ async def build_app(app: FastAPI) -> None:
     )
     logger.info("S3 credential service initialized")
 
+    # Trino catalog reconciler. Uses persisted service-identity creds (per
+    # tenant) to issue CREATE/DROP CATALOG against Trino as the platform
+    # admin identity (default: platform_admin) authenticated via the
+    # trino_admin_token extra credential. Reads connection details from env.
+    trino_catalog_reconciler = TrinoCatalogReconciler(
+        s3_credential_store=s3_credential_store,
+        polaris_credential_store=polaris_credential_store,
+        polaris_catalog_uri=polaris_uri,
+        s3_endpoint=str(config.endpoint),
+    )
+    logger.info("Trino catalog reconciler initialized")
+
     # Initialize profile client and tenant manager
     profile_client = KBaseUserProfileClient(auth_url, pool=db_pool.pool)
     tenant_manager = TenantManager(
@@ -221,10 +238,14 @@ async def build_app(app: FastAPI) -> None:
         group_manager=group_manager,
         policy_manager=policy_manager,
         sharing_manager=sharing_manager,
+        polaris_service=polaris_service,
         polaris_user_manager=polaris_user_manager,
         polaris_group_manager=polaris_group_manager,
         polaris_credential_service=polaris_credential_service,
+        polaris_credential_store=polaris_credential_store,
         s3_credential_service=s3_credential_service,
+        s3_credential_store=s3_credential_store,
+        trino_catalog_reconciler=trino_catalog_reconciler,
         tenant_manager=tenant_manager,
         users_sql_warehouse_base=users_sql_warehouse_base,
         tenant_sql_warehouse_base=tenant_sql_warehouse_base,

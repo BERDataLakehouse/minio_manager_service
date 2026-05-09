@@ -11,6 +11,7 @@ from routes.polaris import router
 from credentials.polaris_store import PolarisCredentialRecord
 from polaris.managers.group_manager import PolarisGroupManager
 from polaris.managers.user_manager import PolarisUserManager
+from s3.models.user import UserModel
 from service import app_state
 from service.dependencies import auth
 from service.exception_handlers import universal_error_handler
@@ -41,6 +42,14 @@ def mock_polaris_service():
     polaris.grant_catalog_role_to_principal_role = AsyncMock(return_value={})
     polaris.grant_principal_role_to_principal = AsyncMock(return_value={})
     polaris.ensure_tenant_catalog = AsyncMock(return_value=None)
+    polaris.reset_principal_credentials = AsyncMock(
+        return_value={
+            "credentials": {
+                "clientId": "svc-client-id",
+                "clientSecret": "svc-client-secret",
+            }
+        }
+    )
     return polaris
 
 
@@ -62,6 +71,26 @@ def mock_app_state_obj(mock_polaris_service):
     # Group manager
     state.group_manager = AsyncMock()
     state.group_manager.get_user_groups = AsyncMock(return_value=[])
+    state.group_manager.add_user_to_group = AsyncMock()
+
+    # Service identity dependencies used by the Trino reconcile endpoint.
+    state.user_manager = AsyncMock()
+    state.user_manager.resource_exists = AsyncMock(return_value=True)
+    state.user_manager.create_service_user = AsyncMock(
+        return_value=UserModel(
+            username="trino-teamA-svc",
+            s3_access_key="trino-teamA-svc",
+            s3_secret_key="svc-secret",
+            home_paths=[],
+            groups=[],
+            total_policies=0,
+        )
+    )
+    state.s3_credential_store = AsyncMock()
+    state.s3_credential_store.get_credentials = AsyncMock(
+        return_value=("trino-teamA-svc", "cached-s3-secret")
+    )
+    state.s3_credential_store.store_credentials = AsyncMock()
 
     # Polaris service + real managers pointing at it.
     state.polaris_service = mock_polaris_service
@@ -87,6 +116,34 @@ def mock_app_state_obj(mock_polaris_service):
             client_secret="rotated-client-secret",
             personal_catalog="user_testuser",
         )
+    )
+    state.polaris_credential_store = AsyncMock()
+    state.polaris_credential_store.get_credentials = AsyncMock(
+        return_value=PolarisCredentialRecord(
+            client_id="cached-client-id",
+            client_secret="cached-client-secret",
+            personal_catalog="tenant_teamA",
+        )
+    )
+    state.polaris_credential_store.store_credentials = AsyncMock()
+
+    state.trino_catalog_reconciler = AsyncMock()
+    state.trino_catalog_reconciler.reconcile_tenant = AsyncMock(return_value="teamA")
+
+    state.tenant_manager = AsyncMock()
+    state.tenant_manager.list_tenants = AsyncMock(
+        return_value=[
+            {
+                "tenant_name": "teamA",
+                "display_name": "Team A",
+                "description": None,
+                "website": None,
+                "organization": None,
+                "member_count": 2,
+                "is_member": True,
+                "is_steward": False,
+            }
+        ]
     )
 
     return state
@@ -533,3 +590,60 @@ class TestEffectiveAccess:
                 "access_level": "read_write",
             }
         ]
+
+
+class TestPolarisManagement:
+    """Tests for admin Polaris maintenance endpoints."""
+
+    def test_admin_lists_management_tenants(self, mock_app_state_obj, admin_user):
+        app = _create_test_app(mock_app_state_obj, admin_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.get(
+            "/polaris/management/tenants",
+            headers={"Authorization": "Bearer admin-token"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data[0]["tenant_name"] == "teamA"
+        mock_app_state_obj.tenant_manager.list_tenants.assert_awaited_once_with(
+            "admin", "admin-token"
+        )
+
+    def test_single_tenant_reconcile_ensures_service_identity_first(
+        self, mock_app_state_obj, admin_user
+    ):
+        app = _create_test_app(mock_app_state_obj, admin_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post("/polaris/management/tenants/teamA/reconcile-trino")
+
+        assert response.status_code == 200
+        assert response.json() == {"tenant_name": "teamA", "tenant_alias": "teamA"}
+        mock_app_state_obj.group_manager.add_user_to_group.assert_awaited_once_with(
+            "trino-teamA-svc", "teamAro"
+        )
+        mock_app_state_obj.trino_catalog_reconciler.reconcile_tenant.assert_awaited_once_with(
+            "teamA"
+        )
+
+    def test_single_tenant_reconcile_backfills_missing_credentials(
+        self, mock_app_state_obj, admin_user
+    ):
+        mock_app_state_obj.s3_credential_store.get_credentials = AsyncMock(
+            return_value=None
+        )
+        mock_app_state_obj.polaris_credential_store.get_credentials = AsyncMock(
+            return_value=None
+        )
+        app = _create_test_app(mock_app_state_obj, admin_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post("/polaris/management/tenants/teamA/reconcile-trino")
+
+        assert response.status_code == 200
+        mock_app_state_obj.user_manager.create_service_user.assert_awaited_once_with(
+            "trino-teamA-svc"
+        )
+        mock_app_state_obj.polaris_credential_store.store_credentials.assert_awaited()

@@ -197,6 +197,46 @@ class UserManager:
             accessible_paths=self._get_user_home_paths(username),
         )
 
+    async def create_service_user(self, username: str) -> UserModel:
+        """
+        Create a minimal IAM user intended for use as a non-human service
+        identity (e.g. the per-tenant Trino reader, ``trino-{group}-svc``).
+
+        Differs from :meth:`create_user` by deliberately skipping the
+        user-onboarding side effects that don't apply to service identities:
+        no per-user IAM policies, no S3 home/system directories, and no
+        auto-add to ``globalusers`` / ``refdataro``. The caller is expected
+        to add the resulting user to the appropriate tenant ``{group}ro``
+        group separately, which is where its read-only access scope comes
+        from.
+        """
+        validate_username(username)
+        await self._iam_client.create_user(username, exists_ok=True)
+        access_key_id, secret_key = await self._iam_client.rotate_access_key(username)
+        return UserModel(
+            username=username,
+            s3_access_key=access_key_id,
+            s3_secret_key=secret_key,
+            home_paths=[],
+            groups=[],
+            user_policies=[],
+            group_policies=[],
+            total_policies=0,
+            accessible_paths=[],
+        )
+
+    async def delete_service_user(self, username: str) -> None:
+        """
+        Delete an IAM service user. Tolerates user-not-found.
+
+        Counterpart to :meth:`create_service_user`. Skips the home/system
+        directory cleanup that :meth:`delete_user` does because service users
+        never had those directories.
+        """
+        if not await self._iam_client.user_exists(username):
+            return
+        await self._iam_client.delete_user(username)
+
     async def get_user(self, username: str) -> UserModel:
         """
         Return comprehensive information about a user including all policies
