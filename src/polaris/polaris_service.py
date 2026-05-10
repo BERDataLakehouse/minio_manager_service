@@ -247,10 +247,42 @@ class PolarisService:
                 endpoint, pathStyleAccess, and stsUnavailable fields required for MinIO.
                 Falls back to self.minio_endpoint if not provided.
         """
-        endpoint = s3_endpoint or self.minio_endpoint
+        payload = {
+            "catalog": {
+                "name": name,
+                "type": "INTERNAL",
+                "properties": self.catalog_properties(storage_location),
+                "storageConfigInfo": self.catalog_storage_config(
+                    storage_location, s3_endpoint=s3_endpoint
+                ),
+            }
+        }
+        try:
+            return await self._request("POST", "/catalogs", json=payload)
+        except PolarisOperationError as e:
+            if e.status == 409:  # Conflict - already exists
+                return await self.get_catalog(name)
+            raise e
 
-        # Build storageConfigInfo — fields MUST be at the top level (flat schema).
-        # Polaris silently ignores fields nested under "s3".
+    async def get_catalog(self, name: str) -> Dict[str, Any]:
+        """Get a specific catalog."""
+        return await self._request("GET", f"/catalogs/{name}")
+
+    def catalog_properties(self, storage_location: str) -> Dict[str, str]:
+        """Build the catalog properties MMS expects for a storage location."""
+        return {"default-base-location": storage_location}
+
+    def catalog_storage_config(
+        self,
+        storage_location: str,
+        s3_endpoint: str | None = None,
+    ) -> Dict[str, Any]:
+        """Build the Polaris S3 storageConfigInfo for a catalog.
+
+        Fields MUST be at the top level (flat schema). Polaris silently ignores
+        fields nested under "s3".
+        """
+        endpoint = s3_endpoint or self.minio_endpoint
         storage_config: Dict[str, Any] = {
             "storageType": "S3",
             "allowedLocations": [storage_location],
@@ -265,25 +297,30 @@ class PolarisService:
                     "region": self._storage_region,
                 }
             )
+        return storage_config
 
-        payload = {
-            "catalog": {
-                "name": name,
-                "type": "INTERNAL",
-                "properties": {"default-base-location": storage_location},
-                "storageConfigInfo": storage_config,
-            }
+    async def update_catalog_storage_config(
+        self,
+        name: str,
+        storage_location: str,
+        *,
+        s3_endpoint: str | None = None,
+        current_entity_version: int | None = None,
+    ) -> Dict[str, Any]:
+        """Update catalog storage properties in place.
+
+        Used by MinIO/S3 endpoint migrations to repair existing Polaris
+        catalogs without dropping table registrations.
+        """
+        payload: Dict[str, Any] = {
+            "properties": self.catalog_properties(storage_location),
+            "storageConfigInfo": self.catalog_storage_config(
+                storage_location, s3_endpoint=s3_endpoint
+            ),
         }
-        try:
-            return await self._request("POST", "/catalogs", json=payload)
-        except PolarisOperationError as e:
-            if e.status == 409:  # Conflict - already exists
-                return await self.get_catalog(name)
-            raise e
-
-    async def get_catalog(self, name: str) -> Dict[str, Any]:
-        """Get a specific catalog."""
-        return await self._request("GET", f"/catalogs/{name}")
+        if current_entity_version is not None:
+            payload["currentEntityVersion"] = current_entity_version
+        return await self._request("PUT", f"/catalogs/{name}", json=payload)
 
     async def list_catalogs(self) -> List[Dict[str, Any]]:
         """List all catalogs."""

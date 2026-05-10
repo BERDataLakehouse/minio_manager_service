@@ -25,6 +25,8 @@ from routes.management import (
     GroupManagementResponse,
     GroupNamesResponse,
     MigrationError,
+    RepairPolarisCatalogStorageChange,
+    RepairPolarisCatalogStorageResponse,
     RegeneratePoliciesResponse,
     ResourceDeleteResponse,
     RotateAllCredentialsResponse,
@@ -1447,6 +1449,231 @@ class TestEnsurePolarisResourcesEndpoint:
         assert per_user_groups == {"alice": ["team1"], "bob": ["team1"]}
 
 
+class TestRepairPolarisCatalogStorageEndpoint:
+    """Tests for POST /management/migrate/repair-polaris-catalog-storage."""
+
+    @pytest.fixture
+    def repair_state(self, mock_app_state):
+        mock_app_state.user_manager.list_resources = AsyncMock(
+            return_value=["alice", "bob"]
+        )
+        mock_app_state.group_manager.list_resources = AsyncMock(
+            return_value=["team1", "team1ro", "team2", "team2ro"]
+        )
+        mock_app_state.users_sql_warehouse_base = "s3a://cdm-lake/users-sql-warehouse"
+        mock_app_state.tenant_sql_warehouse_base = "s3a://cdm-lake/tenant-sql-warehouse"
+
+        def desired_properties(storage_location):
+            return {"default-base-location": storage_location}
+
+        def desired_storage(storage_location):
+            return {
+                "storageType": "S3",
+                "allowedLocations": [storage_location],
+                "endpoint": "https://s3.new",
+                "endpointInternal": "https://s3.new",
+                "pathStyleAccess": True,
+                "stsUnavailable": True,
+                "region": "us-east-1",
+            }
+
+        catalog_locations = {
+            "user_alice": "s3a://cdm-lake/users-sql-warehouse/alice/iceberg/",
+            "user_bob": "s3a://cdm-lake/users-sql-warehouse/bob/iceberg/",
+            "tenant_team1": "s3a://cdm-lake/tenant-sql-warehouse/team1/iceberg/",
+            "tenant_team2": "s3a://cdm-lake/tenant-sql-warehouse/team2/iceberg/",
+        }
+
+        async def get_catalog(catalog_name):
+            storage_location = catalog_locations[catalog_name]
+            return {
+                "catalog": {
+                    "name": catalog_name,
+                    "entityVersion": 7,
+                    "properties": desired_properties(storage_location),
+                    "storageConfigInfo": {
+                        **desired_storage(storage_location),
+                        "endpoint": "http://minio:9002",
+                        "endpointInternal": "http://minio:9002",
+                    },
+                }
+            }
+
+        mock_app_state.polaris_service.catalog_properties = MagicMock(
+            side_effect=desired_properties
+        )
+        mock_app_state.polaris_service.catalog_storage_config = MagicMock(
+            side_effect=desired_storage
+        )
+        mock_app_state.polaris_service.get_catalog = AsyncMock(side_effect=get_catalog)
+        mock_app_state.polaris_service.update_catalog_storage_config = AsyncMock()
+        return mock_app_state
+
+    @pytest.fixture
+    def repair_client(self, test_app, repair_state):
+        with patch("routes.management.get_app_state", return_value=repair_state):
+            yield TestClient(test_app, raise_server_exceptions=False)
+
+    def test_repair_storage_dry_run_reports_mismatches_without_update(
+        self, repair_client, repair_state
+    ):
+        response = repair_client.post(
+            "/management/migrate/repair-polaris-catalog-storage"
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["dry_run"] is True
+        assert data["catalogs_checked"] == 4
+        assert data["catalogs_needing_repair"] == 4
+        assert data["catalogs_repaired"] == 0
+        assert data["unchanged"] == []
+        assert data["errors"] == []
+        repair_state.polaris_service.update_catalog_storage_config.assert_not_called()
+
+        assert {c["catalog_name"] for c in data["changes"]} == {
+            "user_alice",
+            "user_bob",
+            "tenant_team1",
+            "tenant_team2",
+        }
+        for change in data["changes"]:
+            assert change["repaired"] is False
+            assert change["mismatched_fields"] == [
+                "storageConfigInfo.endpoint",
+                "storageConfigInfo.endpointInternal",
+            ]
+
+    def test_repair_storage_apply_updates_mismatched_catalogs(
+        self, repair_client, repair_state
+    ):
+        response = repair_client.post(
+            "/management/migrate/repair-polaris-catalog-storage",
+            json={"dry_run": False},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["dry_run"] is False
+        assert data["catalogs_needing_repair"] == 4
+        assert data["catalogs_repaired"] == 4
+        assert all(c["repaired"] is True for c in data["changes"])
+
+        update_calls = (
+            repair_state.polaris_service.update_catalog_storage_config.call_args_list
+        )
+        assert [c.args[0] for c in update_calls] == [
+            "user_alice",
+            "user_bob",
+            "tenant_team1",
+            "tenant_team2",
+        ]
+        assert all(c.kwargs["current_entity_version"] == 7 for c in update_calls)
+
+    def test_repair_storage_skips_unchanged_catalogs(self, repair_client, repair_state):
+        catalog_locations = {
+            "user_alice": "s3a://cdm-lake/users-sql-warehouse/alice/iceberg/",
+            "user_bob": "s3a://cdm-lake/users-sql-warehouse/bob/iceberg/",
+            "tenant_team1": "s3a://cdm-lake/tenant-sql-warehouse/team1/iceberg/",
+            "tenant_team2": "s3a://cdm-lake/tenant-sql-warehouse/team2/iceberg/",
+        }
+
+        async def get_catalog(catalog_name):
+            storage_location = catalog_locations[catalog_name]
+            return {
+                "catalog": {
+                    "name": catalog_name,
+                    "entityVersion": 7,
+                    "properties": repair_state.polaris_service.catalog_properties(
+                        storage_location
+                    ),
+                    "storageConfigInfo": (
+                        repair_state.polaris_service.catalog_storage_config(
+                            storage_location
+                        )
+                    ),
+                }
+            }
+
+        repair_state.polaris_service.get_catalog.side_effect = get_catalog
+
+        response = repair_client.post(
+            "/management/migrate/repair-polaris-catalog-storage",
+            json={"dry_run": False},
+        )
+
+        data = response.json()
+        assert data["catalogs_checked"] == 4
+        assert data["catalogs_needing_repair"] == 0
+        assert data["catalogs_repaired"] == 0
+        assert data["changes"] == []
+        assert data["unchanged"] == [
+            "tenant_team1",
+            "tenant_team2",
+            "user_alice",
+            "user_bob",
+        ]
+        repair_state.polaris_service.update_catalog_storage_config.assert_not_called()
+
+    def test_repair_storage_excludes_users_and_groups(
+        self, repair_client, repair_state
+    ):
+        response = repair_client.post(
+            "/management/migrate/repair-polaris-catalog-storage",
+            json={
+                "dry_run": False,
+                "exclude_users": ["alice"],
+                "exclude_groups": ["team1"],
+            },
+        )
+
+        data = response.json()
+        assert data["users_skipped"] == ["alice"]
+        assert data["groups_skipped"] == ["team1"]
+        assert data["catalogs_checked"] == 2
+        update_calls = (
+            repair_state.polaris_service.update_catalog_storage_config.call_args_list
+        )
+        assert [c.args[0] for c in update_calls] == ["user_bob", "tenant_team2"]
+
+    def test_repair_storage_include_filters_targets(self, repair_client, repair_state):
+        response = repair_client.post(
+            "/management/migrate/repair-polaris-catalog-storage",
+            json={"include_users": ["alice"], "include_groups": ["team2"]},
+        )
+
+        data = response.json()
+        assert data["catalogs_checked"] == 2
+        assert [c["catalog_name"] for c in data["changes"]] == [
+            "user_alice",
+            "tenant_team2",
+        ]
+
+    def test_repair_storage_errors_continue(self, repair_client, repair_state):
+        original_get_catalog = repair_state.polaris_service.get_catalog.side_effect
+
+        async def get_catalog(catalog_name):
+            if catalog_name == "user_alice":
+                raise Exception("catalog missing")
+            return await original_get_catalog(catalog_name)
+
+        repair_state.polaris_service.get_catalog.side_effect = get_catalog
+
+        response = repair_client.post(
+            "/management/migrate/repair-polaris-catalog-storage",
+            json={"dry_run": False},
+        )
+
+        data = response.json()
+        assert data["catalogs_checked"] == 3
+        assert data["catalogs_needing_repair"] == 3
+        assert data["catalogs_repaired"] == 3
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["resource_type"] == "user_catalog_storage"
+        assert data["errors"][0]["resource_name"] == "alice"
+        assert "catalog missing" in data["errors"][0]["error"]
+
+
 class TestReconcileTrinoCatalogsEndpoint:
     """Tests for POST /management/migrate/reconcile-trino-catalogs."""
 
@@ -1646,6 +1873,35 @@ class TestMigrationResponseModels:
         assert response.users_skipped == ["sysuser"]
         assert response.groups_skipped == ["legacy"]
         assert len(response.errors) == 1
+
+    def test_repair_polaris_catalog_storage_response_model(self):
+        change = RepairPolarisCatalogStorageChange(
+            catalog_name="tenant_team1",
+            resource_type="group",
+            resource_name="team1",
+            storage_location="s3a://bucket/tenant/team1/iceberg/",
+            mismatched_fields=["storageConfigInfo.endpoint"],
+            current_properties={"default-base-location": "s3a://bucket/old/"},
+            desired_properties={"default-base-location": "s3a://bucket/new/"},
+            current_storage_config={"endpoint": "http://minio:9002"},
+            desired_storage_config={"endpoint": "https://s3.new"},
+            repaired=True,
+        )
+        response = RepairPolarisCatalogStorageResponse(
+            dry_run=False,
+            catalogs_checked=1,
+            catalogs_needing_repair=1,
+            catalogs_repaired=1,
+            changes=[change],
+            unchanged=[],
+            users_skipped=[],
+            groups_skipped=[],
+            errors=[],
+            performed_by="admin",
+            timestamp=datetime.now(),
+        )
+        assert response.catalogs_repaired == 1
+        assert response.changes[0].catalog_name == "tenant_team1"
 
 
 class TestRotateAllCredentialsEndpoint:
