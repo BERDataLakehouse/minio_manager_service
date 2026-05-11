@@ -1,11 +1,17 @@
-"""Automatic bootstrap helpers for Polaris-backed Trino tenant catalogs."""
+"""Automatic bootstrap helpers for Polaris-backed Trino tenant catalogs.
+
+The global Trino service identity is pre-provisioned by an admin. This
+helper makes sure the ``globalusers`` catalog is registered in the Trino
+coordinator on first user credential fetch — useful for a freshly restarted
+stack where no admin has explicitly called the bulk reconcile endpoint yet.
+"""
 
 import logging
 import time
 
 from minio.managers.user_manager import GLOBAL_USER_GROUP
 from service.app_state import AppState
-from trino_integration.service_identity import ensure_tenant_trino_service
+from trino_integration.service_identity import grant_global_trino_access
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +40,15 @@ async def ensure_globalusers_trino_catalog(app_state: AppState) -> str | None:
     """Ensure the default ``globalusers`` tenant is visible in Trino.
 
     ``globalusers`` is special: it is auto-created by user bootstrap rather
-    than by the admin create-group route. The normal create-group route already
-    provisions Trino, but this path needs an explicit repair step so a clean
-    environment does not require the bulk backfill notebook.
+    than by the admin create-group route. The create-group route grants the
+    global Trino identity access and reconciles automatically, but on a
+    cold-start path (Trino coordinator restart, fresh local stack) the
+    catalog may be missing even though Polaris artifacts exist. This helper
+    re-grants the global identity (idempotent) and re-reconciles in that
+    case so a user's first credential fetch repairs the catalog.
 
-    Returns the Trino catalog alias when reconciliation was performed, otherwise
-    ``None``.
+    Returns the Trino catalog alias when reconciliation was performed,
+    otherwise ``None``.
     """
     if _globalusers_trino_bootstrap_cached():
         return None
@@ -54,15 +63,7 @@ async def ensure_globalusers_trino_catalog(app_state: AppState) -> str | None:
             _mark_globalusers_trino_bootstrap_checked()
             return None
 
-        await ensure_tenant_trino_service(
-            group_name=GLOBAL_USER_GROUP,
-            user_manager=app_state.user_manager,
-            group_manager=app_state.group_manager,
-            polaris_group_manager=app_state.polaris_group_manager,
-            polaris_user_manager=app_state.polaris_user_manager,
-            s3_credential_store=app_state.s3_credential_store,
-            polaris_credential_store=app_state.polaris_credential_store,
-        )
+        await grant_global_trino_access(GLOBAL_USER_GROUP, app_state=app_state)
         alias = await app_state.trino_catalog_reconciler.reconcile_tenant(
             GLOBAL_USER_GROUP
         )

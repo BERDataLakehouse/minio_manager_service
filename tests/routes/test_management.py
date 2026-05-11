@@ -157,10 +157,13 @@ def mock_app_state():
     app_state.policy_manager.delete_resource = AsyncMock(return_value=True)
 
     # Mock Polaris stack — managers are the orchestration layer the routes
-    # call directly. PolarisService is now also on AppState because the
-    # service-identity teardown calls delete_principal directly on it.
+    # call directly. PolarisService is also on AppState because the global
+    # Trino grant/revoke helpers call grant_principal_role_to_principal and
+    # revoke_principal_role_from_principal directly on it.
     app_state.polaris_service = AsyncMock()
     app_state.polaris_service.delete_principal = AsyncMock()
+    app_state.polaris_service.grant_principal_role_to_principal = AsyncMock()
+    app_state.polaris_service.revoke_principal_role_from_principal = AsyncMock()
     app_state.polaris_user_manager = AsyncMock()
     app_state.polaris_user_manager.create_user = AsyncMock()
     app_state.polaris_user_manager.delete_user = AsyncMock()
@@ -174,21 +177,11 @@ def mock_app_state():
     app_state.polaris_group_manager.add_user_to_group = AsyncMock()
     app_state.polaris_group_manager.remove_user_from_group = AsyncMock()
 
-    # Mock per-tenant Trino service-identity dependencies. The service identity
-    # orchestration also calls user_manager.create_service_user /
-    # delete_service_user and group_manager.add/remove_user_to_group on the
-    # IAM side; those mocks already exist above.
-    app_state.user_manager.create_service_user = AsyncMock(
-        return_value=UserModel(
-            username="trino-newgroup-svc",
-            s3_access_key="trino-newgroup-svc",
-            s3_secret_key="svc-secret",
-            home_paths=[],
-            groups=[],
-            total_policies=0,
-        )
-    )
-    app_state.user_manager.delete_service_user = AsyncMock()
+    # Global Trino service identity. The grant/revoke helpers read these
+    # off AppState; tests where the env was unset would expose this as the
+    # empty string instead.
+    app_state.trino_global_iam_username = "trino_svc"
+    app_state.trino_global_polaris_principal = "trino_svc"
     app_state.group_manager.add_user_to_group = AsyncMock()
     app_state.group_manager.remove_user_from_group = AsyncMock()
     app_state.s3_credential_store = AsyncMock()
@@ -406,7 +399,8 @@ class TestCreateUserEndpoint:
     def test_create_user_reconciles_missing_globalusers_trino_catalog(
         self, client, mock_app_state
     ):
-        """Admin user creation also repairs the auto-created default tenant."""
+        """Admin user creation also repairs the auto-created default tenant
+        by re-granting the global Trino identity access and reconciling."""
         mock_app_state.group_manager.resource_exists.return_value = True
         mock_app_state.trino_catalog_reconciler.tenant_catalog_exists.return_value = (
             False
@@ -415,15 +409,16 @@ class TestCreateUserEndpoint:
         response = client.post("/management/users/newuser")
 
         assert response.status_code == 201
-        mock_app_state.user_manager.create_service_user.assert_called_once_with(
-            "trino-globalusers-svc"
-        )
+        # IAM-side grant: global user added to globalusersro
         mock_app_state.group_manager.add_user_to_group.assert_any_call(
-            "trino-globalusers-svc", "globalusersro"
+            mock_app_state.trino_global_iam_username, "globalusersro"
         )
-        mock_app_state.polaris_group_manager.add_user_to_group.assert_any_call(
-            "trino-globalusers-svc", "globalusersro"
-        )
+        # Polaris-side grant: global principal granted reader role
+        polaris_grant = mock_app_state.polaris_service.grant_principal_role_to_principal
+        assert polaris_grant.called
+        kwargs = polaris_grant.call_args.kwargs
+        assert kwargs["principal"] == mock_app_state.trino_global_polaris_principal
+        # CREATE CATALOG issued
         mock_app_state.trino_catalog_reconciler.reconcile_tenant.assert_any_call(
             "globalusers"
         )
@@ -723,18 +718,6 @@ class TestCreateGroupEndpoint:
         assert data["group_name"] == "newgroup"
         assert data["operation"] == "create"
 
-    def test_create_group_rejects_tenant_name_too_long_for_trino(
-        self, client, mock_app_state
-    ):
-        """Validation happens before any MinIO/Polaris/Trino side effects."""
-        response = client.post(f"/management/groups/{'a' * 55}")
-
-        assert response.status_code == 400
-        mock_app_state.group_manager.create_group.assert_not_called()
-        mock_app_state.polaris_group_manager.create_group.assert_not_called()
-        mock_app_state.user_manager.create_service_user.assert_not_called()
-        mock_app_state.trino_catalog_reconciler.reconcile_tenant.assert_not_called()
-
     def test_create_group_rejects_read_only_suffix_before_side_effects(
         self, client, mock_app_state
     ):
@@ -798,17 +781,16 @@ class TestDeleteGroupEndpoint:
 
         assert response.status_code == 400  # GroupOperationError maps to 400
 
-    def test_delete_group_continues_when_trino_service_identity_teardown_fails(
+    def test_delete_group_continues_when_global_trino_revoke_fails(
         self, client, mock_app_state
     ):
-        """Trino service identity cleanup is best-effort during tenant deletion."""
-        with patch(
-            "routes.management.deprovision_tenant_trino_service",
-            new_callable=AsyncMock,
-        ) as mock_deprovision:
-            mock_deprovision.side_effect = Exception("legacy Trino identity mismatch")
+        """Global Trino access revoke is best-effort during tenant deletion —
+        a failure must not block the rest of the teardown."""
+        mock_app_state.polaris_service.revoke_principal_role_from_principal.side_effect = Exception(
+            "polaris transient"
+        )
 
-            response = client.delete("/management/groups/group1")
+        response = client.delete("/management/groups/group1")
 
         assert response.status_code == 200
         mock_app_state.polaris_group_manager.delete_group.assert_called_once_with(
@@ -1144,23 +1126,6 @@ class TestRegeneratePoliciesEndpoint:
         assert calls[0].args == ("alice",)
         assert calls[1].args == ("bob",)
 
-    def test_regenerate_policies_skips_trino_service_users(
-        self, migration_client, migration_app_state
-    ):
-        migration_app_state.user_manager.list_resources.return_value = [
-            "alice",
-            "trino-team1-svc",
-            "bob",
-        ]
-
-        response = migration_client.post("/management/migrate/regenerate-policies")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["users_updated"] == 2
-        calls = migration_app_state.policy_manager.regenerate_user_home_policy.call_args_list
-        assert [c.args[0] for c in calls] == ["alice", "bob"]
-
     def test_regenerate_policies_calls_group_rw_and_ro(
         self, migration_client, migration_app_state
     ):
@@ -1320,28 +1285,6 @@ class TestEnsurePolarisResourcesEndpoint:
 
         polaris_user_manager = polaris_migration_state.polaris_user_manager
         create_calls = polaris_user_manager.create_user.call_args_list
-        assert [c.args[0] for c in create_calls] == ["alice", "bob"]
-
-    def test_ensure_polaris_skips_trino_service_users(
-        self, polaris_migration_client, polaris_migration_state
-    ):
-        polaris_migration_state.user_manager.list_resources.return_value = [
-            "alice",
-            "trino-team1-svc",
-            "bob",
-        ]
-
-        response = polaris_migration_client.post(
-            "/management/migrate/ensure-polaris-resources"
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["users_provisioned"] == 2
-        assert data["users_skipped"] == ["trino-team1-svc"]
-        create_calls = (
-            polaris_migration_state.polaris_user_manager.create_user.call_args_list
-        )
         assert [c.args[0] for c in create_calls] == ["alice", "bob"]
 
     def test_ensure_polaris_mirrors_existing_group_memberships(
@@ -1687,30 +1630,6 @@ class TestRepairPolarisCatalogStorageEndpoint:
         ]
         assert all(c.kwargs["current_entity_version"] == 7 for c in update_calls)
 
-    def test_repair_storage_skips_trino_service_users(
-        self, repair_client, repair_state
-    ):
-        repair_state.user_manager.list_resources.return_value = [
-            "alice",
-            "trino-team1-svc",
-            "bob",
-        ]
-
-        response = repair_client.post(
-            "/management/migrate/repair-polaris-catalog-storage"
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["catalogs_checked"] == 4
-        assert data["users_skipped"] == ["trino-team1-svc"]
-        assert {c["catalog_name"] for c in data["changes"]} == {
-            "user_alice",
-            "user_bob",
-            "tenant_team1",
-            "tenant_team2",
-        }
-
     def test_repair_storage_skips_unchanged_catalogs(self, repair_client, repair_state):
         catalog_locations = {
             "user_alice": "s3a://cdm-lake/users-sql-warehouse/alice/iceberg/",
@@ -1873,7 +1792,7 @@ class TestReconcileTrinoCatalogsEndpoint:
         ):
             yield TestClient(test_app, raise_server_exceptions=False)
 
-    def test_reconcile_trino_catalogs_ensures_identity_then_reconciles(
+    def test_reconcile_trino_catalogs_grants_global_access_then_reconciles(
         self, trino_migration_client, trino_migration_state
     ):
         response = trino_migration_client.post(
@@ -1885,40 +1804,17 @@ class TestReconcileTrinoCatalogsEndpoint:
         assert data["service_identities"] == ["team1", "team2"]
         assert data["reconciled"] == ["team1", "team2"]
         assert data["errors"] == []
+        # Global IAM user added to each {group}ro
         trino_migration_state.group_manager.add_user_to_group.assert_any_call(
-            "trino-team1-svc", "team1ro"
+            trino_migration_state.trino_global_iam_username, "team1ro"
         )
-        trino_migration_state.polaris_group_manager.add_user_to_group.assert_any_call(
-            "trino-team1-svc", "team1ro"
-        )
+        # Global Polaris principal granted reader role on each tenant catalog
+        grant = trino_migration_state.polaris_service.grant_principal_role_to_principal
+        assert grant.called
+        # Reconcile fired per tenant
         trino_migration_state.trino_catalog_reconciler.reconcile_tenant.assert_any_call(
             "team1"
         )
-
-    def test_reconcile_trino_catalogs_missing_credentials_are_provisioned(
-        self, trino_migration_client, trino_migration_state
-    ):
-        trino_migration_state.s3_credential_store.get_credentials = AsyncMock(
-            return_value=None
-        )
-        trino_migration_state.polaris_credential_store.get_credentials = AsyncMock(
-            return_value=None
-        )
-
-        response = trino_migration_client.post(
-            "/management/migrate/reconcile-trino-catalogs"
-        )
-
-        assert response.status_code == 200
-        assert response.json()["errors"] == []
-        trino_migration_state.user_manager.create_service_user.assert_any_call(
-            "trino-team1-svc"
-        )
-        trino_migration_state.polaris_user_manager.reset_credentials.assert_any_call(
-            "trino-team1-svc"
-        )
-        trino_migration_state.s3_credential_store.store_credentials.assert_called()
-        trino_migration_state.polaris_credential_store.store_credentials.assert_called()
 
     def test_reconcile_trino_catalogs_excludes_groups(
         self, trino_migration_client, trino_migration_state
@@ -1936,11 +1832,13 @@ class TestReconcileTrinoCatalogsEndpoint:
             "team2"
         )
 
-    def test_reconcile_trino_catalogs_identity_error_skips_reconcile(
+    def test_reconcile_trino_catalogs_grant_error_skips_reconcile(
         self, trino_migration_client, trino_migration_state
     ):
-        trino_migration_state.s3_credential_store.get_credentials = AsyncMock(
-            side_effect=Exception("credential DB unavailable")
+        # Polaris-side grant errors mid-batch; reconcile must skip for that
+        # tenant and continue for the rest.
+        trino_migration_state.polaris_service.grant_principal_role_to_principal = (
+            AsyncMock(side_effect=Exception("polaris transient"))
         )
 
         response = trino_migration_client.post(
@@ -1950,32 +1848,7 @@ class TestReconcileTrinoCatalogsEndpoint:
         data = response.json()
         assert data["reconciled"] == []
         assert len(data["errors"]) == 2
-        assert data["errors"][0]["resource_type"] == "trino_service_identity"
-        trino_migration_state.trino_catalog_reconciler.reconcile_tenant.assert_not_called()
-
-    def test_reconcile_trino_catalogs_reports_invalid_tenant_names(
-        self, trino_migration_client, trino_migration_state
-    ):
-        bad_group = "a" * 55
-        trino_migration_state.group_manager.list_resources.return_value = [
-            bad_group,
-            f"{bad_group}ro",
-        ]
-
-        response = trino_migration_client.post(
-            "/management/migrate/reconcile-trino-catalogs"
-        )
-
-        data = response.json()
-        assert data["reconciled"] == []
-        assert data["errors"] == [
-            {
-                "resource_type": "trino_service_identity",
-                "resource_name": bad_group,
-                "error": data["errors"][0]["error"],
-            }
-        ]
-        assert "at most" in data["errors"][0]["error"]
+        assert data["errors"][0]["resource_type"] == "trino_global_access"
         trino_migration_state.trino_catalog_reconciler.reconcile_tenant.assert_not_called()
 
     def test_reconcile_trino_catalogs_reconcile_error_reports_catalog_failure(
@@ -2124,28 +1997,6 @@ class TestRotateAllCredentialsEndpoint:
         assert len(polaris_calls) == 2
         assert polaris_calls[0].args == ("alice",)
         assert polaris_calls[1].args == ("bob",)
-
-    def test_rotate_all_skips_trino_service_users(
-        self, rotate_client, rotate_app_state
-    ):
-        rotate_app_state.user_manager.list_resources.return_value = [
-            "alice",
-            "trino-team1-svc",
-            "bob",
-        ]
-
-        response = rotate_client.post("/management/credentials/rotate-all-credentials")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["users_rotated"] == 2
-        assert data["users_failed"] == 0
-        s3_calls = rotate_app_state.s3_credential_service.rotate.call_args_list
-        polaris_calls = (
-            rotate_app_state.polaris_credential_service.rotate.call_args_list
-        )
-        assert [c.args[0] for c in s3_calls] == ["alice", "bob"]
-        assert [c.args[0] for c in polaris_calls] == ["alice", "bob"]
 
     def test_rotate_all_s3_error_continues(self, rotate_client, rotate_app_state):
         """S3 failure on one user doesn't block Polaris on that user or other users.

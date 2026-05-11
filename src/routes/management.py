@@ -29,24 +29,14 @@ from service.exceptions import (
 )
 from trino_integration.bootstrap import ensure_globalusers_trino_catalog
 from trino_integration.service_identity import (
-    deprovision_tenant_trino_service,
-    ensure_tenant_trino_service,
-    is_trino_service_user,
-    provision_tenant_trino_service,
+    grant_global_trino_access,
+    revoke_global_trino_access,
     validate_trino_tenant_name,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/management", tags=["management"])
-
-
-def _human_usernames(usernames: list[str]) -> list[str]:
-    return [u for u in usernames if not is_trino_service_user(u)]
-
-
-def _trino_service_usernames(usernames: list[str]) -> list[str]:
-    return sorted(u for u in usernames if is_trino_service_user(u))
 
 
 # ===== RESPONSE MODELS =====
@@ -536,23 +526,18 @@ async def create_group(
         group_name=group_name, creator=authenticated_user.user
     )
 
-    # 3. Per-tenant Trino service identity (IAM user + Polaris principal,
-    # both named trino-{group}-svc, both added to {group}ro for read-only
-    # access). Credentials are persisted for the reconciler to read.
-    await provision_tenant_trino_service(
-        group_name=group_name,
-        user_manager=app_state.user_manager,
-        group_manager=app_state.group_manager,
-        polaris_group_manager=app_state.polaris_group_manager,
-        polaris_user_manager=app_state.polaris_user_manager,
-        s3_credential_store=app_state.s3_credential_store,
-        polaris_credential_store=app_state.polaris_credential_store,
-    )
+    # 3. Grant the global Trino service identity access to the new tenant:
+    # - global IAM user added to {group}ro (inherits GROUP_HOME_RO policy)
+    # - global Polaris principal granted {group}ro_member role
+    # Both steps are idempotent and skip silently when the corresponding env
+    # var is unset (test/local-dev convenience).
+    await grant_global_trino_access(group_name, app_state=app_state)
 
-    # 4. Reconcile the tenant Trino catalog: read the just-persisted service
-    # identity creds and issue CREATE CATALOG via the admin path. Failures
-    # bubble up as a 5xx so the API caller knows reconcile drift exists; the
-    # /management/migrate/reconcile-trino-catalogs endpoint can recover it.
+    # 4. Reconcile the tenant Trino catalog: issue CREATE CATALOG via the
+    # admin path using the global service-identity creds from env vars.
+    # Failures bubble up as 5xx so the API caller knows reconcile drift
+    # exists; the /management/migrate/reconcile-trino-catalogs endpoint can
+    # recover it.
     await app_state.trino_catalog_reconciler.reconcile_tenant(group_name)
 
     # Ensure tenant metadata row exists for this group
@@ -681,28 +666,12 @@ async def delete_group(
                 e,
             )
 
-        # Tear down the per-tenant Trino service identity (Polaris principal
-        # + IAM service user + persisted creds). Best-effort: each step inside
-        # tolerates already-gone resources. Has to run before
-        # polaris_group_manager.delete_group so the principal still exists when
-        # we try to delete it.
-        try:
-            await deprovision_tenant_trino_service(
-                group_name=group_name,
-                user_manager=app_state.user_manager,
-                group_manager=app_state.group_manager,
-                polaris_group_manager=app_state.polaris_group_manager,
-                polaris_service=app_state.polaris_service,
-                s3_credential_store=app_state.s3_credential_store,
-                polaris_credential_store=app_state.polaris_credential_store,
-            )
-        except Exception as e:  # noqa: BLE001 — best-effort, log and continue
-            logger.warning(
-                "Failed to deprovision Trino service identity for group=%s: %s; "
-                "continuing teardown.",
-                group_name,
-                e,
-            )
+        # Revoke the global Trino service identity's access to this tenant
+        # (Polaris role binding + IAM group membership). Best-effort: each
+        # step tolerates already-gone resources. Has to run before
+        # polaris_group_manager.delete_group so the {group}ro_member
+        # principal role still exists when we try to revoke it.
+        await revoke_global_trino_access(group_name, app_state=app_state)
 
     # Polaris first — drop catalog + roles. No-op for *ro inputs.
     await app_state.polaris_group_manager.delete_group(group_name)
@@ -759,15 +728,9 @@ async def rotate_all_credentials(
     users_rotated = 0
 
     all_usernames = await app_state.user_manager.list_resources()
-    skipped_service_users = _trino_service_usernames(all_usernames)
-    target_usernames = _human_usernames(all_usernames)
-    logger.info(
-        "Rotating credentials for %d users (skipping %d Trino service identities)",
-        len(target_usernames),
-        len(skipped_service_users),
-    )
+    logger.info(f"Rotating credentials for {len(all_usernames)} users")
 
-    for username in target_usernames:
+    for username in all_usernames:
         # Track each backend independently so a Polaris failure doesn't
         # mask a successful S3 rotation (or vice versa). Both backends
         # are attempted for every user even if the first fails.
@@ -801,7 +764,7 @@ async def rotate_all_credentials(
         if s3_ok and polaris_ok:
             users_rotated += 1
 
-    users_failed = len(target_usernames) - users_rotated
+    users_failed = len(all_usernames) - users_rotated
 
     logger.info(
         f"Admin {authenticated_user.user} rotated credentials: "
@@ -837,9 +800,8 @@ class RegeneratePoliciesResponse(BaseModel):
 class EnsurePolarisRequest(BaseModel):
     """Request model for bulk Polaris resource provisioning.
 
-    Operators can supply exclusion lists to skip system accounts or groups
-    that should not be backfilled into Polaris. Trino service identities are
-    skipped automatically.
+    Operators can supply exclusion lists to skip system / service accounts
+    or groups that should not be backfilled into Polaris.
     """
 
     model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
@@ -909,10 +871,7 @@ class EnsurePolarisResponse(BaseModel):
         list[str],
         Field(
             default_factory=list,
-            description=(
-                "Present usernames skipped because they were excluded by the "
-                "caller or are managed Trino service identities"
-            ),
+            description=("Usernames excluded by the caller that exist in the system"),
         ),
     ]
     groups_skipped: Annotated[
@@ -1030,12 +989,7 @@ class RepairPolarisCatalogStorageResponse(BaseModel):
     unchanged: Annotated[list[str], Field(description="Catalogs already matching")]
     users_skipped: Annotated[
         list[str],
-        Field(
-            description=(
-                "Present users skipped by exclude_users or because they are "
-                "managed Trino service identities"
-            )
-        ),
+        Field(description=("Present users skipped by exclude_users")),
     ]
     groups_skipped: Annotated[
         list[str],
@@ -1073,15 +1027,9 @@ async def regenerate_all_policies(
 
     # Regenerate user HOME policies
     all_usernames = await app_state.user_manager.list_resources()
-    target_usernames = _human_usernames(all_usernames)
-    skipped_service_users = _trino_service_usernames(all_usernames)
-    logger.info(
-        "Regenerating HOME policies for %d users (skipping %d Trino service identities)",
-        len(target_usernames),
-        len(skipped_service_users),
-    )
+    logger.info(f"Regenerating HOME policies for {len(all_usernames)} users")
 
-    for username in target_usernames:
+    for username in all_usernames:
         try:
             await app_state.policy_manager.regenerate_user_home_policy(username)
             users_updated += 1
@@ -1158,9 +1106,8 @@ async def regenerate_all_policies(
         "Ensure all users have Polaris principals, personal catalogs, and roles. "
         "Ensure all groups have tenant catalogs. Grant correct principal roles "
         "based on group memberships. All operations are idempotent. "
-        "Trino service identities are skipped automatically. Callers may pass "
-        "`exclude_users` / `exclude_groups` to skip other system accounts and "
-        "groups that should not be backfilled."
+        "Callers may pass `exclude_users` / `exclude_groups` to skip system or "
+        "service accounts and groups that should not be backfilled."
     ),
 )
 async def ensure_all_polaris_resources(
@@ -1217,16 +1164,11 @@ async def ensure_all_polaris_resources(
     # too so we don't grant a role on a catalog we deliberately didn't
     # provision in step 1.
     all_usernames = await app_state.user_manager.list_resources()
-    service_usernames = set(_trino_service_usernames(all_usernames))
-    target_usernames = [
-        u
-        for u in all_usernames
-        if u not in exclude_users and u not in service_usernames
-    ]
-    skipped_users = sorted((set(all_usernames) & exclude_users) | service_usernames)
+    target_usernames = [u for u in all_usernames if u not in exclude_users]
+    skipped_users = sorted(set(all_usernames) & exclude_users)
     logger.info(
         f"Ensuring Polaris resources for {len(target_usernames)} users "
-        f"(skipped {len(skipped_users)} excluded/service users)"
+        f"(skipped {len(skipped_users)} excluded users)"
     )
 
     for username in target_usernames:
@@ -1359,20 +1301,17 @@ async def repair_polaris_catalog_storage(
     all_group_names = await app_state.group_manager.list_resources()
     base_groups = [g for g in all_group_names if not g.endswith("ro")]
 
-    service_usernames = set(_trino_service_usernames(all_usernames))
     target_users = [
         u
         for u in all_usernames
-        if u not in exclude_users
-        and u not in service_usernames
-        and (not include_users or u in include_users)
+        if u not in exclude_users and (not include_users or u in include_users)
     ]
     target_groups = [
         g
         for g in base_groups
         if g not in exclude_groups and (not include_groups or g in include_groups)
     ]
-    skipped_users = sorted((set(all_usernames) & exclude_users) | service_usernames)
+    skipped_users = sorted(set(all_usernames) & exclude_users)
     skipped_groups = sorted(set(base_groups) & exclude_groups)
 
     logger.info(
@@ -1513,7 +1452,12 @@ class ReconcileTrinoCatalogsResponse(BaseModel):
         list[str],
         Field(
             default_factory=list,
-            description="Tenant aliases whose Trino service identities were ensured",
+            description=(
+                "Tenants where the global Trino service identity's access "
+                "was (re-)granted — i.e. the global IAM user added to "
+                "{group}ro and the global Polaris principal granted "
+                "{group}ro_member."
+            ),
         ),
     ]
     reconciled: Annotated[
@@ -1573,31 +1517,26 @@ async def reconcile_all_trino_catalogs(
         len(skipped),
     )
 
-    service_identities: list[str] = []
+    granted: list[str] = []
     reconciled: list[str] = []
     errors: list[MigrationError] = []
     for group_name in target_base_groups:
         try:
             group_name = validate_trino_tenant_name(group_name)
-            identity = await ensure_tenant_trino_service(
-                group_name=group_name,
-                user_manager=app_state.user_manager,
-                group_manager=app_state.group_manager,
-                polaris_group_manager=app_state.polaris_group_manager,
-                polaris_user_manager=app_state.polaris_user_manager,
-                s3_credential_store=app_state.s3_credential_store,
-                polaris_credential_store=app_state.polaris_credential_store,
-            )
-            service_identities.append(identity.tenant_alias)
+            # Idempotent re-grant of the global identity's access to this
+            # tenant. Skips the relevant side silently when the matching
+            # TRINO_GLOBAL_* env var is unset.
+            await grant_global_trino_access(group_name, app_state=app_state)
+            granted.append(group_name)
         except Exception as e:  # noqa: BLE001 — per-group best-effort
             logger.warning(
-                "Failed to ensure Trino service identity for group %s: %s",
+                "Failed to grant global Trino access for group %s: %s",
                 group_name,
                 e,
             )
             errors.append(
                 MigrationError(
-                    resource_type="trino_service_identity",
+                    resource_type="trino_global_access",
                     resource_name=group_name,
                     error=str(e),
                 )
@@ -1622,7 +1561,7 @@ async def reconcile_all_trino_catalogs(
             )
 
     return ReconcileTrinoCatalogsResponse(
-        service_identities=sorted(service_identities),
+        service_identities=sorted(granted),
         reconciled=sorted(reconciled),
         skipped=skipped,
         errors=errors,

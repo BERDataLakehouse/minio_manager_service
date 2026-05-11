@@ -127,6 +127,14 @@ def mock_app_state():
         return_value="globalusers"
     )
 
+    # Global Trino service identity. The bootstrap helper reads these
+    # off AppState; unset env values come through as the empty string.
+    app_state.trino_global_iam_username = "trino_svc"
+    app_state.trino_global_polaris_principal = "trino_svc"
+    app_state.polaris_service = AsyncMock()
+    app_state.polaris_service.grant_principal_role_to_principal = AsyncMock()
+    app_state.polaris_service.revoke_principal_role_from_principal = AsyncMock()
+
     return app_state
 
 
@@ -256,7 +264,8 @@ class TestGetCredentialsEndpoint:
     def test_get_credentials_reconciles_missing_globalusers_trino_catalog(
         self, client, mock_app_state
     ):
-        """The default tenant gets Trino-provisioned on clean bootstrap."""
+        """The default tenant gets Trino-provisioned on clean bootstrap by
+        re-granting the global identity and issuing CREATE CATALOG."""
         mock_app_state.group_manager.resource_exists.return_value = True
         mock_app_state.trino_catalog_reconciler.tenant_catalog_exists.return_value = (
             False
@@ -265,15 +274,18 @@ class TestGetCredentialsEndpoint:
         response = client.get("/credentials/")
 
         assert response.status_code == 200
-        mock_app_state.user_manager.create_service_user.assert_called_once_with(
-            "trino-globalusers-svc"
-        )
+        # Global IAM user added to globalusersro
         mock_app_state.group_manager.add_user_to_group.assert_any_call(
-            "trino-globalusers-svc", "globalusersro"
+            mock_app_state.trino_global_iam_username, "globalusersro"
         )
-        mock_app_state.polaris_group_manager.add_user_to_group.assert_any_call(
-            "trino-globalusers-svc", "globalusersro"
+        # Global Polaris principal granted the reader role
+        polaris_grant = mock_app_state.polaris_service.grant_principal_role_to_principal
+        assert polaris_grant.called
+        assert (
+            polaris_grant.call_args.kwargs["principal"]
+            == mock_app_state.trino_global_polaris_principal
         )
+        # CREATE CATALOG fired
         mock_app_state.trino_catalog_reconciler.reconcile_tenant.assert_awaited_once_with(
             "globalusers"
         )

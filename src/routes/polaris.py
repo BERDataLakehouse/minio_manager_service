@@ -28,7 +28,7 @@ from service import app_state
 from service.dependencies import auth, require_admin
 from service.kb_auth import AdminPermission, KBaseUser
 from trino_integration.service_identity import (
-    ensure_tenant_trino_service,
+    grant_global_trino_access,
     validate_trino_tenant_name,
 )
 
@@ -240,15 +240,10 @@ async def reconcile_tenant_trino_catalog(
 ) -> ReconcileTrinoCatalogResponse:
     """Force-reconcile one tenant's Trino catalog. Admin only."""
     tenant_name = validate_trino_tenant_name(tenant_name)
-    await ensure_tenant_trino_service(
-        group_name=tenant_name,
-        user_manager=app_state_obj.user_manager,
-        group_manager=app_state_obj.group_manager,
-        polaris_group_manager=app_state_obj.polaris_group_manager,
-        polaris_user_manager=app_state_obj.polaris_user_manager,
-        s3_credential_store=app_state_obj.s3_credential_store,
-        polaris_credential_store=app_state_obj.polaris_credential_store,
-    )
+    # Re-grant the global service identity's access to the tenant first
+    # (idempotent). The reconcile then issues CREATE CATALOG with the
+    # global creds from env.
+    await grant_global_trino_access(tenant_name, app_state=app_state_obj)
     alias = await app_state_obj.trino_catalog_reconciler.reconcile_tenant(tenant_name)
     return ReconcileTrinoCatalogResponse(
         tenant_name=tenant_name,

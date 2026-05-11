@@ -5,16 +5,18 @@ exposed as a coordinator-global Trino catalog so users can issue
 ``SELECT * FROM {tenant}.{namespace}.{table}`` queries through Trino. This
 module owns that lifecycle.
 
-Architecture (see docs/trino-tenant-catalog-tech-spec.md):
+Architecture:
 
-* Per-tenant service identity is provisioned by
-  :mod:`trino_integration.service_identity` (Phase 1) — IAM user + Polaris principal,
-  both named ``trino-{group}-svc``, both members of ``{group}ro``. Their
-  credentials are persisted in the s3 + polaris credential stores.
-* The reconciler reads those credentials and issues ``CREATE CATALOG`` to
-  the Trino coordinator as the configured admin identity (default
-  ``platform_admin``), authenticated via the ``trino_admin_token`` extra
-  credential. The plugin's admin path (Phase 2) authorizes the call.
+* A **single global** Polaris service principal + IAM service user back every
+  tenant catalog. Both are pre-provisioned by an admin once per environment;
+  their credentials live in env vars (``TRINO_GLOBAL_*``). MMS grants the
+  identity access to each new tenant catalog at tenant-create time (see
+  ``trino_integration.service_identity.grant_global_trino_access``).
+* The reconciler reads those global credentials at construction time and
+  issues ``CREATE CATALOG`` to the Trino coordinator as the configured
+  admin identity (default ``platform_admin``), authenticated via the
+  ``trino_admin_token`` extra credential. The Trino-side access-control
+  plugin's admin path authorizes the call.
 * Drops use the same admin path, called from the tenant-deletion flow.
 
 The Trino dbapi is synchronous; we wrap calls in ``asyncio.to_thread`` to
@@ -31,11 +33,8 @@ from typing import Iterable
 
 import trino
 
-from credentials.polaris_store import PolarisCredentialStore
-from credentials.s3_store import S3CredentialStore
 from service.exceptions import PolarisOperationError
 from trino_integration.service_identity import (
-    service_user_name,
     tenant_alias,
     tenant_warehouse_name,
     validate_trino_tenant_name,
@@ -51,8 +50,9 @@ ADMIN_TOKEN_KEY = "trino_admin_token"
 _TENANT_ALIAS_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,62}")
 
 # SQL allow-list. The values we splice into CREATE CATALOG come from MMS env
-# vars and credential stores; we still validate every key + escape every
-# value to defend against accidental injection from a corrupted store.
+# vars (TRINO_GLOBAL_* and POLARIS_CATALOG_URI / MINIO_ENDPOINT); we still
+# validate every key + escape every value to defend against accidental
+# injection from a corrupted env value.
 _ALLOWED_PROPERTY_KEYS = frozenset(
     {
         "iceberg.catalog.type",
@@ -187,18 +187,17 @@ class TrinoCatalogReconciler:
     def __init__(
         self,
         *,
-        s3_credential_store: S3CredentialStore,
-        polaris_credential_store: PolarisCredentialStore,
         trino_host: str | None = None,
         trino_port: int | None = None,
         trino_admin_username: str | None = None,
         trino_admin_token: str | None = None,
         polaris_catalog_uri: str | None = None,
         s3_endpoint: str | None = None,
+        global_s3_access_key: str | None = None,
+        global_s3_secret_key: str | None = None,
+        global_polaris_client_id: str | None = None,
+        global_polaris_client_secret: str | None = None,
     ) -> None:
-        self._s3_credential_store = s3_credential_store
-        self._polaris_credential_store = polaris_credential_store
-
         self._trino_host = trino_host or os.getenv("TRINO_HOST", "trino")
         self._trino_port = int(
             trino_port if trino_port is not None else os.getenv("TRINO_PORT", "8080")
@@ -213,12 +212,53 @@ class TrinoCatalogReconciler:
         )
         self._s3_endpoint = s3_endpoint or os.getenv("MINIO_ENDPOINT", "")
 
+        # Global service identity credentials: one Polaris principal + one
+        # IAM user shared across all tenant catalogs, pre-provisioned by an
+        # admin. The reconciler never mints these — it just splices them
+        # into the CREATE CATALOG statement for every tenant.
+        self._global_s3_access_key = global_s3_access_key or os.getenv(
+            "TRINO_GLOBAL_S3_ACCESS_KEY", ""
+        )
+        self._global_s3_secret_key = global_s3_secret_key or os.getenv(
+            "TRINO_GLOBAL_S3_SECRET_KEY", ""
+        )
+        self._global_polaris_client_id = global_polaris_client_id or os.getenv(
+            "TRINO_GLOBAL_POLARIS_CLIENT_ID", ""
+        )
+        self._global_polaris_client_secret = global_polaris_client_secret or os.getenv(
+            "TRINO_GLOBAL_POLARIS_CLIENT_SECRET", ""
+        )
+
     def _require_admin_token(self) -> None:
         if not self._admin_token:
             raise PolarisOperationError(
                 "TRINO_ADMIN_TOKEN is not configured; the Trino reconciler "
                 "cannot issue CREATE/DROP CATALOG. Set the same value in "
                 "the MMS env and in trino-config.yaml admin.shared-secret."
+            )
+
+    def _require_global_credentials(self) -> None:
+        """Fail loudly when the global service identity credentials are unset.
+
+        Reconciliation requires both the global Polaris client_id/secret
+        (spliced into ``iceberg.rest-catalog.oauth2.credential``) and the
+        global IAM access keys (spliced into ``s3.aws-access-key`` /
+        ``s3.aws-secret-key``). Missing any of them means tenant data reads
+        would fail at query time, so we refuse to write a broken catalog.
+        """
+        missing = []
+        if not self._global_polaris_client_id:
+            missing.append("TRINO_GLOBAL_POLARIS_CLIENT_ID")
+        if not self._global_polaris_client_secret:
+            missing.append("TRINO_GLOBAL_POLARIS_CLIENT_SECRET")
+        if not self._global_s3_access_key:
+            missing.append("TRINO_GLOBAL_S3_ACCESS_KEY")
+        if not self._global_s3_secret_key:
+            missing.append("TRINO_GLOBAL_S3_SECRET_KEY")
+        if missing:
+            raise PolarisOperationError(
+                "Global Trino service identity is not configured. Set the "
+                f"following env vars on MMS: {', '.join(missing)}."
             )
 
     def _connect(self) -> trino.dbapi.Connection:
@@ -262,9 +302,9 @@ class TrinoCatalogReconciler:
         return await asyncio.to_thread(_run)
 
     async def reconcile_tenant(self, group_name: str) -> str:
-        """Recreate the Trino catalog for ``group_name`` from persisted creds.
+        """Recreate the Trino catalog for ``group_name`` from global creds.
 
-        Idempotent. Drop-then-create semantics so a rotated service
+        Idempotent. Drop-then-create semantics so a rotated global service
         principal credential always replaces a stale one in the
         coordinator. Mirrors the ``force=True`` behavior of
         ``setup_trino_session._create_dynamic_catalog`` for personal
@@ -281,6 +321,7 @@ class TrinoCatalogReconciler:
                 credentials are missing, or Trino rejects the call.
         """
         self._require_admin_token()
+        self._require_global_credentials()
         if not self._polaris_catalog_uri:
             raise PolarisOperationError(
                 "POLARIS_CATALOG_URI is not configured; cannot build "
@@ -293,27 +334,11 @@ class TrinoCatalogReconciler:
             )
 
         group_name = validate_trino_tenant_name(group_name)
-        svc_user = service_user_name(group_name)
         alias = tenant_alias(group_name)
         warehouse = tenant_warehouse_name(group_name)
 
-        s3_creds = await self._s3_credential_store.get_credentials(svc_user)
-        if s3_creds is None:
-            raise PolarisOperationError(
-                f"S3 credentials for service identity '{svc_user}' are not "
-                f"in the credential store. Provision the service identity "
-                f"first via PolarisService + service_identity orchestration."
-            )
-        s3_access_key, s3_secret_key = s3_creds
-
-        polaris_record = await self._polaris_credential_store.get_credentials(svc_user)
-        if polaris_record is None:
-            raise PolarisOperationError(
-                f"Polaris credentials for service identity '{svc_user}' are "
-                f"not in the credential store."
-            )
         polaris_credential = (
-            f"{polaris_record.client_id}:{polaris_record.client_secret}"
+            f"{self._global_polaris_client_id}:{self._global_polaris_client_secret}"
         )
 
         properties = build_iceberg_catalog_properties(
@@ -321,8 +346,8 @@ class TrinoCatalogReconciler:
             polaris_warehouse=warehouse,
             polaris_credential=polaris_credential,
             s3_endpoint=self._s3_endpoint,
-            s3_access_key=s3_access_key,
-            s3_secret_key=s3_secret_key,
+            s3_access_key=self._global_s3_access_key,
+            s3_secret_key=self._global_s3_secret_key,
         )
 
         create_sql = _render_create_catalog_sql(alias, properties)

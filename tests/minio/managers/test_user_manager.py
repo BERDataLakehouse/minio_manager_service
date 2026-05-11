@@ -513,44 +513,6 @@ class TestCreateUser:
         assert mock_minio_client.put_object.call_count >= 1
 
 
-class TestCreateServiceUser:
-    """Tests for minimal non-human service users."""
-
-    @pytest.mark.asyncio
-    async def test_create_service_user_sets_password_for_new_or_existing_user(
-        self, user_manager, mock_executor
-    ):
-        mock_executor._execute_command.return_value = MagicMock(success=True, stderr="")
-
-        result = await user_manager.create_service_user("trino-team1-svc")
-
-        assert result.username == "trino-team1-svc"
-        assert result.s3_access_key == "trino-team1-svc"
-        assert result.s3_secret_key is not None
-        cmd = mock_executor._execute_command.call_args.args[0]
-        assert cmd[:5] == [
-            "admin",
-            "user",
-            "add",
-            "minio_api",
-            "trino-team1-svc",
-        ]
-        assert cmd[5] == result.s3_secret_key
-
-    @pytest.mark.asyncio
-    async def test_create_service_user_raises_on_password_update_failure(
-        self, user_manager, mock_executor
-    ):
-        mock_executor._execute_command.return_value = MagicMock(
-            success=False, stderr="MinIO rejected password"
-        )
-
-        with pytest.raises(UserOperationError) as exc_info:
-            await user_manager.create_service_user("trino-team1-svc")
-
-        assert "Failed to create/update MinIO service user" in str(exc_info.value)
-
-
 # =============================================================================
 # Test: Get User
 # =============================================================================

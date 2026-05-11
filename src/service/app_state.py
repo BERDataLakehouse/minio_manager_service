@@ -54,6 +54,11 @@ class AppState(NamedTuple):
     s3_credential_service: S3CredentialService
     s3_credential_store: S3CredentialStore
     trino_catalog_reconciler: TrinoCatalogReconciler
+    # Global Trino service-identity names. Empty string when unset (test /
+    # local-dev convenience); grant_global_trino_access() skips the matching
+    # step silently rather than failing. Production must populate both.
+    trino_global_iam_username: str
+    trino_global_polaris_principal: str
     tenant_manager: TenantManager
     users_sql_warehouse_base: str
     tenant_sql_warehouse_base: str
@@ -204,17 +209,22 @@ async def build_app(app: FastAPI) -> None:
     )
     logger.info("S3 credential service initialized")
 
-    # Trino catalog reconciler. Uses persisted service-identity creds (per
-    # tenant) to issue CREATE/DROP CATALOG against Trino as the platform
-    # admin identity (default: platform_admin) authenticated via the
-    # trino_admin_token extra credential. Reads connection details from env.
+    # Trino catalog reconciler. Reads the global Polaris + IAM service
+    # identity creds from TRINO_GLOBAL_* env vars and issues CREATE/DROP
+    # CATALOG against Trino as the configured admin identity (default:
+    # platform_admin) authenticated via the trino_admin_token extra
+    # credential.
     trino_catalog_reconciler = TrinoCatalogReconciler(
-        s3_credential_store=s3_credential_store,
-        polaris_credential_store=polaris_credential_store,
         polaris_catalog_uri=polaris_uri,
         s3_endpoint=str(config.endpoint),
     )
-    logger.info("Trino catalog reconciler initialized")
+    trino_global_iam_username = os.getenv("TRINO_GLOBAL_IAM_USERNAME", "")
+    trino_global_polaris_principal = os.getenv("TRINO_GLOBAL_POLARIS_PRINCIPAL", "")
+    logger.info(
+        "Trino catalog reconciler initialized (global iam_user=%s, polaris_principal=%s)",
+        trino_global_iam_username or "(unset)",
+        trino_global_polaris_principal or "(unset)",
+    )
 
     # Initialize profile client and tenant manager
     profile_client = KBaseUserProfileClient(auth_url, pool=db_pool.pool)
@@ -246,6 +256,8 @@ async def build_app(app: FastAPI) -> None:
         s3_credential_service=s3_credential_service,
         s3_credential_store=s3_credential_store,
         trino_catalog_reconciler=trino_catalog_reconciler,
+        trino_global_iam_username=trino_global_iam_username,
+        trino_global_polaris_principal=trino_global_polaris_principal,
         tenant_manager=tenant_manager,
         users_sql_warehouse_base=users_sql_warehouse_base,
         tenant_sql_warehouse_base=tenant_sql_warehouse_base,

@@ -130,6 +130,12 @@ def mock_app_state_obj(mock_polaris_service):
     state.trino_catalog_reconciler = AsyncMock()
     state.trino_catalog_reconciler.reconcile_tenant = AsyncMock(return_value="team1")
 
+    # Global Trino service-identity env values. The grant/revoke helpers
+    # read these directly off AppState; tests where the env was unset
+    # would set them to empty strings.
+    state.trino_global_iam_username = "trino_svc"
+    state.trino_global_polaris_principal = "trino_svc"
+
     return state
 
 
@@ -579,7 +585,7 @@ class TestEffectiveAccess:
 class TestPolarisManagement:
     """Tests for admin Polaris maintenance endpoints."""
 
-    def test_single_tenant_reconcile_ensures_service_identity_first(
+    def test_single_tenant_reconcile_grants_global_access_then_reconciles(
         self, mock_app_state_obj, admin_user
     ):
         app = _create_test_app(mock_app_state_obj, admin_user)
@@ -589,32 +595,16 @@ class TestPolarisManagement:
 
         assert response.status_code == 200
         assert response.json() == {"tenant_name": "team1", "tenant_alias": "team1"}
-        mock_app_state_obj.group_manager.add_user_to_group.assert_awaited_once_with(
-            "trino-team1-svc", "team1ro"
+        # Global IAM user added to {group}ro
+        mock_app_state_obj.group_manager.add_user_to_group.assert_awaited_with(
+            "trino_svc", "team1ro"
         )
+        # Global Polaris principal granted the reader role
+        mock_app_state_obj.polaris_service.grant_principal_role_to_principal.assert_awaited()
+        # CREATE CATALOG fired
         mock_app_state_obj.trino_catalog_reconciler.reconcile_tenant.assert_awaited_once_with(
             "team1"
         )
-
-    def test_single_tenant_reconcile_backfills_missing_credentials(
-        self, mock_app_state_obj, admin_user
-    ):
-        mock_app_state_obj.s3_credential_store.get_credentials = AsyncMock(
-            return_value=None
-        )
-        mock_app_state_obj.polaris_credential_store.get_credentials = AsyncMock(
-            return_value=None
-        )
-        app = _create_test_app(mock_app_state_obj, admin_user)
-        client = TestClient(app, raise_server_exceptions=False)
-
-        response = client.post("/polaris/management/tenants/team1/reconcile-trino")
-
-        assert response.status_code == 200
-        mock_app_state_obj.user_manager.create_service_user.assert_awaited_once_with(
-            "trino-team1-svc"
-        )
-        mock_app_state_obj.polaris_credential_store.store_credentials.assert_awaited()
 
     def test_single_tenant_reconcile_rejects_invalid_tenant_name_before_side_effects(
         self, mock_app_state_obj, admin_user
@@ -625,19 +615,5 @@ class TestPolarisManagement:
         response = client.post("/polaris/management/tenants/Team1/reconcile-trino")
 
         assert response.status_code == 400
-        mock_app_state_obj.user_manager.create_service_user.assert_not_awaited()
-        mock_app_state_obj.trino_catalog_reconciler.reconcile_tenant.assert_not_awaited()
-
-    def test_single_tenant_reconcile_rejects_tenant_name_too_long_for_trino(
-        self, mock_app_state_obj, admin_user
-    ):
-        app = _create_test_app(mock_app_state_obj, admin_user)
-        client = TestClient(app, raise_server_exceptions=False)
-
-        response = client.post(
-            f"/polaris/management/tenants/{'a' * 55}/reconcile-trino"
-        )
-
-        assert response.status_code == 400
-        mock_app_state_obj.user_manager.create_service_user.assert_not_awaited()
+        mock_app_state_obj.group_manager.add_user_to_group.assert_not_awaited()
         mock_app_state_obj.trino_catalog_reconciler.reconcile_tenant.assert_not_awaited()
