@@ -25,7 +25,6 @@ from polaris.constants import (
     tenant_catalog_name,
 )
 from polaris.orchestration import ensure_user_polaris_state
-from s3.models.tenant import TenantSummaryResponse
 from service import app_state
 from service.dependencies import auth, require_admin
 from service.kb_auth import AdminPermission, KBaseUser
@@ -224,26 +223,6 @@ class ReconcileTrinoCatalogResponse(BaseModel):
 
     tenant_name: str
     tenant_alias: str
-
-
-@router.get(
-    "/management/tenants",
-    response_model=list[TenantSummaryResponse],
-    summary="List tenants for Polaris management",
-    description=(
-        "Admin tenant listing used by one-shot Polaris/Trino maintenance tooling. "
-        "Returns the same tenant summary shape as ``GET /tenants``."
-    ),
-)
-async def list_management_tenants(
-    request: Request,
-    app_state_obj: Annotated[app_state.AppState, Depends(app_state.get_app_state)],
-    authenticated_user: Annotated[KBaseUser, Depends(require_admin)],
-) -> list[TenantSummaryResponse]:
-    """List tenants with metadata for admin maintenance scripts."""
-    return await app_state_obj.tenant_manager.list_tenants(
-        authenticated_user.user, _extract_token(request)
-    )
 
 
 @router.post(

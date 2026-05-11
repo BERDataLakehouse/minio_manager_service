@@ -130,22 +130,6 @@ def mock_app_state_obj(mock_polaris_service):
     state.trino_catalog_reconciler = AsyncMock()
     state.trino_catalog_reconciler.reconcile_tenant = AsyncMock(return_value="team1")
 
-    state.tenant_manager = AsyncMock()
-    state.tenant_manager.list_tenants = AsyncMock(
-        return_value=[
-            {
-                "tenant_name": "team1",
-                "display_name": "Team A",
-                "description": None,
-                "website": None,
-                "organization": None,
-                "member_count": 2,
-                "is_member": True,
-                "is_steward": False,
-            }
-        ]
-    )
-
     return state
 
 
@@ -594,22 +578,6 @@ class TestEffectiveAccess:
 
 class TestPolarisManagement:
     """Tests for admin Polaris maintenance endpoints."""
-
-    def test_admin_lists_management_tenants(self, mock_app_state_obj, admin_user):
-        app = _create_test_app(mock_app_state_obj, admin_user)
-        client = TestClient(app, raise_server_exceptions=False)
-
-        response = client.get(
-            "/polaris/management/tenants",
-            headers={"Authorization": "Bearer admin-token"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data[0]["tenant_name"] == "team1"
-        mock_app_state_obj.tenant_manager.list_tenants.assert_awaited_once_with(
-            "admin", "admin-token"
-        )
 
     def test_single_tenant_reconcile_ensures_service_identity_first(
         self, mock_app_state_obj, admin_user
