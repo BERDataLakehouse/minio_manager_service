@@ -24,7 +24,6 @@ from minio.managers.user_manager import UserManager
 from polaris.managers.group_manager import PolarisGroupManager
 from polaris.managers.user_manager import PolarisUserManager
 from polaris.polaris_service import PolarisService
-from polaris.trino_reconciler import TrinoCatalogReconciler
 from s3.core.distributed_lock import DistributedLockManager
 from s3.core.s3_client import S3Client
 from s3.models.s3_config import S3Config
@@ -34,6 +33,7 @@ from service.kb_auth import KBaseAuth, KBaseUser
 from tenant_metadata.kbase_profile_client import KBaseUserProfileClient
 from tenant_metadata.tenant_metadata_store import TenantMetadataStore
 from tenant_metadata.user_profile_store import UserProfileStore
+from trino_integration.reconciler import TrinoCatalogReconciler
 
 logger = logging.getLogger(__name__)
 

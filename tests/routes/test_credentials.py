@@ -23,6 +23,7 @@ from routes.credentials import (
 from service.app_state import AppState
 from service.dependencies import auth
 from service.kb_auth import AdminPermission, KBaseUser
+from s3.models.user import UserModel
 
 
 # === FIXTURES ===
@@ -81,6 +82,41 @@ def mock_app_state():
     app_state.polaris_group_manager = AsyncMock()
     app_state.group_manager = AsyncMock()
     app_state.group_manager.get_user_groups = AsyncMock(return_value=[])
+    app_state.group_manager.resource_exists = AsyncMock(return_value=False)
+    app_state.group_manager.add_user_to_group = AsyncMock()
+
+    app_state.user_manager = AsyncMock()
+    app_state.user_manager.resource_exists = AsyncMock(return_value=True)
+    app_state.user_manager.create_service_user = AsyncMock(
+        return_value=UserModel(
+            username="trino-globalusers-svc",
+            s3_access_key="svc-ak",
+            s3_secret_key="svc-secret",
+            home_paths=[],
+            groups=[],
+            total_policies=0,
+        )
+    )
+
+    app_state.s3_credential_store = AsyncMock()
+    app_state.s3_credential_store.get_credentials = AsyncMock(return_value=None)
+    app_state.s3_credential_store.store_credentials = AsyncMock()
+    app_state.polaris_credential_store = AsyncMock()
+    app_state.polaris_credential_store.get_credentials = AsyncMock(return_value=None)
+    app_state.polaris_credential_store.store_credentials = AsyncMock()
+    app_state.polaris_user_manager.reset_credentials = AsyncMock(
+        return_value={
+            "credentials": {"clientId": "svc-cid", "clientSecret": "svc-secret"}
+        }
+    )
+
+    app_state.trino_catalog_reconciler = AsyncMock()
+    app_state.trino_catalog_reconciler.tenant_catalog_exists = AsyncMock(
+        return_value=True
+    )
+    app_state.trino_catalog_reconciler.reconcile_tenant = AsyncMock(
+        return_value="globalusers"
+    )
 
     return app_state
 
@@ -207,6 +243,31 @@ class TestGetCredentialsEndpoint:
         mock_ensure.assert_awaited_once()
         # Username is the first positional arg.
         assert mock_ensure.await_args.args[0] == "testuser"
+
+    def test_get_credentials_reconciles_missing_globalusers_trino_catalog(
+        self, client, mock_app_state
+    ):
+        """The default tenant gets Trino-provisioned on clean bootstrap."""
+        mock_app_state.group_manager.resource_exists.return_value = True
+        mock_app_state.trino_catalog_reconciler.tenant_catalog_exists.return_value = (
+            False
+        )
+
+        response = client.get("/credentials/")
+
+        assert response.status_code == 200
+        mock_app_state.user_manager.create_service_user.assert_called_once_with(
+            "trino-globalusers-svc"
+        )
+        mock_app_state.group_manager.add_user_to_group.assert_any_call(
+            "trino-globalusers-svc", "globalusersro"
+        )
+        mock_app_state.polaris_group_manager.add_user_to_group.assert_any_call(
+            "trino-globalusers-svc", "globalusersro"
+        )
+        mock_app_state.trino_catalog_reconciler.reconcile_tenant.assert_awaited_once_with(
+            "globalusers"
+        )
 
     def test_get_credentials_response_format(self, client, mock_app_state):
         """Response body has exactly the expected fields."""

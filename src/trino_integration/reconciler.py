@@ -8,7 +8,7 @@ module owns that lifecycle.
 Architecture (see docs/trino-tenant-catalog-tech-spec.md):
 
 * Per-tenant service identity is provisioned by
-  :mod:`polaris.service_identity` (Phase 1) — IAM user + Polaris principal,
+  :mod:`trino_integration.service_identity` (Phase 1) — IAM user + Polaris principal,
   both named ``trino-{group}-svc``, both members of ``{group}ro``. Their
   credentials are persisted in the s3 + polaris credential stores.
 * The reconciler reads those credentials and issues ``CREATE CATALOG`` to
@@ -33,7 +33,7 @@ import trino
 
 from credentials.polaris_store import PolarisCredentialStore
 from credentials.s3_store import S3CredentialStore
-from polaris.service_identity import (
+from trino_integration.service_identity import (
     service_user_name,
     tenant_alias,
     tenant_warehouse_name,
@@ -239,6 +239,25 @@ class TrinoCatalogReconciler:
                     cursor.fetchall()
 
         await asyncio.to_thread(_run)
+
+    async def tenant_catalog_exists(self, group_name: str) -> bool:
+        """Return whether Trino currently has the tenant catalog alias.
+
+        Dynamic catalogs are coordinator-local, so this is used by bootstrap
+        paths to repair a freshly created or restarted environment without
+        drop/recreate work when the catalog is already visible.
+        """
+        self._require_admin_token()
+        alias = tenant_alias(group_name)
+        _validate_catalog_name(alias)
+
+        def _run() -> bool:
+            with self._connect() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SHOW CATALOGS")
+                return alias in {row[0] for row in cursor.fetchall()}
+
+        return await asyncio.to_thread(_run)
 
     async def reconcile_tenant(self, group_name: str) -> str:
         """Recreate the Trino catalog for ``group_name`` from persisted creds.

@@ -89,6 +89,7 @@ def mock_app_state():
     # Mock group manager
     app_state.group_manager = AsyncMock()
     app_state.group_manager.list_resources = AsyncMock(return_value=["group1"])
+    app_state.group_manager.resource_exists = AsyncMock(return_value=False)
     mock_group_info = MagicMock()
     mock_group_info.group_name = "group1"
     mock_group_info.members = ["user1"]
@@ -182,15 +183,20 @@ def mock_app_state():
     app_state.group_manager.add_user_to_group = AsyncMock()
     app_state.group_manager.remove_user_from_group = AsyncMock()
     app_state.s3_credential_store = AsyncMock()
+    app_state.s3_credential_store.get_credentials = AsyncMock(return_value=None)
     app_state.s3_credential_store.store_credentials = AsyncMock()
     app_state.s3_credential_store.delete_credentials = AsyncMock()
     app_state.polaris_credential_store = AsyncMock()
+    app_state.polaris_credential_store.get_credentials = AsyncMock(return_value=None)
     app_state.polaris_credential_store.store_credentials = AsyncMock()
     app_state.polaris_credential_store.delete_credentials = AsyncMock()
 
     # Trino catalog reconciler — used by create_group / delete_group routes
     # to issue CREATE / DROP CATALOG against Trino as platform_admin.
     app_state.trino_catalog_reconciler = AsyncMock()
+    app_state.trino_catalog_reconciler.tenant_catalog_exists = AsyncMock(
+        return_value=True
+    )
     app_state.trino_catalog_reconciler.reconcile_tenant = AsyncMock(
         return_value="newgroup"
     )
@@ -387,6 +393,31 @@ class TestCreateUserEndpoint:
         # Polaris OAuth half — fixture returns a fixed record
         assert data["polaris_client_id"] == "polaris-cid"
         assert data["polaris_client_secret"] == "polaris-secret"
+
+    def test_create_user_reconciles_missing_globalusers_trino_catalog(
+        self, client, mock_app_state
+    ):
+        """Admin user creation also repairs the auto-created default tenant."""
+        mock_app_state.group_manager.resource_exists.return_value = True
+        mock_app_state.trino_catalog_reconciler.tenant_catalog_exists.return_value = (
+            False
+        )
+
+        response = client.post("/management/users/newuser")
+
+        assert response.status_code == 201
+        mock_app_state.user_manager.create_service_user.assert_called_once_with(
+            "trino-globalusers-svc"
+        )
+        mock_app_state.group_manager.add_user_to_group.assert_any_call(
+            "trino-globalusers-svc", "globalusersro"
+        )
+        mock_app_state.polaris_group_manager.add_user_to_group.assert_any_call(
+            "trino-globalusers-svc", "globalusersro"
+        )
+        mock_app_state.trino_catalog_reconciler.reconcile_tenant.assert_any_call(
+            "globalusers"
+        )
 
 
 class TestRotateUserCredentialsEndpoint:

@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from credentials.polaris_store import PolarisCredentialRecord
-from polaris.trino_reconciler import (
+from trino_integration.reconciler import (
     ADMIN_TOKEN_KEY,
     TrinoCatalogReconciler,
     _render_create_catalog_sql,
@@ -221,6 +221,42 @@ class TestReconcileTenantPreconditions:
 
 class TestReconcileTenantHappyPath:
     @pytest.mark.asyncio
+    async def test_tenant_catalog_exists_checks_show_catalogs(self, reconciler_deps):
+        s3, polaris = reconciler_deps
+        reconciler = _make_reconciler(s3, polaris)
+
+        with patch("trino_integration.reconciler.trino.dbapi") as mock_dbapi:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_conn.cursor.return_value = mock_cursor
+            mock_conn.__enter__.return_value = mock_conn
+            mock_conn.__exit__.return_value = None
+            mock_cursor.fetchall.return_value = [("system",), ("globalusers",)]
+            mock_dbapi.connect.return_value = mock_conn
+
+            assert await reconciler.tenant_catalog_exists("globalusers") is True
+
+        mock_cursor.execute.assert_called_once_with("SHOW CATALOGS")
+
+    @pytest.mark.asyncio
+    async def test_tenant_catalog_exists_returns_false_when_missing(
+        self, reconciler_deps
+    ):
+        s3, polaris = reconciler_deps
+        reconciler = _make_reconciler(s3, polaris)
+
+        with patch("trino_integration.reconciler.trino.dbapi") as mock_dbapi:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_conn.cursor.return_value = mock_cursor
+            mock_conn.__enter__.return_value = mock_conn
+            mock_conn.__exit__.return_value = None
+            mock_cursor.fetchall.return_value = [("system",)]
+            mock_dbapi.connect.return_value = mock_conn
+
+            assert await reconciler.tenant_catalog_exists("globalusers") is False
+
+    @pytest.mark.asyncio
     async def test_issues_drop_and_create_in_order(self, reconciler_deps):
         s3, polaris = reconciler_deps
         s3.get_credentials = AsyncMock(return_value=("svc-ak", "svc-sk"))
@@ -234,7 +270,7 @@ class TestReconcileTenantHappyPath:
         reconciler = _make_reconciler(s3, polaris)
 
         # Mock the trino dbapi connection so no real network call happens.
-        with patch("polaris.trino_reconciler.trino.dbapi") as mock_dbapi:
+        with patch("trino_integration.reconciler.trino.dbapi") as mock_dbapi:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_conn.cursor.return_value = mock_cursor
@@ -276,7 +312,7 @@ class TestDeprovisionTenant:
         s3, polaris = reconciler_deps
         reconciler = _make_reconciler(s3, polaris)
 
-        with patch("polaris.trino_reconciler.trino.dbapi") as mock_dbapi:
+        with patch("trino_integration.reconciler.trino.dbapi") as mock_dbapi:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_conn.cursor.return_value = mock_cursor

@@ -57,7 +57,7 @@ class TestAppStateNamedTuple:
 
     def test_app_state_exposes_polaris_service_for_service_identity(self):
         """The per-tenant Trino service-identity teardown path
-        (``polaris.service_identity.deprovision_tenant_trino_service``) calls
+        (``trino_integration.service_identity.deprovision_tenant_trino_service``) calls
         ``polaris_service.delete_principal`` directly because
         :meth:`PolarisUserManager.delete_user` also drops the principal's
         personal catalog — service identities don't have one. Exposing

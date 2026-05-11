@@ -25,11 +25,11 @@ from polaris.constants import (
     tenant_catalog_name,
 )
 from polaris.orchestration import ensure_user_polaris_state
-from polaris.service_identity import ensure_tenant_trino_service
 from s3.models.tenant import TenantSummaryResponse
 from service import app_state
 from service.dependencies import auth, require_admin
 from service.kb_auth import AdminPermission, KBaseUser
+from trino_integration.service_identity import ensure_tenant_trino_service
 
 router = APIRouter(prefix="/polaris")
 

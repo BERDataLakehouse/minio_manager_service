@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from credentials.polaris_store import PolarisCredentialRecord
-from polaris.service_identity import (
+from trino_integration.service_identity import (
     TrinoServiceIdentity,
     deprovision_tenant_trino_service,
     ensure_tenant_trino_service,

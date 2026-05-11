@@ -19,11 +19,6 @@ from polaris.constants import (
     tenant_catalog_name,
 )
 from polaris.orchestration import ensure_user_polaris_state
-from polaris.service_identity import (
-    deprovision_tenant_trino_service,
-    ensure_tenant_trino_service,
-    provision_tenant_trino_service,
-)
 from s3.models.user import UserModel
 from s3.utils.validators import validate_group_name
 from service.app_state import get_app_state
@@ -33,6 +28,12 @@ from service.exceptions import (
     GroupOperationError,
     TenantNotFoundError,
     UserOperationError,
+)
+from trino_integration.bootstrap import ensure_globalusers_trino_catalog
+from trino_integration.service_identity import (
+    deprovision_tenant_trino_service,
+    ensure_tenant_trino_service,
+    provision_tenant_trino_service,
 )
 
 logger = logging.getLogger(__name__)
@@ -317,6 +318,7 @@ async def create_user(
     # path — we keep it for the group-membership mirror that the credential
     # service does not perform.
     polaris_record = await app_state.polaris_credential_service.get_or_create(username)
+    await ensure_globalusers_trino_catalog(app_state)
 
     response = UserManagementResponse(
         username=user_info.username,

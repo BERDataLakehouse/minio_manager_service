@@ -22,6 +22,7 @@ from polaris.orchestration import ensure_user_polaris_state
 from service.app_state import get_app_state
 from service.dependencies import auth
 from service.kb_auth import KBaseUser
+from trino_integration.bootstrap import ensure_globalusers_trino_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,7 @@ async def get_credentials(
         polaris_group_manager=app_state.polaris_group_manager,
         group_manager=app_state.group_manager,
     )
+    await ensure_globalusers_trino_catalog(app_state)
     polaris_record = await app_state.polaris_credential_service.get_or_create(username)
 
     return _to_response(username, s3_access_key, s3_secret_key, polaris_record)
@@ -140,6 +142,7 @@ async def rotate_credentials(
         polaris_group_manager=app_state.polaris_group_manager,
         group_manager=app_state.group_manager,
     )
+    await ensure_globalusers_trino_catalog(app_state)
     polaris_record = await app_state.polaris_credential_service.rotate(username)
 
     return _to_response(username, s3_access_key, s3_secret_key, polaris_record)
