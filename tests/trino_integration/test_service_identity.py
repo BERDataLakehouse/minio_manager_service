@@ -13,7 +13,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from credentials.polaris_store import PolarisCredentialRecord
+from s3.models.user import UserModel
+from service.exceptions import GroupOperationError, PolarisOperationError
 from trino_integration.service_identity import (
+    MAX_TRINO_TENANT_NAME_LENGTH,
     TrinoServiceIdentity,
     deprovision_tenant_trino_service,
     ensure_tenant_trino_service,
@@ -21,9 +24,8 @@ from trino_integration.service_identity import (
     service_user_name,
     tenant_alias,
     tenant_warehouse_name,
+    validate_trino_tenant_name,
 )
-from s3.models.user import UserModel
-from service.exceptions import PolarisOperationError
 
 
 # === Helpers ===
@@ -120,6 +122,19 @@ class TestNamingHelpers:
 
     def test_tenant_warehouse_name(self):
         assert tenant_warehouse_name("globalusers") == "tenant_globalusers"
+
+    def test_validate_trino_tenant_name_accepts_valid_name(self):
+        assert validate_trino_tenant_name("globalusers") == "globalusers"
+
+    def test_validate_trino_tenant_name_rejects_read_only_suffix(self):
+        with pytest.raises(GroupOperationError, match="cannot end with 'ro'"):
+            validate_trino_tenant_name("globalusersro")
+
+    def test_validate_trino_tenant_name_rejects_names_that_make_long_service_user(
+        self,
+    ):
+        with pytest.raises(GroupOperationError, match="at most"):
+            validate_trino_tenant_name("a" * (MAX_TRINO_TENANT_NAME_LENGTH + 1))
 
 
 # === provision_tenant_trino_service ===

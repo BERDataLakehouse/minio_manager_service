@@ -20,11 +20,9 @@ from polaris.constants import (
 )
 from polaris.orchestration import ensure_user_polaris_state
 from s3.models.user import UserModel
-from s3.utils.validators import validate_group_name
 from service.app_state import get_app_state
 from service.dependencies import auth, require_admin
 from service.exceptions import (
-    DataGovernanceError,
     GroupOperationError,
     TenantNotFoundError,
     UserOperationError,
@@ -34,6 +32,7 @@ from trino_integration.service_identity import (
     deprovision_tenant_trino_service,
     ensure_tenant_trino_service,
     provision_tenant_trino_service,
+    validate_trino_tenant_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -511,14 +510,8 @@ async def create_group(
     in MinIO IAM, then provisions the matching tenant catalog and writer/
     reader principal-role bindings in Polaris.
     """
-    # Prevent creating groups ending with 'ro' - this suffix is reserved for read-only variants
-    if group_name.endswith("ro"):
-        raise DataGovernanceError(
-            "Group name cannot end with 'ro' - this suffix is reserved for read-only group variants"
-        )
-
-    # Validate group name early to return 400 for invalid names
-    validate_group_name(group_name)
+    # Validate early to return 400 before MinIO/Polaris/Trino side effects.
+    group_name = validate_trino_tenant_name(group_name)
 
     app_state = get_app_state(request)
 
@@ -667,31 +660,32 @@ async def delete_group(
     """
     app_state = get_app_state(request)
 
-    # Drop the Trino catalog first so the coordinator stops routing queries
-    # to a Polaris catalog that's about to disappear. Idempotent.
-    try:
-        await app_state.trino_catalog_reconciler.deprovision_tenant(group_name)
-    except Exception as e:  # noqa: BLE001 — best-effort, log and continue
-        logger.warning(
-            "Failed to drop Trino catalog for group=%s: %s; continuing teardown.",
-            group_name,
-            e,
-        )
+    if not group_name.endswith("ro"):
+        # Drop the Trino catalog first so the coordinator stops routing queries
+        # to a Polaris catalog that's about to disappear. Idempotent.
+        try:
+            await app_state.trino_catalog_reconciler.deprovision_tenant(group_name)
+        except Exception as e:  # noqa: BLE001 — best-effort, log and continue
+            logger.warning(
+                "Failed to drop Trino catalog for group=%s: %s; continuing teardown.",
+                group_name,
+                e,
+            )
 
-    # Tear down the per-tenant Trino service identity (Polaris principal
-    # + IAM service user + persisted creds). Best-effort: each step inside
-    # tolerates already-gone resources. Has to run before
-    # polaris_group_manager.delete_group so the principal still exists when
-    # we try to delete it.
-    await deprovision_tenant_trino_service(
-        group_name=group_name,
-        user_manager=app_state.user_manager,
-        group_manager=app_state.group_manager,
-        polaris_group_manager=app_state.polaris_group_manager,
-        polaris_service=app_state.polaris_service,
-        s3_credential_store=app_state.s3_credential_store,
-        polaris_credential_store=app_state.polaris_credential_store,
-    )
+        # Tear down the per-tenant Trino service identity (Polaris principal
+        # + IAM service user + persisted creds). Best-effort: each step inside
+        # tolerates already-gone resources. Has to run before
+        # polaris_group_manager.delete_group so the principal still exists when
+        # we try to delete it.
+        await deprovision_tenant_trino_service(
+            group_name=group_name,
+            user_manager=app_state.user_manager,
+            group_manager=app_state.group_manager,
+            polaris_group_manager=app_state.polaris_group_manager,
+            polaris_service=app_state.polaris_service,
+            s3_credential_store=app_state.s3_credential_store,
+            polaris_credential_store=app_state.polaris_credential_store,
+        )
 
     # Polaris first — drop catalog + roles. No-op for *ro inputs.
     await app_state.polaris_group_manager.delete_group(group_name)
@@ -1537,6 +1531,7 @@ async def reconcile_all_trino_catalogs(
     errors: list[MigrationError] = []
     for group_name in target_base_groups:
         try:
+            group_name = validate_trino_tenant_name(group_name)
             identity = await ensure_tenant_trino_service(
                 group_name=group_name,
                 user_manager=app_state.user_manager,

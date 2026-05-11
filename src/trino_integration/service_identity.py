@@ -28,9 +28,42 @@ from credentials.s3_store import S3CredentialStore
 from polaris.managers.group_manager import PolarisGroupManager
 from polaris.managers.user_manager import PolarisUserManager
 from polaris.polaris_service import PolarisService
-from service.exceptions import PolarisOperationError
+from s3.utils.validators import validate_group_name
+from service.exceptions import GroupOperationError, PolarisOperationError
 
 logger = logging.getLogger(__name__)
+
+TRINO_SERVICE_USER_PREFIX = "trino-"
+TRINO_SERVICE_USER_SUFFIX = "-svc"
+MAX_TRINO_TENANT_NAME_LENGTH = (
+    64 - len(TRINO_SERVICE_USER_PREFIX) - len(TRINO_SERVICE_USER_SUFFIX)
+)
+
+
+def validate_trino_tenant_name(group_name: str) -> str:
+    """Validate a tenant name before deriving Trino service resources.
+
+    Tenant names accepted by MMS group creation can be up to 64 chars, but the
+    derived IAM/Polaris service username is ``trino-{tenant}-svc`` and
+    usernames are capped at 64 chars. Since creating a tenant now provisions
+    that service identity synchronously, reject names that cannot complete the
+    Trino setup before any route performs side effects.
+    """
+    group_name = validate_group_name(group_name)
+    if group_name.endswith("ro"):
+        raise GroupOperationError(
+            "Tenant group name cannot end with 'ro' because that suffix is "
+            "reserved for read-only tenant groups"
+        )
+    if len(group_name) > MAX_TRINO_TENANT_NAME_LENGTH:
+        raise GroupOperationError(
+            "Tenant group name must be at most "
+            f"{MAX_TRINO_TENANT_NAME_LENGTH} characters for Trino integration "
+            f"because service usernames use the "
+            f"'{TRINO_SERVICE_USER_PREFIX}{{tenant}}{TRINO_SERVICE_USER_SUFFIX}' "
+            "format"
+        )
+    return group_name
 
 
 def service_user_name(group_name: str) -> str:
@@ -42,7 +75,7 @@ def service_user_name(group_name: str) -> str:
     hyphen, underscore; must start/end alphanumeric; no consecutive specials;
     2-64 chars) — for plausible group names this name is well within bounds.
     """
-    return f"trino-{group_name}-svc"
+    return f"{TRINO_SERVICE_USER_PREFIX}{group_name}{TRINO_SERVICE_USER_SUFFIX}"
 
 
 def tenant_alias(group_name: str) -> str:
@@ -91,9 +124,11 @@ async def provision_tenant_trino_service(
 ) -> TrinoServiceIdentity:
     """Provision the per-tenant Trino service identity end-to-end.
 
-    Idempotent — safe to re-run on already-provisioned tenants and to recover
-    from partial failures. Each step is internally idempotent; the final
-    credential-store writes are upserts.
+    Resource-idempotent and safe to re-run for recovery, but not credential
+    stable: ``create_service_user`` and ``reset_credentials`` mint fresh
+    secrets and overwrite the credential stores on every call. Use
+    :func:`ensure_tenant_trino_service` for cache-first reconciliation that
+    avoids needless rotation.
 
     The orchestration mirrors the existing route-layer pattern for human
     users (see ``routes/tenants.py::add_member`` and
@@ -126,6 +161,7 @@ async def provision_tenant_trino_service(
             after the reset (matches existing
             ``credentials.polaris_service`` behavior).
     """
+    group_name = validate_trino_tenant_name(group_name)
     svc_user = service_user_name(group_name)
     ro_group = f"{group_name}ro"
     warehouse = tenant_warehouse_name(group_name)
@@ -210,6 +246,7 @@ async def ensure_tenant_trino_service(
     That keeps routine Trino cold-start reconciliation from rotating every
     tenant credential.
     """
+    group_name = validate_trino_tenant_name(group_name)
     svc_user = service_user_name(group_name)
     ro_group = f"{group_name}ro"
     warehouse = tenant_warehouse_name(group_name)
@@ -300,6 +337,7 @@ async def deprovision_tenant_trino_service(
             :class:`PolarisUserManager.delete_user` also tears down the
             personal catalog, which a service identity does not have.
     """
+    group_name = validate_trino_tenant_name(group_name)
     svc_user = service_user_name(group_name)
     ro_group = f"{group_name}ro"
 

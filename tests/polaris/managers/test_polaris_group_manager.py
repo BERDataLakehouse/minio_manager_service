@@ -27,10 +27,10 @@ def manager(polaris_service):
 class TestEnsureCatalog:
     @pytest.mark.asyncio
     async def test_ensure_catalog_calls_polaris_service(self, manager, polaris_service):
-        await manager.ensure_catalog("teamA")
+        await manager.ensure_catalog("team1")
 
         polaris_service.ensure_tenant_catalog.assert_called_once_with(
-            "teamA", "s3a://cdm-lake/tenant-sql-warehouse/teamA/iceberg/"
+            "team1", "s3a://cdm-lake/tenant-sql-warehouse/team1/iceberg/"
         )
 
     @pytest.mark.asyncio
@@ -39,10 +39,10 @@ class TestEnsureCatalog:
             polaris_service=polaris_service,
             tenant_sql_warehouse_base="s3a://other/wh",
         )
-        await manager.ensure_catalog("teamA")
+        await manager.ensure_catalog("team1")
 
         polaris_service.ensure_tenant_catalog.assert_called_once_with(
-            "teamA", "s3a://other/wh/teamA/iceberg/"
+            "team1", "s3a://other/wh/team1/iceberg/"
         )
 
 
@@ -55,7 +55,7 @@ class TestCreateGroup:
         self, manager, polaris_service
     ):
         """Creator gets both writer (base) and reader ({group}ro) bindings."""
-        await manager.create_group("teamA", creator="admin")
+        await manager.create_group("team1", creator="admin")
 
         # ensure_tenant_catalog is called redundantly (3×): once explicitly
         # via ensure_catalog and once inside each add_user_to_group call.
@@ -64,15 +64,15 @@ class TestCreateGroup:
         # Assert every call targeted the right base storage location.
         ensure_calls = polaris_service.ensure_tenant_catalog.call_args_list
         expected_call = call(
-            "teamA", "s3a://cdm-lake/tenant-sql-warehouse/teamA/iceberg/"
+            "team1", "s3a://cdm-lake/tenant-sql-warehouse/team1/iceberg/"
         )
         assert all(c == expected_call for c in ensure_calls)
         assert len(ensure_calls) >= 1
 
         # Both writer and reader role grants for the creator.
         grant_calls = polaris_service.grant_principal_role_to_principal.call_args_list
-        assert call("admin", "teamA_member") in grant_calls
-        assert call("admin", "teamAro_member") in grant_calls
+        assert call("admin", "team1_member") in grant_calls
+        assert call("admin", "team1ro_member") in grant_calls
         assert len(grant_calls) == 2
 
 
@@ -82,14 +82,14 @@ class TestCreateGroup:
 class TestDeleteGroup:
     @pytest.mark.asyncio
     async def test_delete_base_group_drops_catalog(self, manager, polaris_service):
-        await manager.delete_group("teamA")
+        await manager.delete_group("team1")
 
-        polaris_service.drop_tenant_catalog.assert_called_once_with("teamA")
+        polaris_service.drop_tenant_catalog.assert_called_once_with("team1")
 
     @pytest.mark.asyncio
     async def test_delete_ro_group_is_noop(self, manager, polaris_service):
         """{group}ro inputs don't have their own catalog — no-op."""
-        await manager.delete_group("teamAro")
+        await manager.delete_group("team1ro")
 
         polaris_service.drop_tenant_catalog.assert_not_called()
 
@@ -107,14 +107,14 @@ class TestDeleteGroup:
 class TestAddUserToGroup:
     @pytest.mark.asyncio
     async def test_add_to_base_group_grants_writer_role(self, manager, polaris_service):
-        await manager.add_user_to_group("alice", "teamA")
+        await manager.add_user_to_group("alice", "team1")
 
         polaris_service.ensure_tenant_catalog.assert_called_once_with(
-            "teamA", "s3a://cdm-lake/tenant-sql-warehouse/teamA/iceberg/"
+            "team1", "s3a://cdm-lake/tenant-sql-warehouse/team1/iceberg/"
         )
         polaris_service.create_principal.assert_called_once_with(name="alice")
         polaris_service.grant_principal_role_to_principal.assert_called_once_with(
-            "alice", "teamA_member"
+            "alice", "team1_member"
         )
 
     @pytest.mark.asyncio
@@ -122,13 +122,13 @@ class TestAddUserToGroup:
         self, manager, polaris_service
     ):
         """{group}ro maps to {group}ro_member on the BASE catalog."""
-        await manager.add_user_to_group("alice", "teamAro")
+        await manager.add_user_to_group("alice", "team1ro")
 
         polaris_service.ensure_tenant_catalog.assert_called_once_with(
-            "teamA", "s3a://cdm-lake/tenant-sql-warehouse/teamA/iceberg/"
+            "team1", "s3a://cdm-lake/tenant-sql-warehouse/team1/iceberg/"
         )
         polaris_service.grant_principal_role_to_principal.assert_called_once_with(
-            "alice", "teamAro_member"
+            "alice", "team1ro_member"
         )
 
     @pytest.mark.asyncio
@@ -145,7 +145,7 @@ class TestAddUserToGroup:
         self, manager, polaris_service
     ):
         """ensure_tenant_catalog and create_principal are always called for safety."""
-        await manager.add_user_to_group("alice", "teamA")
+        await manager.add_user_to_group("alice", "team1")
 
         # These two are the "self-healing" calls — verified above by
         # assert_called_once_with — repeated here to make the intent explicit.
@@ -161,20 +161,20 @@ class TestRemoveUserFromGroup:
     async def test_remove_from_base_group_revokes_writer_role(
         self, manager, polaris_service
     ):
-        await manager.remove_user_from_group("alice", "teamA")
+        await manager.remove_user_from_group("alice", "team1")
 
         polaris_service.revoke_principal_role_from_principal.assert_called_once_with(
-            "alice", "teamA_member"
+            "alice", "team1_member"
         )
 
     @pytest.mark.asyncio
     async def test_remove_from_ro_group_revokes_reader_role(
         self, manager, polaris_service
     ):
-        await manager.remove_user_from_group("alice", "teamAro")
+        await manager.remove_user_from_group("alice", "team1ro")
 
         polaris_service.revoke_principal_role_from_principal.assert_called_once_with(
-            "alice", "teamAro_member"
+            "alice", "team1ro_member"
         )
 
     @pytest.mark.asyncio
@@ -190,4 +190,4 @@ class TestRemoveUserFromGroup:
             PolarisOperationError("forbidden", status=403)
         )
         with pytest.raises(PolarisOperationError):
-            await manager.remove_user_from_group("alice", "teamA")
+            await manager.remove_user_from_group("alice", "team1")

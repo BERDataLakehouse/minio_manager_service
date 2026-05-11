@@ -24,6 +24,7 @@ from service.app_state import AppState
 from service.dependencies import auth
 from service.kb_auth import AdminPermission, KBaseUser
 from s3.models.user import UserModel
+from trino_integration.bootstrap import _reset_globalusers_trino_bootstrap_cache
 
 
 # === FIXTURES ===
@@ -34,6 +35,14 @@ def mock_mc_path():
     """Ensure MC_PATH is set for all tests."""
     with patch.dict(os.environ, {"MC_PATH": "/usr/local/bin/mc"}):
         yield
+
+
+@pytest.fixture(autouse=True)
+def reset_globalusers_trino_bootstrap_cache():
+    """Keep the in-process Trino bootstrap cache from leaking across tests."""
+    _reset_globalusers_trino_bootstrap_cache()
+    yield
+    _reset_globalusers_trino_bootstrap_cache()
 
 
 @pytest.fixture
@@ -266,6 +275,36 @@ class TestGetCredentialsEndpoint:
             "trino-globalusers-svc", "globalusersro"
         )
         mock_app_state.trino_catalog_reconciler.reconcile_tenant.assert_awaited_once_with(
+            "globalusers"
+        )
+
+    def test_get_credentials_does_not_fail_when_globalusers_trino_repair_fails(
+        self, client, mock_app_state
+    ):
+        """Trino repair is best-effort in the login credential path."""
+        mock_app_state.group_manager.resource_exists.return_value = True
+        mock_app_state.trino_catalog_reconciler.tenant_catalog_exists.side_effect = (
+            Exception("TRINO_ADMIN_TOKEN is not configured")
+        )
+
+        response = client.get("/credentials/")
+
+        assert response.status_code == 200
+        mock_app_state.trino_catalog_reconciler.reconcile_tenant.assert_not_awaited()
+
+    def test_get_credentials_caches_globalusers_trino_fast_path(
+        self, client, mock_app_state
+    ):
+        """Steady-state credential calls do not issue SHOW CATALOGS every time."""
+        mock_app_state.group_manager.resource_exists.return_value = True
+        mock_app_state.trino_catalog_reconciler.tenant_catalog_exists.return_value = (
+            True
+        )
+
+        assert client.get("/credentials/").status_code == 200
+        assert client.get("/credentials/").status_code == 200
+
+        mock_app_state.trino_catalog_reconciler.tenant_catalog_exists.assert_awaited_once_with(
             "globalusers"
         )
 

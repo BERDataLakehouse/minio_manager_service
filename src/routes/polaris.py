@@ -29,7 +29,10 @@ from s3.models.tenant import TenantSummaryResponse
 from service import app_state
 from service.dependencies import auth, require_admin
 from service.kb_auth import AdminPermission, KBaseUser
-from trino_integration.service_identity import ensure_tenant_trino_service
+from trino_integration.service_identity import (
+    ensure_tenant_trino_service,
+    validate_trino_tenant_name,
+)
 
 router = APIRouter(prefix="/polaris")
 
@@ -265,6 +268,7 @@ async def reconcile_tenant_trino_catalog(
     _authenticated_user: Annotated[KBaseUser, Depends(require_admin)],
 ) -> ReconcileTrinoCatalogResponse:
     """Force-reconcile one tenant's Trino catalog. Admin only."""
+    tenant_name = validate_trino_tenant_name(tenant_name)
     await ensure_tenant_trino_service(
         group_name=tenant_name,
         user_manager=app_state_obj.user_manager,

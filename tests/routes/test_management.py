@@ -43,6 +43,7 @@ from service.dependencies import auth, require_admin
 from service.exception_handlers import universal_error_handler
 from service.exceptions import TenantNotFoundError
 from service.kb_auth import AdminPermission, KBaseUser
+from trino_integration.bootstrap import _reset_globalusers_trino_bootstrap_cache
 
 
 # === FIXTURES ===
@@ -53,6 +54,14 @@ def mock_mc_path():
     """Ensure MC_PATH is set for all tests."""
     with patch.dict(os.environ, {"MC_PATH": "/usr/local/bin/mc"}):
         yield
+
+
+@pytest.fixture(autouse=True)
+def reset_globalusers_trino_bootstrap_cache():
+    """Keep the in-process Trino bootstrap cache from leaking across tests."""
+    _reset_globalusers_trino_bootstrap_cache()
+    yield
+    _reset_globalusers_trino_bootstrap_cache()
 
 
 @pytest.fixture
@@ -713,6 +722,26 @@ class TestCreateGroupEndpoint:
         data = response.json()
         assert data["group_name"] == "newgroup"
         assert data["operation"] == "create"
+
+    def test_create_group_rejects_tenant_name_too_long_for_trino(
+        self, client, mock_app_state
+    ):
+        """Validation happens before any MinIO/Polaris/Trino side effects."""
+        response = client.post(f"/management/groups/{'a' * 55}")
+
+        assert response.status_code == 400
+        mock_app_state.group_manager.create_group.assert_not_called()
+        mock_app_state.polaris_group_manager.create_group.assert_not_called()
+        mock_app_state.user_manager.create_service_user.assert_not_called()
+        mock_app_state.trino_catalog_reconciler.reconcile_tenant.assert_not_called()
+
+    def test_create_group_rejects_read_only_suffix_before_side_effects(
+        self, client, mock_app_state
+    ):
+        response = client.post("/management/groups/teamro")
+
+        assert response.status_code == 400
+        mock_app_state.group_manager.create_group.assert_not_called()
 
 
 class TestAddGroupMemberEndpoint:
@@ -1841,6 +1870,31 @@ class TestReconcileTrinoCatalogsEndpoint:
         assert data["reconciled"] == []
         assert len(data["errors"]) == 2
         assert data["errors"][0]["resource_type"] == "trino_service_identity"
+        trino_migration_state.trino_catalog_reconciler.reconcile_tenant.assert_not_called()
+
+    def test_reconcile_trino_catalogs_reports_invalid_tenant_names(
+        self, trino_migration_client, trino_migration_state
+    ):
+        bad_group = "a" * 55
+        trino_migration_state.group_manager.list_resources.return_value = [
+            bad_group,
+            f"{bad_group}ro",
+        ]
+
+        response = trino_migration_client.post(
+            "/management/migrate/reconcile-trino-catalogs"
+        )
+
+        data = response.json()
+        assert data["reconciled"] == []
+        assert data["errors"] == [
+            {
+                "resource_type": "trino_service_identity",
+                "resource_name": bad_group,
+                "error": data["errors"][0]["error"],
+            }
+        ]
+        assert "at most" in data["errors"][0]["error"]
         trino_migration_state.trino_catalog_reconciler.reconcile_tenant.assert_not_called()
 
     def test_reconcile_trino_catalogs_reconcile_error_reports_catalog_failure(
