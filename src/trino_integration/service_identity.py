@@ -78,6 +78,27 @@ def service_user_name(group_name: str) -> str:
     return f"{TRINO_SERVICE_USER_PREFIX}{group_name}{TRINO_SERVICE_USER_SUFFIX}"
 
 
+def is_trino_service_user(username: str) -> bool:
+    """Return whether ``username`` is a managed per-tenant Trino service user."""
+    if not (
+        username.startswith(TRINO_SERVICE_USER_PREFIX)
+        and username.endswith(TRINO_SERVICE_USER_SUFFIX)
+    ):
+        return False
+
+    tenant_name = username[
+        len(TRINO_SERVICE_USER_PREFIX) : -len(TRINO_SERVICE_USER_SUFFIX)
+    ]
+    if not tenant_name:
+        return False
+
+    try:
+        validate_trino_tenant_name(tenant_name)
+    except GroupOperationError:
+        return False
+    return True
+
+
 def tenant_alias(group_name: str) -> str:
     """Trino catalog alias for a tenant group.
 

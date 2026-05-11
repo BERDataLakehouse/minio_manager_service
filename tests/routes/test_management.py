@@ -798,6 +798,24 @@ class TestDeleteGroupEndpoint:
 
         assert response.status_code == 400  # GroupOperationError maps to 400
 
+    def test_delete_group_continues_when_trino_service_identity_teardown_fails(
+        self, client, mock_app_state
+    ):
+        """Trino service identity cleanup is best-effort during tenant deletion."""
+        with patch(
+            "routes.management.deprovision_tenant_trino_service",
+            new_callable=AsyncMock,
+        ) as mock_deprovision:
+            mock_deprovision.side_effect = Exception("legacy Trino identity mismatch")
+
+            response = client.delete("/management/groups/group1")
+
+        assert response.status_code == 200
+        mock_app_state.polaris_group_manager.delete_group.assert_called_once_with(
+            "group1"
+        )
+        mock_app_state.group_manager.delete_resource.assert_called_once_with("group1")
+
 
 # === ASYNC FUNCTION TESTS ===
 
@@ -1126,6 +1144,23 @@ class TestRegeneratePoliciesEndpoint:
         assert calls[0].args == ("alice",)
         assert calls[1].args == ("bob",)
 
+    def test_regenerate_policies_skips_trino_service_users(
+        self, migration_client, migration_app_state
+    ):
+        migration_app_state.user_manager.list_resources.return_value = [
+            "alice",
+            "trino-team1-svc",
+            "bob",
+        ]
+
+        response = migration_client.post("/management/migrate/regenerate-policies")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_updated"] == 2
+        calls = migration_app_state.policy_manager.regenerate_user_home_policy.call_args_list
+        assert [c.args[0] for c in calls] == ["alice", "bob"]
+
     def test_regenerate_policies_calls_group_rw_and_ro(
         self, migration_client, migration_app_state
     ):
@@ -1285,6 +1320,28 @@ class TestEnsurePolarisResourcesEndpoint:
 
         polaris_user_manager = polaris_migration_state.polaris_user_manager
         create_calls = polaris_user_manager.create_user.call_args_list
+        assert [c.args[0] for c in create_calls] == ["alice", "bob"]
+
+    def test_ensure_polaris_skips_trino_service_users(
+        self, polaris_migration_client, polaris_migration_state
+    ):
+        polaris_migration_state.user_manager.list_resources.return_value = [
+            "alice",
+            "trino-team1-svc",
+            "bob",
+        ]
+
+        response = polaris_migration_client.post(
+            "/management/migrate/ensure-polaris-resources"
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_provisioned"] == 2
+        assert data["users_skipped"] == ["trino-team1-svc"]
+        create_calls = (
+            polaris_migration_state.polaris_user_manager.create_user.call_args_list
+        )
         assert [c.args[0] for c in create_calls] == ["alice", "bob"]
 
     def test_ensure_polaris_mirrors_existing_group_memberships(
@@ -1629,6 +1686,30 @@ class TestRepairPolarisCatalogStorageEndpoint:
             "tenant_team2",
         ]
         assert all(c.kwargs["current_entity_version"] == 7 for c in update_calls)
+
+    def test_repair_storage_skips_trino_service_users(
+        self, repair_client, repair_state
+    ):
+        repair_state.user_manager.list_resources.return_value = [
+            "alice",
+            "trino-team1-svc",
+            "bob",
+        ]
+
+        response = repair_client.post(
+            "/management/migrate/repair-polaris-catalog-storage"
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["catalogs_checked"] == 4
+        assert data["users_skipped"] == ["trino-team1-svc"]
+        assert {c["catalog_name"] for c in data["changes"]} == {
+            "user_alice",
+            "user_bob",
+            "tenant_team1",
+            "tenant_team2",
+        }
 
     def test_repair_storage_skips_unchanged_catalogs(self, repair_client, repair_state):
         catalog_locations = {
@@ -2043,6 +2124,28 @@ class TestRotateAllCredentialsEndpoint:
         assert len(polaris_calls) == 2
         assert polaris_calls[0].args == ("alice",)
         assert polaris_calls[1].args == ("bob",)
+
+    def test_rotate_all_skips_trino_service_users(
+        self, rotate_client, rotate_app_state
+    ):
+        rotate_app_state.user_manager.list_resources.return_value = [
+            "alice",
+            "trino-team1-svc",
+            "bob",
+        ]
+
+        response = rotate_client.post("/management/credentials/rotate-all-credentials")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["users_rotated"] == 2
+        assert data["users_failed"] == 0
+        s3_calls = rotate_app_state.s3_credential_service.rotate.call_args_list
+        polaris_calls = (
+            rotate_app_state.polaris_credential_service.rotate.call_args_list
+        )
+        assert [c.args[0] for c in s3_calls] == ["alice", "bob"]
+        assert [c.args[0] for c in polaris_calls] == ["alice", "bob"]
 
     def test_rotate_all_s3_error_continues(self, rotate_client, rotate_app_state):
         """S3 failure on one user doesn't block Polaris on that user or other users.

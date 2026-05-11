@@ -15,8 +15,7 @@ user.
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.security.utils import get_authorization_scheme_param
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from polaris.constants import (
@@ -98,13 +97,6 @@ def _authorize_polaris_provision(username: str, authenticated_user: KBaseUser) -
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only provision your own Polaris catalog",
         )
-
-
-def _extract_token(request: Request) -> str:
-    """Extract the bearer token from the Authorization header."""
-    header = request.headers.get("Authorization", "")
-    _, credentials = get_authorization_scheme_param(header)
-    return credentials
 
 
 # ===== PROVISIONING ROUTES =====

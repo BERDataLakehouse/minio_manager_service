@@ -20,6 +20,7 @@ from trino_integration.service_identity import (
     TrinoServiceIdentity,
     deprovision_tenant_trino_service,
     ensure_tenant_trino_service,
+    is_trino_service_user,
     provision_tenant_trino_service,
     service_user_name,
     tenant_alias,
@@ -135,6 +136,17 @@ class TestNamingHelpers:
     ):
         with pytest.raises(GroupOperationError, match="at most"):
             validate_trino_tenant_name("a" * (MAX_TRINO_TENANT_NAME_LENGTH + 1))
+
+    def test_is_trino_service_user_accepts_managed_service_identity(self):
+        assert is_trino_service_user("trino-globalusers-svc") is True
+        assert is_trino_service_user("trino-team1-svc") is True
+
+    def test_is_trino_service_user_rejects_non_service_or_invalid_tenant_names(self):
+        assert is_trino_service_user("alice") is False
+        assert is_trino_service_user("trino-team1") is False
+        assert is_trino_service_user("team1-svc") is False
+        assert is_trino_service_user("trino-team1ro-svc") is False
+        assert is_trino_service_user("trino-Team1-svc") is False
 
 
 # === provision_tenant_trino_service ===

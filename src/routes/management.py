@@ -31,6 +31,7 @@ from trino_integration.bootstrap import ensure_globalusers_trino_catalog
 from trino_integration.service_identity import (
     deprovision_tenant_trino_service,
     ensure_tenant_trino_service,
+    is_trino_service_user,
     provision_tenant_trino_service,
     validate_trino_tenant_name,
 )
@@ -38,6 +39,14 @@ from trino_integration.service_identity import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/management", tags=["management"])
+
+
+def _human_usernames(usernames: list[str]) -> list[str]:
+    return [u for u in usernames if not is_trino_service_user(u)]
+
+
+def _trino_service_usernames(usernames: list[str]) -> list[str]:
+    return sorted(u for u in usernames if is_trino_service_user(u))
 
 
 # ===== RESPONSE MODELS =====
@@ -677,15 +686,23 @@ async def delete_group(
         # tolerates already-gone resources. Has to run before
         # polaris_group_manager.delete_group so the principal still exists when
         # we try to delete it.
-        await deprovision_tenant_trino_service(
-            group_name=group_name,
-            user_manager=app_state.user_manager,
-            group_manager=app_state.group_manager,
-            polaris_group_manager=app_state.polaris_group_manager,
-            polaris_service=app_state.polaris_service,
-            s3_credential_store=app_state.s3_credential_store,
-            polaris_credential_store=app_state.polaris_credential_store,
-        )
+        try:
+            await deprovision_tenant_trino_service(
+                group_name=group_name,
+                user_manager=app_state.user_manager,
+                group_manager=app_state.group_manager,
+                polaris_group_manager=app_state.polaris_group_manager,
+                polaris_service=app_state.polaris_service,
+                s3_credential_store=app_state.s3_credential_store,
+                polaris_credential_store=app_state.polaris_credential_store,
+            )
+        except Exception as e:  # noqa: BLE001 — best-effort, log and continue
+            logger.warning(
+                "Failed to deprovision Trino service identity for group=%s: %s; "
+                "continuing teardown.",
+                group_name,
+                e,
+            )
 
     # Polaris first — drop catalog + roles. No-op for *ro inputs.
     await app_state.polaris_group_manager.delete_group(group_name)
@@ -742,9 +759,15 @@ async def rotate_all_credentials(
     users_rotated = 0
 
     all_usernames = await app_state.user_manager.list_resources()
-    logger.info(f"Rotating credentials for {len(all_usernames)} users")
+    skipped_service_users = _trino_service_usernames(all_usernames)
+    target_usernames = _human_usernames(all_usernames)
+    logger.info(
+        "Rotating credentials for %d users (skipping %d Trino service identities)",
+        len(target_usernames),
+        len(skipped_service_users),
+    )
 
-    for username in all_usernames:
+    for username in target_usernames:
         # Track each backend independently so a Polaris failure doesn't
         # mask a successful S3 rotation (or vice versa). Both backends
         # are attempted for every user even if the first fails.
@@ -778,7 +801,7 @@ async def rotate_all_credentials(
         if s3_ok and polaris_ok:
             users_rotated += 1
 
-    users_failed = len(all_usernames) - users_rotated
+    users_failed = len(target_usernames) - users_rotated
 
     logger.info(
         f"Admin {authenticated_user.user} rotated credentials: "
@@ -814,8 +837,9 @@ class RegeneratePoliciesResponse(BaseModel):
 class EnsurePolarisRequest(BaseModel):
     """Request model for bulk Polaris resource provisioning.
 
-    Operators can supply exclusion lists to skip system / service accounts
-    or groups that should not be backfilled into Polaris.
+    Operators can supply exclusion lists to skip system accounts or groups
+    that should not be backfilled into Polaris. Trino service identities are
+    skipped automatically.
     """
 
     model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
@@ -885,7 +909,10 @@ class EnsurePolarisResponse(BaseModel):
         list[str],
         Field(
             default_factory=list,
-            description="Usernames excluded by the caller that exist in the system",
+            description=(
+                "Present usernames skipped because they were excluded by the "
+                "caller or are managed Trino service identities"
+            ),
         ),
     ]
     groups_skipped: Annotated[
@@ -1003,7 +1030,12 @@ class RepairPolarisCatalogStorageResponse(BaseModel):
     unchanged: Annotated[list[str], Field(description="Catalogs already matching")]
     users_skipped: Annotated[
         list[str],
-        Field(description="Present users skipped by exclude_users"),
+        Field(
+            description=(
+                "Present users skipped by exclude_users or because they are "
+                "managed Trino service identities"
+            )
+        ),
     ]
     groups_skipped: Annotated[
         list[str],
@@ -1041,9 +1073,15 @@ async def regenerate_all_policies(
 
     # Regenerate user HOME policies
     all_usernames = await app_state.user_manager.list_resources()
-    logger.info(f"Regenerating HOME policies for {len(all_usernames)} users")
+    target_usernames = _human_usernames(all_usernames)
+    skipped_service_users = _trino_service_usernames(all_usernames)
+    logger.info(
+        "Regenerating HOME policies for %d users (skipping %d Trino service identities)",
+        len(target_usernames),
+        len(skipped_service_users),
+    )
 
-    for username in all_usernames:
+    for username in target_usernames:
         try:
             await app_state.policy_manager.regenerate_user_home_policy(username)
             users_updated += 1
@@ -1120,8 +1158,9 @@ async def regenerate_all_policies(
         "Ensure all users have Polaris principals, personal catalogs, and roles. "
         "Ensure all groups have tenant catalogs. Grant correct principal roles "
         "based on group memberships. All operations are idempotent. "
-        "Callers may pass `exclude_users` / `exclude_groups` to skip system or "
-        "service accounts and groups that should not be backfilled."
+        "Trino service identities are skipped automatically. Callers may pass "
+        "`exclude_users` / `exclude_groups` to skip other system accounts and "
+        "groups that should not be backfilled."
     ),
 )
 async def ensure_all_polaris_resources(
@@ -1178,11 +1217,16 @@ async def ensure_all_polaris_resources(
     # too so we don't grant a role on a catalog we deliberately didn't
     # provision in step 1.
     all_usernames = await app_state.user_manager.list_resources()
-    target_usernames = [u for u in all_usernames if u not in exclude_users]
-    skipped_users = sorted(set(all_usernames) & exclude_users)
+    service_usernames = set(_trino_service_usernames(all_usernames))
+    target_usernames = [
+        u
+        for u in all_usernames
+        if u not in exclude_users and u not in service_usernames
+    ]
+    skipped_users = sorted((set(all_usernames) & exclude_users) | service_usernames)
     logger.info(
         f"Ensuring Polaris resources for {len(target_usernames)} users "
-        f"(skipped {len(skipped_users)} excluded users)"
+        f"(skipped {len(skipped_users)} excluded/service users)"
     )
 
     for username in target_usernames:
@@ -1315,17 +1359,20 @@ async def repair_polaris_catalog_storage(
     all_group_names = await app_state.group_manager.list_resources()
     base_groups = [g for g in all_group_names if not g.endswith("ro")]
 
+    service_usernames = set(_trino_service_usernames(all_usernames))
     target_users = [
         u
         for u in all_usernames
-        if u not in exclude_users and (not include_users or u in include_users)
+        if u not in exclude_users
+        and u not in service_usernames
+        and (not include_users or u in include_users)
     ]
     target_groups = [
         g
         for g in base_groups
         if g not in exclude_groups and (not include_groups or g in include_groups)
     ]
-    skipped_users = sorted(set(all_usernames) & exclude_users)
+    skipped_users = sorted((set(all_usernames) & exclude_users) | service_usernames)
     skipped_groups = sorted(set(base_groups) & exclude_groups)
 
     logger.info(
