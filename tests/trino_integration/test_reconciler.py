@@ -1,5 +1,6 @@
 """Tests for the per-tenant Trino catalog reconciler."""
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,9 +9,70 @@ from service.exceptions import PolarisOperationError
 from trino_integration.reconciler import (
     ADMIN_TOKEN_KEY,
     TrinoCatalogReconciler,
+    _read_env_or_file,
     _render_create_catalog_sql,
     build_iceberg_catalog_properties,
 )
+
+
+# === _read_env_or_file ===
+
+
+class TestReadEnvOrFile:
+    """Verify the docker-compose-friendly credential resolution.
+
+    The reconciler accepts either a direct env var or a ``_FILE``-suffixed
+    path so init containers can inject server-generated credentials into a
+    shared volume without rebuilding MMS or hardcoding secrets in compose
+    files.
+    """
+
+    def test_direct_env_wins_over_file(self, tmp_path):
+        path = tmp_path / "secret.txt"
+        path.write_text("from-file")
+        with patch.dict(
+            os.environ,
+            {"X_TEST_CRED": "from-env", "X_TEST_CRED_FILE": str(path)},
+            clear=False,
+        ):
+            assert _read_env_or_file("X_TEST_CRED") == "from-env"
+
+    def test_file_used_when_env_unset(self, tmp_path):
+        path = tmp_path / "secret.txt"
+        path.write_text("from-file\n")  # trailing newline must be stripped
+        with patch.dict(os.environ, {"X_TEST_CRED_FILE": str(path)}, clear=False):
+            os.environ.pop("X_TEST_CRED", None)
+            assert _read_env_or_file("X_TEST_CRED") == "from-file"
+
+    def test_returns_empty_when_both_unset(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("X_TEST_CRED", None)
+            os.environ.pop("X_TEST_CRED_FILE", None)
+            assert _read_env_or_file("X_TEST_CRED") == ""
+
+    def test_returns_empty_when_file_missing(self, tmp_path):
+        # File reference set, but path doesn't exist on disk: don't raise,
+        # log + return empty so the reconciler's _require_global_credentials
+        # surfaces a clear error instead.
+        with patch.dict(
+            os.environ,
+            {"X_TEST_CRED_FILE": str(tmp_path / "does_not_exist.txt")},
+            clear=False,
+        ):
+            os.environ.pop("X_TEST_CRED", None)
+            assert _read_env_or_file("X_TEST_CRED") == ""
+
+    def test_empty_direct_env_falls_back_to_file(self, tmp_path):
+        # Empty string is treated the same as unset (matches docker-compose's
+        # `env: ""` semantics) so the file fallback wins.
+        path = tmp_path / "secret.txt"
+        path.write_text("from-file")
+        with patch.dict(
+            os.environ,
+            {"X_TEST_CRED": "", "X_TEST_CRED_FILE": str(path)},
+            clear=False,
+        ):
+            assert _read_env_or_file("X_TEST_CRED") == "from-file"
 
 
 # === build_iceberg_catalog_properties ===
@@ -144,6 +206,42 @@ def _make_reconciler(**overrides):
     )
     defaults.update(overrides)
     return TrinoCatalogReconciler(**defaults)
+
+
+class TestReconcilerEnvFilePickup:
+    """Reconciler picks up Polaris credentials from ``_FILE``-routed env.
+
+    This is the docker-compose path where an init container writes the
+    server-generated client_id/secret into a shared volume and MMS reads
+    them at construction time.
+    """
+
+    def test_polaris_credentials_resolved_from_file(self, tmp_path):
+        cid = tmp_path / "polaris_client_id.txt"
+        sec = tmp_path / "polaris_client_secret.txt"
+        cid.write_text("file-cid")
+        sec.write_text("file-sec")
+        env = {
+            "TRINO_HOST": "trino-test",
+            "TRINO_PORT": "8080",
+            "TRINO_ADMIN_TOKEN": "test-admin-token",
+            "POLARIS_CATALOG_URI": "http://polaris:8181/api/catalog",
+            "MINIO_ENDPOINT": "http://minio:9000",
+            "TRINO_GLOBAL_S3_ACCESS_KEY": "global-ak",
+            "TRINO_GLOBAL_S3_SECRET_KEY": "global-sk",
+            "TRINO_GLOBAL_POLARIS_CLIENT_ID_FILE": str(cid),
+            "TRINO_GLOBAL_POLARIS_CLIENT_SECRET_FILE": str(sec),
+        }
+        with patch.dict(os.environ, env, clear=False):
+            for k in (
+                "TRINO_GLOBAL_POLARIS_CLIENT_ID",
+                "TRINO_GLOBAL_POLARIS_CLIENT_SECRET",
+            ):
+                os.environ.pop(k, None)
+            reconciler = TrinoCatalogReconciler()
+
+        assert reconciler._global_polaris_client_id == "file-cid"
+        assert reconciler._global_polaris_client_secret == "file-sec"
 
 
 class TestReconcileTenantPreconditions:

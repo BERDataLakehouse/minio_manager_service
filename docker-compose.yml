@@ -65,17 +65,82 @@ services:
       - MMS_DB_USER=mms
       - MMS_DB_PASSWORD=mmspassword
       - MMS_DB_ENCRYPTION_KEY=change-me-in-prod
+      # Global Trino service identity credentials. The reconciler splices
+      # these into CREATE CATALOG when invoked. This compose file does not
+      # include a Trino coordinator, so reconcile calls would fail anyway,
+      # but the identities are still bootstrapped to mirror the
+      # spark_notebook / datalake-mcp-server stacks for parity.
+      - TRINO_GLOBAL_S3_ACCESS_KEY=trino_svc
+      - TRINO_GLOBAL_S3_SECRET_KEY=local-dev-trino-svc-s3-secret
+      - TRINO_GLOBAL_POLARIS_CLIENT_ID_FILE=/shared-trino-svc/polaris_client_id.txt
+      - TRINO_GLOBAL_POLARIS_CLIENT_SECRET_FILE=/shared-trino-svc/polaris_client_secret.txt
+    volumes:
+      - trino-svc-credential:/shared-trino-svc:ro
     ports:
       - "8010:8000"
     depends_on:
       minio:
         condition: service_healthy
+      minio-create-buckets:
+        condition: service_completed_successfully
+      trino-svc-bootstrap:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       polaris:
         condition: service_healthy
       postgres:
         condition: service_healthy
+
+  minio-create-buckets:
+    # Creates the cdm-lake bucket so the trino-svc IAM policy targets a
+    # real resource, then provisions the trino_svc IAM user with a pinned
+    # access key + secret and attaches an inline ``s3:*`` policy on
+    # cdm-lake. Mirrors the equivalent bootstrap in spark_notebook /
+    # datalake-mcp-server stacks.
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      # Inline policy spec for trino_svc (s3:* on cdm-lake). Kept in a
+      # sibling file because the YAML folded entrypoint below collapses
+      # newlines, which would break an inline heredoc.
+      - ./scripts/trino-svc-policy.json:/policies/trino-svc-policy.json:ro
+    entrypoint: >
+      /bin/sh -c "
+      set -e;
+      echo 'Configuring MinIO...';
+      mc alias set local http://minio:9002 minio minio123;
+
+      echo 'Creating buckets...';
+      mc mb --ignore-existing local/cdm-lake;
+
+      echo 'Creating trino_svc IAM user...';
+      mc admin user add local trino_svc local-dev-trino-svc-s3-secret;
+
+      echo 'Creating + attaching trino-svc-cdm-lake-fullaccess policy...';
+      mc admin policy create local trino-svc-cdm-lake-fullaccess /policies/trino-svc-policy.json || true;
+      mc admin policy attach local trino-svc-cdm-lake-fullaccess --user trino_svc || true;
+
+      echo 'MinIO bucket creation complete.';
+      "
+
+  trino-svc-bootstrap:
+    # Creates the global Polaris ``trino_svc`` principal + service_admin
+    # role and writes the rotated client_id/client_secret to a shared
+    # volume that MMS reads via TRINO_GLOBAL_POLARIS_CLIENT_*_FILE. See
+    # scripts/trino-svc-bootstrap.sh for the script body. Idempotent on
+    # principal identity; rotates credentials on every run, so MMS picks
+    # up fresh values whenever the stack restarts.
+    image: curlimages/curl:8.11.1
+    depends_on:
+      polaris:
+        condition: service_healthy
+    volumes:
+      - ./scripts/trino-svc-bootstrap.sh:/bootstrap.sh:ro
+      - trino-svc-credential:/shared-trino-svc
+    entrypoint: ["/bin/sh", "/bootstrap.sh"]
 
   postgres:
     image: postgres:15
@@ -141,3 +206,4 @@ services:
 
 volumes:
   postgres_data:
+  trino-svc-credential:  # trino-svc-bootstrap → MMS Polaris client_id/secret

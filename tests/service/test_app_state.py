@@ -33,35 +33,22 @@ class TestAppStateNamedTuple:
             group_manager=MagicMock(),
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
-            polaris_service=MagicMock(),
             polaris_user_manager=MagicMock(),
             polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
-            polaris_credential_store=MagicMock(),
             s3_credential_service=MagicMock(),
-            s3_credential_store=MagicMock(),
             trino_catalog_reconciler=MagicMock(),
             tenant_manager=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
         )
         assert state.auth is not None
-        assert state.polaris_service is not None
         assert state.polaris_user_manager is not None
         assert state.polaris_group_manager is not None
         assert state.polaris_credential_service is not None
-        assert state.polaris_credential_store is not None
         assert state.s3_credential_service is not None
-        assert state.s3_credential_store is not None
         assert state.trino_catalog_reconciler is not None
         assert state.tenant_manager is not None
-
-    def test_app_state_exposes_polaris_service(self):
-        """Polaris orchestration depends on ``polaris_service`` being on
-        AppState; verify the field exists so a refactor that drops it
-        breaks loudly here.
-        """
-        assert "polaris_service" in AppState._fields
 
 
 # === REQUEST STATE TESTS ===
@@ -296,13 +283,10 @@ class TestDestroyAppState:
             group_manager=MagicMock(),
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
-            polaris_service=MagicMock(),
             polaris_user_manager=MagicMock(),
             polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
-            polaris_credential_store=MagicMock(),
             s3_credential_service=MagicMock(),
-            s3_credential_store=MagicMock(),
             trino_catalog_reconciler=MagicMock(),
             tenant_manager=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
@@ -346,13 +330,10 @@ class TestDestroyAppState:
             group_manager=MagicMock(),
             policy_manager=MagicMock(),
             sharing_manager=MagicMock(),
-            polaris_service=MagicMock(),
             polaris_user_manager=MagicMock(),
             polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
-            polaris_credential_store=MagicMock(),
             s3_credential_service=MagicMock(),
-            s3_credential_store=MagicMock(),
             trino_catalog_reconciler=MagicMock(),
             tenant_manager=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",

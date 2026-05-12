@@ -46,13 +46,10 @@ class AppState(NamedTuple):
     group_manager: GroupManager
     policy_manager: PolicyManager
     sharing_manager: SharingManager
-    polaris_service: PolarisService
     polaris_user_manager: PolarisUserManager
     polaris_group_manager: PolarisGroupManager
     polaris_credential_service: PolarisCredentialService
-    polaris_credential_store: PolarisCredentialStore
     s3_credential_service: S3CredentialService
-    s3_credential_store: S3CredentialStore
     trino_catalog_reconciler: TrinoCatalogReconciler
     tenant_manager: TenantManager
     users_sql_warehouse_base: str
@@ -237,13 +234,10 @@ async def build_app(app: FastAPI) -> None:
         group_manager=group_manager,
         policy_manager=policy_manager,
         sharing_manager=sharing_manager,
-        polaris_service=polaris_service,
         polaris_user_manager=polaris_user_manager,
         polaris_group_manager=polaris_group_manager,
         polaris_credential_service=polaris_credential_service,
-        polaris_credential_store=polaris_credential_store,
         s3_credential_service=s3_credential_service,
-        s3_credential_store=s3_credential_store,
         trino_catalog_reconciler=trino_catalog_reconciler,
         tenant_manager=tenant_manager,
         users_sql_warehouse_base=users_sql_warehouse_base,

@@ -29,6 +29,7 @@ import asyncio
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Iterable
 
 import trino
@@ -43,6 +44,37 @@ from trino_integration.service_identity import (
 logger = logging.getLogger(__name__)
 
 ADMIN_TOKEN_KEY = "trino_admin_token"
+
+
+def _read_env_or_file(env_var: str) -> str:
+    """Resolve a credential from ``$ENV_VAR`` or ``$ENV_VAR_FILE``.
+
+    The direct env var wins when set. Falling back to a file lets dev
+    docker-compose stacks bootstrap the global Trino service identity in
+    an init container that writes the rotated value into a shared volume,
+    without rebuilding MMS or hardcoding a secret in the compose file.
+    Mirrors the ``CSEP_POLARIS_CREDENTIAL_FILE`` pattern in
+    ``cdm-spark-events``.
+
+    Returns the empty string when neither is set; callers decide whether
+    to error.
+    """
+    direct = os.getenv(env_var, "")
+    if direct:
+        return direct
+    file_path = os.getenv(f"{env_var}_FILE", "")
+    if file_path:
+        try:
+            return Path(file_path).read_text().strip()
+        except FileNotFoundError:
+            logger.warning(
+                "%s_FILE points to %s which does not exist; "
+                "treating credential as unset",
+                env_var,
+                file_path,
+            )
+    return ""
+
 
 # Allowed names follow the access-control plugin's TENANT_ALIAS_PATTERN
 # verbatim; if these diverge, the plugin will reject otherwise-valid
@@ -215,18 +247,22 @@ class TrinoCatalogReconciler:
         # Global service identity credentials: one Polaris principal + one
         # IAM user shared across all tenant catalogs, pre-provisioned by an
         # admin. The reconciler never mints these — it just splices them
-        # into the CREATE CATALOG statement for every tenant.
-        self._global_s3_access_key = global_s3_access_key or os.getenv(
-            "TRINO_GLOBAL_S3_ACCESS_KEY", ""
+        # into the CREATE CATALOG statement for every tenant. Each value
+        # may come from the direct env var or a ``_FILE``-suffixed path so
+        # docker-compose init containers can rotate credentials into a
+        # shared volume without restarting MMS to swap env values.
+        self._global_s3_access_key = global_s3_access_key or _read_env_or_file(
+            "TRINO_GLOBAL_S3_ACCESS_KEY"
         )
-        self._global_s3_secret_key = global_s3_secret_key or os.getenv(
-            "TRINO_GLOBAL_S3_SECRET_KEY", ""
+        self._global_s3_secret_key = global_s3_secret_key or _read_env_or_file(
+            "TRINO_GLOBAL_S3_SECRET_KEY"
         )
-        self._global_polaris_client_id = global_polaris_client_id or os.getenv(
-            "TRINO_GLOBAL_POLARIS_CLIENT_ID", ""
+        self._global_polaris_client_id = global_polaris_client_id or _read_env_or_file(
+            "TRINO_GLOBAL_POLARIS_CLIENT_ID"
         )
-        self._global_polaris_client_secret = global_polaris_client_secret or os.getenv(
-            "TRINO_GLOBAL_POLARIS_CLIENT_SECRET", ""
+        self._global_polaris_client_secret = (
+            global_polaris_client_secret
+            or _read_env_or_file("TRINO_GLOBAL_POLARIS_CLIENT_SECRET")
         )
 
     def _require_admin_token(self) -> None:
