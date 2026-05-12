@@ -11,6 +11,7 @@ from routes.polaris import router
 from credentials.polaris_store import PolarisCredentialRecord
 from polaris.managers.group_manager import PolarisGroupManager
 from polaris.managers.user_manager import PolarisUserManager
+from s3.models.user import UserModel
 from service import app_state
 from service.dependencies import auth
 from service.exception_handlers import universal_error_handler
@@ -41,6 +42,14 @@ def mock_polaris_service():
     polaris.grant_catalog_role_to_principal_role = AsyncMock(return_value={})
     polaris.grant_principal_role_to_principal = AsyncMock(return_value={})
     polaris.ensure_tenant_catalog = AsyncMock(return_value=None)
+    polaris.reset_principal_credentials = AsyncMock(
+        return_value={
+            "credentials": {
+                "clientId": "svc-client-id",
+                "clientSecret": "svc-client-secret",
+            }
+        }
+    )
     return polaris
 
 
@@ -62,6 +71,26 @@ def mock_app_state_obj(mock_polaris_service):
     # Group manager
     state.group_manager = AsyncMock()
     state.group_manager.get_user_groups = AsyncMock(return_value=[])
+    state.group_manager.add_user_to_group = AsyncMock()
+
+    # Service identity dependencies used by the Trino reconcile endpoint.
+    state.user_manager = AsyncMock()
+    state.user_manager.resource_exists = AsyncMock(return_value=True)
+    state.user_manager.create_service_user = AsyncMock(
+        return_value=UserModel(
+            username="trino-team1-svc",
+            s3_access_key="trino-team1-svc",
+            s3_secret_key="svc-secret",
+            home_paths=[],
+            groups=[],
+            total_policies=0,
+        )
+    )
+    state.s3_credential_store = AsyncMock()
+    state.s3_credential_store.get_credentials = AsyncMock(
+        return_value=("trino-team1-svc", "cached-s3-secret")
+    )
+    state.s3_credential_store.store_credentials = AsyncMock()
 
     # Polaris service + real managers pointing at it.
     state.polaris_service = mock_polaris_service
@@ -88,6 +117,18 @@ def mock_app_state_obj(mock_polaris_service):
             personal_catalog="user_testuser",
         )
     )
+    state.polaris_credential_store = AsyncMock()
+    state.polaris_credential_store.get_credentials = AsyncMock(
+        return_value=PolarisCredentialRecord(
+            client_id="cached-client-id",
+            client_secret="cached-client-secret",
+            personal_catalog="tenant_team1",
+        )
+    )
+    state.polaris_credential_store.store_credentials = AsyncMock()
+
+    state.trino_catalog_reconciler = AsyncMock()
+    state.trino_catalog_reconciler.reconcile_tenant = AsyncMock(return_value="team1")
 
     return state
 
@@ -242,23 +283,23 @@ class TestProvisionPolarisUser:
     ):
         """Test tenant catalogs are included from group memberships."""
         mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
-            return_value=["teamA", "teamBro"]
+            return_value=["team1", "team2ro"]
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/polaris/user_provision/testuser")
 
         data = response.json()
-        assert "tenant_teamA" in data["tenant_catalogs"]
-        # "teamBro" ends with "ro" so strips suffix
-        assert "tenant_teamB" in data["tenant_catalogs"]
+        assert "tenant_team1" in data["tenant_catalogs"]
+        # "team2ro" ends with "ro" so strips suffix
+        assert "tenant_team2" in data["tenant_catalogs"]
 
     def test_provision_ensures_tenant_catalogs_for_groups(
         self, mock_app_state_obj, regular_user
     ):
         """Test ensure_tenant_catalog is called once per base group."""
         mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
-            return_value=["teamA", "teamBro"]
+            return_value=["team1", "team2ro"]
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
@@ -268,26 +309,26 @@ class TestProvisionPolarisUser:
 
         polaris = mock_app_state_obj.polaris_service
         # Should call ensure_tenant_catalog for both groups
-        # "teamA" (non-ro) and "teamB" (base of "teamBro")
+        # "team1" (non-ro) and "team2" (base of "team2ro")
         calls = polaris.ensure_tenant_catalog.call_args_list
         call_group_names = [c[0][0] for c in calls]
-        assert "teamA" in call_group_names
-        assert "teamB" in call_group_names
+        assert "team1" in call_group_names
+        assert "team2" in call_group_names
 
     def test_provision_ensures_tenant_catalog_uses_tenant_warehouse_base(
         self, mock_app_state_obj, regular_user
     ):
         """Test ensure_tenant_catalog is called with the tenant warehouse path."""
         mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
-            return_value=["teamA"]
+            return_value=["team1"]
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
         client.post("/polaris/user_provision/testuser")
 
         mock_app_state_obj.polaris_service.ensure_tenant_catalog.assert_called_once_with(
-            "teamA",
-            "s3a://cdm-lake/tenant-sql-warehouse/teamA/iceberg/",
+            "team1",
+            "s3a://cdm-lake/tenant-sql-warehouse/team1/iceberg/",
         )
 
     def test_provision_catalog_with_globalusers_group(
@@ -323,40 +364,40 @@ class TestProvisionPolarisUser:
     ):
         """Test the same base tenant appears once and only the writer role is bound."""
         mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
-            return_value=["teamA", "teamAro"]  # both variants of the same base
+            return_value=["team1", "team1ro"]  # both variants of the same base
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/polaris/user_provision/testuser")
 
         # Tenant appears exactly once in the response.
-        assert response.json()["tenant_catalogs"] == ["tenant_teamA"]
+        assert response.json()["tenant_catalogs"] == ["tenant_team1"]
 
         # ensure_tenant_catalog called once per base group (not once per variant).
         polaris = mock_app_state_obj.polaris_service
         assert polaris.ensure_tenant_catalog.call_count == 1
         polaris.ensure_tenant_catalog.assert_called_once_with(
-            "teamA", "s3a://cdm-lake/tenant-sql-warehouse/teamA/iceberg/"
+            "team1", "s3a://cdm-lake/tenant-sql-warehouse/team1/iceberg/"
         )
 
         # Only the WRITER principal role binding is granted (write supersedes read).
         tenant_grant_calls = [
             call
             for call in polaris.grant_principal_role_to_principal.call_args_list
-            if call.kwargs.get("principal_role", "").startswith("teamA")
-            or (len(call.args) >= 2 and call.args[1].startswith("teamA"))
+            if call.kwargs.get("principal_role", "").startswith("team1")
+            or (len(call.args) >= 2 and call.args[1].startswith("team1"))
         ]
         assert len(tenant_grant_calls) == 1
         # Positional call: grant_principal_role_to_principal(username, role)
         granted_role = tenant_grant_calls[0].args[1]
-        assert granted_role == "teamA_member"  # writer, not "teamAro_member"
+        assert granted_role == "team1_member"  # writer, not "team1ro_member"
 
     def test_provision_skips_empty_base_group_defensively(
         self, mock_app_state_obj, regular_user
     ):
         """Test a group named exactly 'ro' (normalises to '') is skipped."""
         mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
-            return_value=["ro", "teamA"]
+            return_value=["ro", "team1"]
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
@@ -365,10 +406,10 @@ class TestProvisionPolarisUser:
         data = response.json()
         # No "tenant_" entry from the empty base.
         assert "tenant_" not in data["tenant_catalogs"]
-        assert data["tenant_catalogs"] == ["tenant_teamA"]
+        assert data["tenant_catalogs"] == ["tenant_team1"]
         polaris = mock_app_state_obj.polaris_service
         polaris.ensure_tenant_catalog.assert_called_once_with(
-            "teamA", "s3a://cdm-lake/tenant-sql-warehouse/teamA/iceberg/"
+            "team1", "s3a://cdm-lake/tenant-sql-warehouse/team1/iceberg/"
         )
 
 
@@ -438,7 +479,7 @@ class TestEffectiveAccess:
         regular_user,
     ):
         mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
-            return_value=["teamA", "teamBro"]
+            return_value=["team1", "team2ro"]
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
@@ -451,13 +492,13 @@ class TestEffectiveAccess:
         assert data["personal_catalog"] == "user_testuser"
         assert data["group_tenants"] == [
             {
-                "tenant_name": "teamA",
-                "catalog_name": "tenant_teamA",
+                "tenant_name": "team1",
+                "catalog_name": "tenant_team1",
                 "access_level": "read_write",
             },
             {
-                "tenant_name": "teamB",
-                "catalog_name": "tenant_teamB",
+                "tenant_name": "team2",
+                "catalog_name": "tenant_team2",
                 "access_level": "read_only",
             },
         ]
@@ -495,7 +536,7 @@ class TestEffectiveAccess:
         regular_user,
     ):
         mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
-            return_value=["", "teamA", "teamAro"]
+            return_value=["", "team1", "team1ro"]
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
@@ -505,8 +546,8 @@ class TestEffectiveAccess:
         assert response.status_code == 200
         assert response.json()["group_tenants"] == [
             {
-                "tenant_name": "teamA",
-                "catalog_name": "tenant_teamA",
+                "tenant_name": "team1",
+                "catalog_name": "tenant_team1",
                 "access_level": "read_write",
             }
         ]
@@ -518,7 +559,7 @@ class TestEffectiveAccess:
     ):
         """Test RW preference holds when read variant comes first in input."""
         mock_app_state_obj.group_manager.get_user_groups = AsyncMock(
-            return_value=["teamAro", "teamA"]  # read variant first
+            return_value=["team1ro", "team1"]  # read variant first
         )
         app = _create_test_app(mock_app_state_obj, regular_user)
         client = TestClient(app, raise_server_exceptions=False)
@@ -528,8 +569,40 @@ class TestEffectiveAccess:
         assert response.status_code == 200
         assert response.json()["group_tenants"] == [
             {
-                "tenant_name": "teamA",
-                "catalog_name": "tenant_teamA",
+                "tenant_name": "team1",
+                "catalog_name": "tenant_team1",
                 "access_level": "read_write",
             }
         ]
+
+
+class TestPolarisManagement:
+    """Tests for admin Polaris maintenance endpoints."""
+
+    def test_single_tenant_reconcile_force_recreates_catalog(
+        self, mock_app_state_obj, admin_user
+    ):
+        """The single-tenant reconcile endpoint must pass ``force=True`` so
+        rotated TRINO_GLOBAL_* credentials get pushed into the existing
+        catalog. The default pre-check would otherwise skip it."""
+        app = _create_test_app(mock_app_state_obj, admin_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post("/polaris/management/tenants/team1/reconcile-trino")
+
+        assert response.status_code == 200
+        assert response.json() == {"tenant_name": "team1", "tenant_alias": "team1"}
+        mock_app_state_obj.trino_catalog_reconciler.reconcile_tenant.assert_awaited_once_with(
+            "team1", force=True
+        )
+
+    def test_single_tenant_reconcile_rejects_invalid_tenant_name_before_side_effects(
+        self, mock_app_state_obj, admin_user
+    ):
+        app = _create_test_app(mock_app_state_obj, admin_user)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post("/polaris/management/tenants/Team1/reconcile-trino")
+
+        assert response.status_code == 400
+        mock_app_state_obj.trino_catalog_reconciler.reconcile_tenant.assert_not_awaited()

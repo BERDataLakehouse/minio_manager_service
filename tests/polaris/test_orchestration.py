@@ -77,43 +77,43 @@ class TestEnsureUserPolarisState:
         self, call_helper, group_manager, polaris_group_manager
     ):
         """Distinct base groups each get one add_user_to_group call."""
-        group_manager.get_user_groups.return_value = ["teamA", "teamB"]
+        group_manager.get_user_groups.return_value = ["team1", "team2"]
 
         _, tenants = await call_helper("alice")
 
-        assert sorted(tenants) == ["tenant_teamA", "tenant_teamB"]
+        assert sorted(tenants) == ["tenant_team1", "tenant_team2"]
         add_calls = polaris_group_manager.add_user_to_group.call_args_list
         assert sorted(c.args for c in add_calls) == [
-            ("alice", "teamA"),
-            ("alice", "teamB"),
+            ("alice", "team1"),
+            ("alice", "team2"),
         ]
 
     @pytest.mark.asyncio
     async def test_dedups_writer_and_reader_to_writer_only(
         self, call_helper, group_manager, polaris_group_manager
     ):
-        """User in both teamA and teamAro gets one writer binding."""
-        group_manager.get_user_groups.return_value = ["teamA", "teamAro"]
+        """User in both team1 and team1ro gets one writer binding."""
+        group_manager.get_user_groups.return_value = ["team1", "team1ro"]
 
         _, tenants = await call_helper("alice")
 
-        assert tenants == ["tenant_teamA"]
+        assert tenants == ["tenant_team1"]
         polaris_group_manager.add_user_to_group.assert_called_once_with(
-            "alice", "teamA"
+            "alice", "team1"
         )
 
     @pytest.mark.asyncio
     async def test_ro_only_membership_passes_through_ro_suffix(
         self, call_helper, group_manager, polaris_group_manager
     ):
-        """User in only teamAro gets the {group}ro name (not stripped)."""
-        group_manager.get_user_groups.return_value = ["teamAro"]
+        """User in only team1ro gets the {group}ro name (not stripped)."""
+        group_manager.get_user_groups.return_value = ["team1ro"]
 
         _, tenants = await call_helper("alice")
 
-        assert tenants == ["tenant_teamA"]
+        assert tenants == ["tenant_team1"]
         polaris_group_manager.add_user_to_group.assert_called_once_with(
-            "alice", "teamAro"
+            "alice", "team1ro"
         )
 
     @pytest.mark.asyncio
@@ -121,27 +121,27 @@ class TestEnsureUserPolarisState:
         self, call_helper, group_manager, polaris_group_manager
     ):
         """exclude_groups drops the base from both the tenant list and the bindings."""
-        group_manager.get_user_groups.return_value = ["teamA", "teamB", "teamCro"]
+        group_manager.get_user_groups.return_value = ["team1", "team2", "team3ro"]
 
-        _, tenants = await call_helper("alice", exclude_groups={"teamB"})
+        _, tenants = await call_helper("alice", exclude_groups={"team2"})
 
-        assert "tenant_teamA" in tenants
-        assert "tenant_teamC" in tenants
-        assert "tenant_teamB" not in tenants
+        assert "tenant_team1" in tenants
+        assert "tenant_team3" in tenants
+        assert "tenant_team2" not in tenants
         add_calls = polaris_group_manager.add_user_to_group.call_args_list
         target_groups = {c.args[1] for c in add_calls}
-        assert "teamB" not in target_groups
-        assert "teamA" in target_groups
-        assert "teamCro" in target_groups
+        assert "team2" not in target_groups
+        assert "team1" in target_groups
+        assert "team3ro" in target_groups
 
     @pytest.mark.asyncio
     async def test_exclude_groups_skips_ro_sibling_too(
         self, call_helper, group_manager, polaris_group_manager
     ):
-        """Excluding base "teamA" also drops "teamAro" bindings (via base lookup)."""
-        group_manager.get_user_groups.return_value = ["teamAro"]
+        """Excluding base "team1" also drops "team1ro" bindings (via base lookup)."""
+        group_manager.get_user_groups.return_value = ["team1ro"]
 
-        _, tenants = await call_helper("alice", exclude_groups={"teamA"})
+        _, tenants = await call_helper("alice", exclude_groups={"team1"})
 
         assert tenants == []
         polaris_group_manager.add_user_to_group.assert_not_called()
@@ -155,9 +155,9 @@ class TestEnsureUserPolarisState:
         polaris_group_manager,
     ):
         """Even if every group is excluded, personal Polaris assets still happen."""
-        group_manager.get_user_groups.return_value = ["teamA"]
+        group_manager.get_user_groups.return_value = ["team1"]
 
-        await call_helper("alice", exclude_groups={"teamA"})
+        await call_helper("alice", exclude_groups={"team1"})
 
         polaris_user_manager.create_user.assert_called_once_with("alice")
         polaris_group_manager.add_user_to_group.assert_not_called()
@@ -167,9 +167,9 @@ class TestEnsureUserPolarisState:
         self, call_helper, group_manager, polaris_group_manager
     ):
         """exclude_groups=None and exclude_groups=set() are equivalent."""
-        group_manager.get_user_groups.return_value = ["teamA"]
+        group_manager.get_user_groups.return_value = ["team1"]
 
         await call_helper("alice")
         polaris_group_manager.add_user_to_group.assert_called_once_with(
-            "alice", "teamA"
+            "alice", "team1"
         )
