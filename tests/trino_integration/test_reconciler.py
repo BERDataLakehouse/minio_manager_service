@@ -415,6 +415,65 @@ class TestTenantCatalogExists:
             assert await reconciler.tenant_catalog_exists("globalusers") is False
 
 
+class TestExecuteAdminSqlExceptionTranslation:
+    """Raw trino.exceptions.* must be translated to PolarisOperationError.
+
+    The MMS API exception handler maps PolarisOperationError to a clean
+    HTTP response; raw trino client exceptions would fall through to a
+    generic 500 with no actionable message. Tested here so a regression
+    that drops the wrapping is caught.
+    """
+
+    @pytest.mark.asyncio
+    async def test_trino_user_error_becomes_polaris_operation_error(self):
+        import trino.exceptions
+
+        reconciler = _make_reconciler()
+        with patch("trino_integration.reconciler.trino.dbapi") as mock_dbapi:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.execute.side_effect = trino.exceptions.TrinoUserError(
+                {"errorName": "PERMISSION_DENIED", "message": "denied"},
+                query_id="q-test",
+            )
+            mock_conn.cursor.return_value = mock_cursor
+            mock_conn.__enter__.return_value = mock_conn
+            mock_conn.__exit__.return_value = None
+            mock_dbapi.connect.return_value = mock_conn
+
+            with pytest.raises(PolarisOperationError) as excinfo:
+                await reconciler.deprovision_tenant("globalusers")
+
+            # Original cause preserved for log inspection.
+            assert isinstance(excinfo.value.__cause__, trino.exceptions.TrinoUserError)
+            assert "Trino rejected admin SQL" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_trino_http_error_becomes_polaris_operation_error(self):
+        # Coordinator unreachable / TLS error / 5xx → PolarisOperationError
+        # so callers don't have to care about transport vs server-side
+        # failures separately.
+        import trino.exceptions
+
+        reconciler = _make_reconciler()
+        with patch("trino_integration.reconciler.trino.dbapi") as mock_dbapi:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.execute.side_effect = trino.exceptions.HttpError(
+                "Connection refused"
+            )
+            mock_conn.cursor.return_value = mock_cursor
+            mock_conn.__enter__.return_value = mock_conn
+            mock_conn.__exit__.return_value = None
+            mock_dbapi.connect.return_value = mock_conn
+
+            with pytest.raises(PolarisOperationError) as excinfo:
+                await reconciler.deprovision_tenant("globalusers")
+
+            assert isinstance(excinfo.value.__cause__, trino.exceptions.HttpError)
+            assert "Trino HTTP error" in str(excinfo.value)
+
+
 class TestDeprovisionTenant:
     @pytest.mark.asyncio
     async def test_issues_single_drop_catalog(self):

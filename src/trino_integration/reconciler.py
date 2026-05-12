@@ -306,7 +306,14 @@ class TrinoCatalogReconciler:
         )
 
     async def _execute_admin_sql(self, statements: Iterable[str]) -> None:
-        """Run a sequence of admin SQL statements on a fresh connection."""
+        """Run a sequence of admin SQL statements on a fresh connection.
+
+        Translates raw ``trino.exceptions.*`` and underlying transport
+        errors into :class:`PolarisOperationError` so the FastAPI error
+        mapper produces a consistent response shape regardless of whether
+        the failure came from Polaris, MinIO, or Trino. Original cause
+        is preserved via ``raise ... from e`` for log inspection.
+        """
 
         def _run():
             with self._connect() as conn:
@@ -315,7 +322,21 @@ class TrinoCatalogReconciler:
                     cursor.execute(sql)
                     cursor.fetchall()
 
-        await asyncio.to_thread(_run)
+        try:
+            await asyncio.to_thread(_run)
+        except trino.exceptions.TrinoUserError as e:
+            # Plugin denial, syntax error, invalid catalog name, etc.
+            raise PolarisOperationError(f"Trino rejected admin SQL: {e}") from e
+        except trino.exceptions.TrinoQueryError as e:
+            # Coordinator-side query/internal error.
+            raise PolarisOperationError(
+                f"Trino query error during admin SQL: {e}"
+            ) from e
+        except trino.exceptions.HttpError as e:
+            # Connection refused, TLS error, 4xx/5xx from coordinator.
+            raise PolarisOperationError(
+                f"Trino HTTP error during admin SQL: {e}"
+            ) from e
 
     async def tenant_catalog_exists(self, group_name: str) -> bool:
         """Return whether Trino currently has the tenant catalog alias.

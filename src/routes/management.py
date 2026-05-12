@@ -636,10 +636,19 @@ async def delete_group(
     request: Request,
     authenticated_user=Depends(require_admin),
 ):
-    """Delete a group and any associated Polaris tenant catalog + metadata.
+    """Delete a group and any associated Trino, Polaris, and MinIO state.
 
-    Tear-down order: Polaris first (so the catalog and role bindings are gone
-    before MinIO IAM disappears), then MinIO IAM, then tenant metadata.
+    Tear-down order:
+      1. Trino — drop the tenant catalog so the coordinator stops routing
+         queries to a Polaris catalog that's about to disappear. Skipped
+         for ``*ro`` inputs and best-effort on failure (logged + continue).
+      2. Polaris — drop the tenant catalog and writer/reader principal
+         roles before MinIO IAM disappears so role bindings can never
+         reference a deleted IAM identity.
+      3. MinIO IAM — delete the group resource (and the ``{name}ro``
+         companion).
+      4. Tenant metadata — drop the metadata row last, after every
+         backing service has acknowledged removal.
     """
     app_state = get_app_state(request)
 

@@ -126,8 +126,8 @@ services:
       echo 'Creating buckets...';
       mc mb --ignore-existing local/cdm-lake;
 
-      echo 'Creating trino_svc IAM user...';
-      mc admin user add local trino_svc local-dev-trino-svc-s3-secret;
+      echo 'Ensuring trino_svc IAM user exists...';
+      mc admin user info local trino_svc >/dev/null 2>&1 || mc admin user add local trino_svc local-dev-trino-svc-s3-secret;
 
       echo 'Creating + attaching trino-svc-cdm-lake-fullaccess policy...';
       mc admin policy create local trino-svc-cdm-lake-fullaccess /policies/trino-svc-policy.json || true;
