@@ -33,6 +33,7 @@ from service.kb_auth import KBaseAuth, KBaseUser
 from tenant_metadata.kbase_profile_client import KBaseUserProfileClient
 from tenant_metadata.tenant_metadata_store import TenantMetadataStore
 from tenant_metadata.user_profile_store import UserProfileStore
+from trino_integration.reconciler import TrinoCatalogReconciler
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ class AppState(NamedTuple):
     polaris_group_manager: PolarisGroupManager
     polaris_credential_service: PolarisCredentialService
     s3_credential_service: S3CredentialService
+    trino_catalog_reconciler: TrinoCatalogReconciler
     tenant_manager: TenantManager
     users_sql_warehouse_base: str
     tenant_sql_warehouse_base: str
@@ -199,6 +201,17 @@ async def build_app(app: FastAPI) -> None:
     )
     logger.info("S3 credential service initialized")
 
+    # Trino catalog reconciler. Reads the global Polaris + IAM service
+    # identity creds from TRINO_GLOBAL_* env vars and issues CREATE/DROP
+    # CATALOG against Trino as the configured admin identity (default:
+    # platform_admin) authenticated via the trino_admin_token extra
+    # credential.
+    trino_catalog_reconciler = TrinoCatalogReconciler(
+        polaris_catalog_uri=polaris_uri,
+        s3_endpoint=str(config.endpoint),
+    )
+    logger.info("Trino catalog reconciler initialized")
+
     # Initialize profile client and tenant manager
     profile_client = KBaseUserProfileClient(auth_url, pool=db_pool.pool)
     tenant_manager = TenantManager(
@@ -225,6 +238,7 @@ async def build_app(app: FastAPI) -> None:
         polaris_group_manager=polaris_group_manager,
         polaris_credential_service=polaris_credential_service,
         s3_credential_service=s3_credential_service,
+        trino_catalog_reconciler=trino_catalog_reconciler,
         tenant_manager=tenant_manager,
         users_sql_warehouse_base=users_sql_warehouse_base,
         tenant_sql_warehouse_base=tenant_sql_warehouse_base,

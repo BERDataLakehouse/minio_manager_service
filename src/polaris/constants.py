@@ -83,8 +83,8 @@ def dedup_groups_preferring_write(
 ) -> dict[str, bool]:
     """Collapse a user's MinIO group memberships to one Polaris binding per tenant.
 
-    A user can belong to both the read-write (``teamA``) and read-only
-    (``teamAro``) variants of the same tenant. In Polaris we only need the
+    A user can belong to both the read-write (``team1``) and read-only
+    (``team1ro``) variants of the same tenant. In Polaris we only need the
     higher-privilege binding — granting both is wasteful and the writer role
     is a strict superset of the reader role anyway.
 

@@ -1,0 +1,25 @@
+{
+  "rootGroups": [
+    {
+      "name": "global",
+      "softMemoryLimit": "100%",
+      "hardConcurrencyLimit": 20,
+      "maxQueued": 200,
+      "schedulingPolicy": "weighted_fair",
+      "subGroups": [
+        {
+          "name": "user-${USER}",
+          "softMemoryLimit": "30%",
+          "hardConcurrencyLimit": 5,
+          "maxQueued": 20
+        }
+      ]
+    }
+  ],
+  "selectors": [
+    {
+      "user": ".*",
+      "group": "global.user-${USER}"
+    }
+  ]
+}

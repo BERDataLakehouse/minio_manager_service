@@ -5,6 +5,7 @@ import pytest
 from s3.utils.validators import (
     validate_username,
     validate_group_name,
+    validate_tenant_group_name,
     validate_bucket_name,
     validate_s3_path,
     validate_path_prefix,
@@ -240,6 +241,46 @@ class TestValidateGroupName:
             with pytest.raises(GroupOperationError) as exc_info:
                 validate_group_name(group)
             assert "reserved" in str(exc_info.value).lower()
+
+
+# =============================================================================
+# TEST TENANT GROUP NAME VALIDATION
+# =============================================================================
+
+
+class TestValidateTenantGroupName:
+    """Tests for validate_tenant_group_name function.
+
+    Layered on top of validate_group_name. Adds one extra rule: tenant
+    base names cannot end in ``ro`` because the create-group flow auto-
+    creates a ``{name}ro`` companion group for the read-only variant.
+    """
+
+    def test_accepts_valid_tenant_name(self):
+        assert validate_tenant_group_name("globalusers") == "globalusers"
+
+    def test_accepts_short_tenant_name(self):
+        assert validate_tenant_group_name("ab") == "ab"
+
+    def test_rejects_ro_suffix(self):
+        with pytest.raises(GroupOperationError) as exc_info:
+            validate_tenant_group_name("globalusersro")
+        assert "ro" in str(exc_info.value)
+
+    def test_rejects_two_letter_ro(self):
+        """The minimum-length ``ro`` itself must be rejected."""
+        with pytest.raises(GroupOperationError):
+            validate_tenant_group_name("ro")
+
+    def test_propagates_underlying_validation_errors(self):
+        # validate_group_name rejects underscores; validate_tenant_group_name
+        # must propagate that rejection rather than wrap it.
+        with pytest.raises(GroupOperationError):
+            validate_tenant_group_name("bad_name")
+
+    def test_propagates_uppercase_rejection(self):
+        with pytest.raises(GroupOperationError):
+            validate_tenant_group_name("Globalusers")
 
 
 # =============================================================================

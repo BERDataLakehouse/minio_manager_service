@@ -175,6 +175,32 @@ def validate_group_name(group_name: str) -> str:
     return group_name
 
 
+def validate_tenant_group_name(group_name: str) -> str:
+    """
+    Validate a tenant group name a user is registering as a new tenant base.
+
+    Runs the standard ``validate_group_name`` checks, plus rejects names
+    ending in ``ro``. The ``ro`` suffix is reserved because the tenant
+    create-group flow auto-creates a ``{name}ro`` companion group for the
+    read-only variant — a user-supplied name ending in ``ro`` would produce
+    a confusing ``{name}roro`` companion and collide with the reservation.
+
+    Use this validator at tenant-creation boundaries (admin create-group
+    route, single-tenant Trino reconcile, etc.). The lower-level
+    :func:`validate_group_name` stays liberal so internal callers that
+    legitimately need to operate on the ``{name}ro`` companion group
+    (``GroupManager.create_group`` itself, ``resource_exists`` checks)
+    continue to work.
+    """
+    group_name = validate_group_name(group_name)
+    if group_name.endswith("ro"):
+        raise GroupOperationError(
+            "Tenant group name cannot end with 'ro' because that suffix is "
+            "reserved for read-only tenant companion groups"
+        )
+    return group_name
+
+
 # =============================================================================
 # BUCKET VALIDATION
 # =============================================================================

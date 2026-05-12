@@ -23,6 +23,7 @@ from routes.credentials import (
 from service.app_state import AppState
 from service.dependencies import auth
 from service.kb_auth import AdminPermission, KBaseUser
+from s3.models.user import UserModel
 
 
 # === FIXTURES ===
@@ -81,6 +82,38 @@ def mock_app_state():
     app_state.polaris_group_manager = AsyncMock()
     app_state.group_manager = AsyncMock()
     app_state.group_manager.get_user_groups = AsyncMock(return_value=[])
+    app_state.group_manager.resource_exists = AsyncMock(return_value=False)
+    app_state.group_manager.add_user_to_group = AsyncMock()
+
+    app_state.user_manager = AsyncMock()
+    app_state.user_manager.resource_exists = AsyncMock(return_value=True)
+    app_state.user_manager.create_service_user = AsyncMock(
+        return_value=UserModel(
+            username="trino-globalusers-svc",
+            s3_access_key="svc-ak",
+            s3_secret_key="svc-secret",
+            home_paths=[],
+            groups=[],
+            total_policies=0,
+        )
+    )
+
+    app_state.s3_credential_store = AsyncMock()
+    app_state.s3_credential_store.get_credentials = AsyncMock(return_value=None)
+    app_state.s3_credential_store.store_credentials = AsyncMock()
+    app_state.polaris_credential_store = AsyncMock()
+    app_state.polaris_credential_store.get_credentials = AsyncMock(return_value=None)
+    app_state.polaris_credential_store.store_credentials = AsyncMock()
+    app_state.polaris_user_manager.reset_credentials = AsyncMock(
+        return_value={
+            "credentials": {"clientId": "svc-cid", "clientSecret": "svc-secret"}
+        }
+    )
+
+    app_state.trino_catalog_reconciler = AsyncMock()
+    app_state.trino_catalog_reconciler.reconcile_tenant = AsyncMock(
+        return_value="globalusers"
+    )
 
     return app_state
 
@@ -207,6 +240,36 @@ class TestGetCredentialsEndpoint:
         mock_ensure.assert_awaited_once()
         # Username is the first positional arg.
         assert mock_ensure.await_args.args[0] == "testuser"
+
+    def test_get_credentials_reconciles_globalusers_trino_catalog(
+        self, client, mock_app_state
+    ):
+        """Every credential fetch calls the reconciler for the default tenant;
+        the reconciler's own pre-check decides whether work is needed."""
+        response = client.get("/credentials/")
+
+        assert response.status_code == 200
+        mock_app_state.trino_catalog_reconciler.reconcile_tenant.assert_awaited_once_with(
+            "globalusers"
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_credentials_propagates_trino_reconcile_failure(
+        self, mock_app_state
+    ):
+        """Trino reconcile is now a hard dependency in the credential path,
+        matching ``ensure_user_polaris_state`` — failures propagate so
+        operators see misconfiguration immediately rather than silently
+        leaving tenant catalogs broken."""
+        mock_app_state.trino_catalog_reconciler.reconcile_tenant.side_effect = (
+            Exception("TRINO_ADMIN_TOKEN is not configured")
+        )
+        mock_request = MagicMock()
+
+        with patch("routes.credentials.get_app_state", return_value=mock_app_state):
+            user = KBaseUser(user="testuser", admin_perm=AdminPermission.FULL)
+            with pytest.raises(Exception, match="TRINO_ADMIN_TOKEN is not configured"):
+                await get_credentials(user, mock_request)
 
     def test_get_credentials_response_format(self, client, mock_app_state):
         """Response body has exactly the expected fields."""

@@ -93,32 +93,32 @@ class TestDedupGroupsPreferringWrite:
         assert dedup_groups_preferring_write([]) == {}
 
     def test_single_writer_group(self):
-        assert dedup_groups_preferring_write(["teamA"]) == {"teamA": False}
+        assert dedup_groups_preferring_write(["team1"]) == {"team1": False}
 
     def test_single_reader_group(self):
-        assert dedup_groups_preferring_write(["teamAro"]) == {"teamA": True}
+        assert dedup_groups_preferring_write(["team1ro"]) == {"team1": True}
 
     def test_writer_and_reader_dedup_to_writer(self):
         """Both variants present → writer wins (is_ro=False)."""
-        assert dedup_groups_preferring_write(["teamA", "teamAro"]) == {"teamA": False}
+        assert dedup_groups_preferring_write(["team1", "team1ro"]) == {"team1": False}
 
     def test_writer_after_reader_still_wins(self):
         """Order doesn't matter — writer always wins over reader."""
-        assert dedup_groups_preferring_write(["teamAro", "teamA"]) == {"teamA": False}
+        assert dedup_groups_preferring_write(["team1ro", "team1"]) == {"team1": False}
 
     def test_independent_groups_kept_separately(self):
-        result = dedup_groups_preferring_write(["teamA", "teamBro", "teamC"])
-        assert result == {"teamA": False, "teamB": True, "teamC": False}
+        result = dedup_groups_preferring_write(["team1", "team2ro", "team3"])
+        assert result == {"team1": False, "team2": True, "team3": False}
 
     def test_empty_base_dropped(self):
         """A group named exactly "ro" normalises to base "" — dropped defensively."""
-        assert dedup_groups_preferring_write(["ro", "teamA"]) == {"teamA": False}
+        assert dedup_groups_preferring_write(["ro", "team1"]) == {"team1": False}
 
     def test_accepts_any_iterable(self):
         """Helper takes Iterable[str], not specifically list."""
 
         def gen() -> Iterable[str]:
-            yield "teamA"
-            yield "teamBro"
+            yield "team1"
+            yield "team2ro"
 
-        assert dedup_groups_preferring_write(gen()) == {"teamA": False, "teamB": True}
+        assert dedup_groups_preferring_write(gen()) == {"team1": False, "team2": True}

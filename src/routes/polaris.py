@@ -27,6 +27,7 @@ from polaris.orchestration import ensure_user_polaris_state
 from service import app_state
 from service.dependencies import auth, require_admin
 from service.kb_auth import AdminPermission, KBaseUser
+from s3.utils.validators import validate_tenant_group_name
 
 router = APIRouter(prefix="/polaris")
 
@@ -202,6 +203,48 @@ async def get_effective_access_for_user(
 ) -> PolarisEffectiveAccessResponse:
     """Return a user's effective Polaris access. Requires admin."""
     return await _effective_access_response(username, app_state_obj)
+
+
+class ReconcileTrinoCatalogResponse(BaseModel):
+    """Result of force-reconciling a single tenant's Trino catalog."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    tenant_name: str
+    tenant_alias: str
+
+
+@router.post(
+    "/management/tenants/{tenant_name}/reconcile-trino",
+    response_model=ReconcileTrinoCatalogResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Force-reconcile a single tenant Trino catalog",
+    description=(
+        "Drop and recreate the Trino catalog for ``tenant_name`` using the "
+        "global service identity credentials from env. Idempotent. Use cases:\n"
+        "- after rotating the global Trino service identity credentials\n"
+        "- recovery after a partial-failure during regular tenant create\n"
+        "- ad-hoc admin force-recreate.\n"
+        "For bulk reconcile across all tenants use "
+        "``POST /management/migrate/reconcile-trino-catalogs``."
+    ),
+)
+async def reconcile_tenant_trino_catalog(
+    tenant_name: str,
+    app_state_obj: Annotated[app_state.AppState, Depends(app_state.get_app_state)],
+    _authenticated_user: Annotated[KBaseUser, Depends(require_admin)],
+) -> ReconcileTrinoCatalogResponse:
+    """Force-reconcile one tenant's Trino catalog. Admin only."""
+    tenant_name = validate_tenant_group_name(tenant_name)
+    # force=True so rotated TRINO_GLOBAL_* credentials are pushed into the
+    # existing coordinator catalog. The pre-check default would skip it.
+    alias = await app_state_obj.trino_catalog_reconciler.reconcile_tenant(
+        tenant_name, force=True
+    )
+    return ReconcileTrinoCatalogResponse(
+        tenant_name=tenant_name,
+        tenant_alias=alias,
+    )
 
 
 async def _effective_access_response(
