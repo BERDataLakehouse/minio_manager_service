@@ -249,8 +249,10 @@ class TrinoCatalogReconciler:
         # admin. The reconciler never mints these — it just splices them
         # into the CREATE CATALOG statement for every tenant. Each value
         # may come from the direct env var or a ``_FILE``-suffixed path so
-        # docker-compose init containers can rotate credentials into a
-        # shared volume without restarting MMS to swap env values.
+        # docker-compose init containers can write credentials into a
+        # shared volume, but those files are read only at reconciler
+        # construction time; changes require recreating the reconciler
+        # (typically restarting MMS) to take effect.
         self._global_s3_access_key = global_s3_access_key or _read_env_or_file(
             "TRINO_GLOBAL_S3_ACCESS_KEY"
         )
