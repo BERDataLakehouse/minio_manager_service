@@ -236,7 +236,11 @@ async def reconcile_tenant_trino_catalog(
 ) -> ReconcileTrinoCatalogResponse:
     """Force-reconcile one tenant's Trino catalog. Admin only."""
     tenant_name = validate_tenant_group_name(tenant_name)
-    alias = await app_state_obj.trino_catalog_reconciler.reconcile_tenant(tenant_name)
+    # force=True so rotated TRINO_GLOBAL_* credentials are pushed into the
+    # existing coordinator catalog. The pre-check default would skip it.
+    alias = await app_state_obj.trino_catalog_reconciler.reconcile_tenant(
+        tenant_name, force=True
+    )
     return ReconcileTrinoCatalogResponse(
         tenant_name=tenant_name,
         tenant_alias=alias,

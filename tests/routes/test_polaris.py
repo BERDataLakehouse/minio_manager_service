@@ -579,9 +579,12 @@ class TestEffectiveAccess:
 class TestPolarisManagement:
     """Tests for admin Polaris maintenance endpoints."""
 
-    def test_single_tenant_reconcile_issues_create_catalog(
+    def test_single_tenant_reconcile_force_recreates_catalog(
         self, mock_app_state_obj, admin_user
     ):
+        """The single-tenant reconcile endpoint must pass ``force=True`` so
+        rotated TRINO_GLOBAL_* credentials get pushed into the existing
+        catalog. The default pre-check would otherwise skip it."""
         app = _create_test_app(mock_app_state_obj, admin_user)
         client = TestClient(app, raise_server_exceptions=False)
 
@@ -590,7 +593,7 @@ class TestPolarisManagement:
         assert response.status_code == 200
         assert response.json() == {"tenant_name": "team1", "tenant_alias": "team1"}
         mock_app_state_obj.trino_catalog_reconciler.reconcile_tenant.assert_awaited_once_with(
-            "team1"
+            "team1", force=True
         )
 
     def test_single_tenant_reconcile_rejects_invalid_tenant_name_before_side_effects(

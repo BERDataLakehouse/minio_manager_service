@@ -13,6 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from minio.managers.user_manager import GLOBAL_USER_GROUP
 from polaris.orchestration import ensure_user_polaris_state
 from s3.models.user import UserModel
 from s3.utils.validators import validate_tenant_group_name
@@ -23,7 +24,6 @@ from service.exceptions import (
     TenantNotFoundError,
     UserOperationError,
 )
-from trino_integration.bootstrap import ensure_globalusers_trino_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -307,7 +307,11 @@ async def create_user(
     # path — we keep it for the group-membership mirror that the credential
     # service does not perform.
     polaris_record = await app_state.polaris_credential_service.get_or_create(username)
-    await ensure_globalusers_trino_catalog(app_state)
+
+    # 4. Self-heal the default-tenant Trino catalog if missing on a cold
+    # stack. The reconciler pre-checks SHOW CATALOGS first so this is a
+    # cheap no-op in steady state.
+    await app_state.trino_catalog_reconciler.reconcile_tenant(GLOBAL_USER_GROUP)
 
     response = UserManagementResponse(
         username=user_info.username,
@@ -1165,8 +1169,11 @@ async def reconcile_all_trino_catalogs(
     for group_name in target_base_groups:
         try:
             group_name = validate_tenant_group_name(group_name)
+            # force=True so rotated TRINO_GLOBAL_* credentials are pushed
+            # into existing coordinator catalogs. The pre-check default
+            # would skip them and rotation wouldn't take effect.
             alias = await app_state.trino_catalog_reconciler.reconcile_tenant(
-                group_name
+                group_name, force=True
             )
             reconciled.append(alias)
         except Exception as e:  # noqa: BLE001 — per-group best-effort

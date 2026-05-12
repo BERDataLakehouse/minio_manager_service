@@ -24,7 +24,6 @@ from service.app_state import AppState
 from service.dependencies import auth
 from service.kb_auth import AdminPermission, KBaseUser
 from s3.models.user import UserModel
-from trino_integration.bootstrap import _reset_globalusers_trino_bootstrap_cache
 
 
 # === FIXTURES ===
@@ -35,14 +34,6 @@ def mock_mc_path():
     """Ensure MC_PATH is set for all tests."""
     with patch.dict(os.environ, {"MC_PATH": "/usr/local/bin/mc"}):
         yield
-
-
-@pytest.fixture(autouse=True)
-def reset_globalusers_trino_bootstrap_cache():
-    """Keep the in-process Trino bootstrap cache from leaking across tests."""
-    _reset_globalusers_trino_bootstrap_cache()
-    yield
-    _reset_globalusers_trino_bootstrap_cache()
 
 
 @pytest.fixture
@@ -120,9 +111,6 @@ def mock_app_state():
     )
 
     app_state.trino_catalog_reconciler = AsyncMock()
-    app_state.trino_catalog_reconciler.tenant_catalog_exists = AsyncMock(
-        return_value=True
-    )
     app_state.trino_catalog_reconciler.reconcile_tenant = AsyncMock(
         return_value="globalusers"
     )
@@ -253,16 +241,11 @@ class TestGetCredentialsEndpoint:
         # Username is the first positional arg.
         assert mock_ensure.await_args.args[0] == "testuser"
 
-    def test_get_credentials_reconciles_missing_globalusers_trino_catalog(
+    def test_get_credentials_reconciles_globalusers_trino_catalog(
         self, client, mock_app_state
     ):
-        """The default tenant gets Trino-provisioned on clean bootstrap by
-        issuing CREATE CATALOG against Trino with the global credentials."""
-        mock_app_state.group_manager.resource_exists.return_value = True
-        mock_app_state.trino_catalog_reconciler.tenant_catalog_exists.return_value = (
-            False
-        )
-
+        """Every credential fetch calls the reconciler for the default tenant;
+        the reconciler's own pre-check decides whether work is needed."""
         response = client.get("/credentials/")
 
         assert response.status_code == 200
@@ -270,35 +253,23 @@ class TestGetCredentialsEndpoint:
             "globalusers"
         )
 
-    def test_get_credentials_does_not_fail_when_globalusers_trino_repair_fails(
-        self, client, mock_app_state
+    @pytest.mark.asyncio
+    async def test_get_credentials_propagates_trino_reconcile_failure(
+        self, mock_app_state
     ):
-        """Trino repair is best-effort in the login credential path."""
-        mock_app_state.group_manager.resource_exists.return_value = True
-        mock_app_state.trino_catalog_reconciler.tenant_catalog_exists.side_effect = (
+        """Trino reconcile is now a hard dependency in the credential path,
+        matching ``ensure_user_polaris_state`` — failures propagate so
+        operators see misconfiguration immediately rather than silently
+        leaving tenant catalogs broken."""
+        mock_app_state.trino_catalog_reconciler.reconcile_tenant.side_effect = (
             Exception("TRINO_ADMIN_TOKEN is not configured")
         )
+        mock_request = MagicMock()
 
-        response = client.get("/credentials/")
-
-        assert response.status_code == 200
-        mock_app_state.trino_catalog_reconciler.reconcile_tenant.assert_not_awaited()
-
-    def test_get_credentials_caches_globalusers_trino_fast_path(
-        self, client, mock_app_state
-    ):
-        """Steady-state credential calls do not issue SHOW CATALOGS every time."""
-        mock_app_state.group_manager.resource_exists.return_value = True
-        mock_app_state.trino_catalog_reconciler.tenant_catalog_exists.return_value = (
-            True
-        )
-
-        assert client.get("/credentials/").status_code == 200
-        assert client.get("/credentials/").status_code == 200
-
-        mock_app_state.trino_catalog_reconciler.tenant_catalog_exists.assert_awaited_once_with(
-            "globalusers"
-        )
+        with patch("routes.credentials.get_app_state", return_value=mock_app_state):
+            user = KBaseUser(user="testuser", admin_perm=AdminPermission.FULL)
+            with pytest.raises(Exception, match="TRINO_ADMIN_TOKEN is not configured"):
+                await get_credentials(user, mock_request)
 
     def test_get_credentials_response_format(self, client, mock_app_state):
         """Response body has exactly the expected fields."""

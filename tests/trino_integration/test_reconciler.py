@@ -180,24 +180,78 @@ class TestReconcileTenantPreconditions:
             await reconciler.reconcile_tenant("globalusers")
 
 
-class TestReconcileTenantHappyPath:
+def _patch_dbapi(catalogs_present=()):
+    """Build a dbapi patch where SHOW CATALOGS returns ``catalogs_present``.
+
+    Returns the patch context manager and the cursor mock so tests can
+    assert on executed SQL after the ``with`` block.
+    """
+    cm = patch("trino_integration.reconciler.trino.dbapi")
+    mock_dbapi = cm.start()
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
+    mock_cursor.fetchall.return_value = [(name,) for name in catalogs_present]
+    mock_conn.cursor.return_value = mock_cursor
+    mock_conn.__enter__.return_value = mock_conn
+    mock_conn.__exit__.return_value = None
+    mock_dbapi.connect.return_value = mock_conn
+    return cm, mock_dbapi, mock_cursor
+
+
+class TestReconcileTenantDefault:
+    """Default ``force=False`` path: pre-check first, only CREATE if missing."""
+
     @pytest.mark.asyncio
-    async def test_issues_drop_and_create_in_order(self):
+    async def test_skips_when_catalog_already_exists(self):
         reconciler = _make_reconciler()
-
-        with patch("trino_integration.reconciler.trino.dbapi") as mock_dbapi:
-            mock_conn = MagicMock()
-            mock_cursor = MagicMock()
-            mock_conn.cursor.return_value = mock_cursor
-            mock_conn.__enter__.return_value = mock_conn
-            mock_conn.__exit__.return_value = None
-            mock_dbapi.connect.return_value = mock_conn
-
+        cm, _, mock_cursor = _patch_dbapi(catalogs_present=["globalusers", "kbase"])
+        try:
             alias = await reconciler.reconcile_tenant("globalusers")
+        finally:
+            cm.stop()
+
+        assert alias == "globalusers"
+        # Only SHOW CATALOGS ran — no DROP, no CREATE.
+        executed_sql = [c.args[0] for c in mock_cursor.execute.call_args_list]
+        assert executed_sql == ["SHOW CATALOGS"]
+
+    @pytest.mark.asyncio
+    async def test_creates_when_catalog_missing(self):
+        reconciler = _make_reconciler()
+        cm, _, mock_cursor = _patch_dbapi(catalogs_present=["kbase"])
+        try:
+            alias = await reconciler.reconcile_tenant("globalusers")
+        finally:
+            cm.stop()
+
+        assert alias == "globalusers"
+        executed_sql = [c.args[0] for c in mock_cursor.execute.call_args_list]
+        # SHOW CATALOGS pre-check, then CREATE — no DROP.
+        assert len(executed_sql) == 2
+        assert executed_sql[0] == "SHOW CATALOGS"
+        assert executed_sql[1].startswith("CREATE CATALOG IF NOT EXISTS")
+        assert "globalusers" in executed_sql[1]
+        # Global service-identity creds are spliced into the CREATE statement.
+        assert "global-cid:global-secret" in executed_sql[1]
+        assert "global-ak" in executed_sql[1]
+        assert "global-sk" in executed_sql[1]
+
+
+class TestReconcileTenantForce:
+    """``force=True`` path: drop-then-create regardless of current state."""
+
+    @pytest.mark.asyncio
+    async def test_force_issues_drop_then_create_when_catalog_exists(self):
+        reconciler = _make_reconciler()
+        cm, mock_dbapi, mock_cursor = _patch_dbapi(catalogs_present=["globalusers"])
+        try:
+            alias = await reconciler.reconcile_tenant("globalusers", force=True)
+        finally:
+            cm.stop()
 
         assert alias == "globalusers"
 
-        # Connection used the admin identity + token via extra_credential
+        # Connection used the admin identity + token via extra_credential.
         connect_kwargs = mock_dbapi.connect.call_args.kwargs
         assert connect_kwargs["host"] == "trino-test"
         assert connect_kwargs["port"] == 8080
@@ -206,20 +260,32 @@ class TestReconcileTenantHappyPath:
             (ADMIN_TOKEN_KEY, "test-admin-token")
         ]
 
-        # First statement is DROP, second is CREATE — drop-then-create
-        # ensures rotated credentials always replace stale ones.
+        # No SHOW CATALOGS pre-check — force skips it. DROP then CREATE.
         executed_sql = [c.args[0] for c in mock_cursor.execute.call_args_list]
         assert len(executed_sql) == 2
         assert executed_sql[0].startswith("DROP CATALOG IF EXISTS")
         assert "globalusers" in executed_sql[0]
         assert executed_sql[1].startswith("CREATE CATALOG IF NOT EXISTS")
         assert "globalusers" in executed_sql[1]
-        assert "USING iceberg" in executed_sql[1]
-        # Global service-identity creds are spliced into the CREATE statement
-        assert "global-cid:global-secret" in executed_sql[1]
-        assert "global-ak" in executed_sql[1]
-        assert "global-sk" in executed_sql[1]
 
+    @pytest.mark.asyncio
+    async def test_force_drops_then_creates_when_catalog_missing(self):
+        # DROP IF EXISTS is a no-op when missing; behavior matches "exists"
+        # case so rotation flow is uniform regardless of starting state.
+        reconciler = _make_reconciler()
+        cm, _, mock_cursor = _patch_dbapi(catalogs_present=[])
+        try:
+            await reconciler.reconcile_tenant("globalusers", force=True)
+        finally:
+            cm.stop()
+
+        executed_sql = [c.args[0] for c in mock_cursor.execute.call_args_list]
+        assert len(executed_sql) == 2
+        assert executed_sql[0].startswith("DROP CATALOG IF EXISTS")
+        assert executed_sql[1].startswith("CREATE CATALOG IF NOT EXISTS")
+
+
+class TestTenantCatalogExists:
     @pytest.mark.asyncio
     async def test_tenant_catalog_exists_checks_show_catalogs(self):
         reconciler = _make_reconciler()

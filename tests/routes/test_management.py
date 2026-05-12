@@ -41,7 +41,6 @@ from service.dependencies import auth, require_admin
 from service.exception_handlers import universal_error_handler
 from service.exceptions import TenantNotFoundError
 from service.kb_auth import AdminPermission, KBaseUser
-from trino_integration.bootstrap import _reset_globalusers_trino_bootstrap_cache
 
 
 # === FIXTURES ===
@@ -52,14 +51,6 @@ def mock_mc_path():
     """Ensure MC_PATH is set for all tests."""
     with patch.dict(os.environ, {"MC_PATH": "/usr/local/bin/mc"}):
         yield
-
-
-@pytest.fixture(autouse=True)
-def reset_globalusers_trino_bootstrap_cache():
-    """Keep the in-process Trino bootstrap cache from leaking across tests."""
-    _reset_globalusers_trino_bootstrap_cache()
-    yield
-    _reset_globalusers_trino_bootstrap_cache()
 
 
 @pytest.fixture
@@ -186,9 +177,6 @@ def mock_app_state():
     # Trino catalog reconciler — used by create_group / delete_group routes
     # to issue CREATE / DROP CATALOG against Trino as platform_admin.
     app_state.trino_catalog_reconciler = AsyncMock()
-    app_state.trino_catalog_reconciler.tenant_catalog_exists = AsyncMock(
-        return_value=True
-    )
     app_state.trino_catalog_reconciler.reconcile_tenant = AsyncMock(
         return_value="newgroup"
     )
@@ -386,16 +374,11 @@ class TestCreateUserEndpoint:
         assert data["polaris_client_id"] == "polaris-cid"
         assert data["polaris_client_secret"] == "polaris-secret"
 
-    def test_create_user_reconciles_missing_globalusers_trino_catalog(
+    def test_create_user_reconciles_globalusers_trino_catalog(
         self, client, mock_app_state
     ):
-        """Admin user creation also repairs the auto-created default tenant
-        by reconciling the globalusers Trino catalog when it is missing."""
-        mock_app_state.group_manager.resource_exists.return_value = True
-        mock_app_state.trino_catalog_reconciler.tenant_catalog_exists.return_value = (
-            False
-        )
-
+        """Admin user creation reconciles the default-tenant Trino catalog;
+        the reconciler's own pre-check decides whether work is needed."""
         response = client.post("/management/users/newuser")
 
         assert response.status_code == 201
@@ -1481,7 +1464,7 @@ class TestReconcileTrinoCatalogsEndpoint:
             return_value=["team1", "team1ro", "team2", "team2ro"]
         )
 
-        async def reconcile(group_name):
+        async def reconcile(group_name, *, force=False):
             return group_name
 
         mock_app_state.trino_catalog_reconciler.reconcile_tenant = AsyncMock(
@@ -1500,6 +1483,8 @@ class TestReconcileTrinoCatalogsEndpoint:
     def test_reconcile_trino_catalogs_reconciles_each_base_group(
         self, trino_migration_client, trino_migration_state
     ):
+        """The bulk reconcile endpoint must pass ``force=True`` so rotated
+        TRINO_GLOBAL_* credentials are pushed into existing catalogs."""
         response = trino_migration_client.post(
             "/management/migrate/reconcile-trino-catalogs"
         )
@@ -1509,7 +1494,7 @@ class TestReconcileTrinoCatalogsEndpoint:
         assert data["reconciled"] == ["team1", "team2"]
         assert data["errors"] == []
         trino_migration_state.trino_catalog_reconciler.reconcile_tenant.assert_any_call(
-            "team1"
+            "team1", force=True
         )
 
     def test_reconcile_trino_catalogs_excludes_groups(
@@ -1524,7 +1509,7 @@ class TestReconcileTrinoCatalogsEndpoint:
         assert data["reconciled"] == ["team2"]
         assert data["skipped"] == ["team1"]
         trino_migration_state.trino_catalog_reconciler.reconcile_tenant.assert_called_once_with(
-            "team2"
+            "team2", force=True
         )
 
     def test_reconcile_trino_catalogs_reconcile_error_reports_catalog_failure(

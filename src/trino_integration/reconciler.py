@@ -284,9 +284,9 @@ class TrinoCatalogReconciler:
     async def tenant_catalog_exists(self, group_name: str) -> bool:
         """Return whether Trino currently has the tenant catalog alias.
 
-        Dynamic catalogs are coordinator-local, so this is used by bootstrap
-        paths to repair a freshly created or restarted environment without
-        drop/recreate work when the catalog is already visible.
+        Dynamic catalogs are coordinator-local, so :meth:`reconcile_tenant`
+        uses this as a pre-check to skip the drop/recreate work when the
+        catalog is already visible. Also exposed for ad-hoc admin checks.
         """
         self._require_admin_token()
         group_name = validate_tenant_group_name(group_name)
@@ -301,17 +301,24 @@ class TrinoCatalogReconciler:
 
         return await asyncio.to_thread(_run)
 
-    async def reconcile_tenant(self, group_name: str) -> str:
-        """Recreate the Trino catalog for ``group_name`` from global creds.
+    async def reconcile_tenant(self, group_name: str, *, force: bool = False) -> str:
+        """Ensure the Trino catalog for ``group_name`` exists, from global creds.
 
-        Idempotent. Drop-then-create semantics so a rotated global service
-        principal credential always replaces a stale one in the
-        coordinator. Mirrors the ``force=True`` behavior of
-        ``setup_trino_session._create_dynamic_catalog`` for personal
-        catalogs.
+        Default (``force=False``): pre-check via ``SHOW CATALOGS``; if the
+        catalog already exists, return its alias without touching it. Used by
+        the create-group route and the credential bootstrap path where the
+        common case is "already there, do nothing."
+
+        ``force=True``: drop-then-create regardless of current state. Used by
+        the bulk and single-tenant force-reconcile endpoints to push rotated
+        ``TRINO_GLOBAL_*`` credentials into existing coordinator catalogs.
+
+        Either path is idempotent on result.
 
         Args:
             group_name: Tenant group name (no ``ro`` suffix).
+            force: When ``True``, always drop-then-create; when ``False``
+                (default), skip when the catalog already exists.
 
         Returns:
             The tenant catalog alias as registered in Trino.
@@ -335,6 +342,14 @@ class TrinoCatalogReconciler:
 
         group_name = validate_tenant_group_name(group_name)
         alias = tenant_alias(group_name)
+
+        if not force and await self.tenant_catalog_exists(group_name):
+            logger.debug(
+                "Trino tenant catalog '%s' already exists; skipping reconcile",
+                alias,
+            )
+            return alias
+
         warehouse = tenant_warehouse_name(group_name)
 
         polaris_credential = (
@@ -351,15 +366,27 @@ class TrinoCatalogReconciler:
         )
 
         create_sql = _render_create_catalog_sql(alias, properties)
-        drop_sql = f'DROP CATALOG IF EXISTS "{alias}"'
 
-        logger.info(
-            "Reconciling Trino tenant catalog for group=%s alias=%s warehouse=%s",
-            group_name,
-            alias,
-            warehouse,
-        )
-        await self._execute_admin_sql([drop_sql, create_sql])
+        if force:
+            drop_sql = f'DROP CATALOG IF EXISTS "{alias}"'
+            statements = [drop_sql, create_sql]
+            logger.info(
+                "Force-reconciling Trino tenant catalog for group=%s alias=%s warehouse=%s",
+                group_name,
+                alias,
+                warehouse,
+            )
+        else:
+            # Pre-check raced (concurrent caller created it in between);
+            # rely on CREATE CATALOG IF NOT EXISTS to make this safe.
+            statements = [create_sql]
+            logger.info(
+                "Creating Trino tenant catalog for group=%s alias=%s warehouse=%s",
+                group_name,
+                alias,
+                warehouse,
+            )
+        await self._execute_admin_sql(statements)
         logger.info(
             "Trino tenant catalog '%s' reconciled (warehouse=%s)",
             alias,
