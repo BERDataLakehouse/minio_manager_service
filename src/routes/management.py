@@ -8,18 +8,14 @@ that require elevated privileges.
 
 import logging
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from polaris.constants import (
-    ICEBERG_STORAGE_SUBDIRECTORY,
-    personal_catalog_name,
-    tenant_catalog_name,
-)
 from polaris.orchestration import ensure_user_polaris_state
 from s3.models.user import UserModel
+from s3.utils.validators import validate_tenant_group_name
 from service.app_state import get_app_state
 from service.dependencies import auth, require_admin
 from service.exceptions import (
@@ -28,11 +24,6 @@ from service.exceptions import (
     UserOperationError,
 )
 from trino_integration.bootstrap import ensure_globalusers_trino_catalog
-from s3.utils.validators import validate_tenant_group_name
-from trino_integration.service_identity import (
-    grant_global_trino_access,
-    revoke_global_trino_access,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -526,18 +517,12 @@ async def create_group(
         group_name=group_name, creator=authenticated_user.user
     )
 
-    # 3. Grant the global Trino service identity access to the new tenant:
-    # - global IAM user added to {group}ro (inherits GROUP_HOME_RO policy)
-    # - global Polaris principal granted {group}ro_member role
-    # Both steps are idempotent and skip silently when the corresponding env
-    # var is unset (test/local-dev convenience).
-    await grant_global_trino_access(group_name, app_state=app_state)
-
-    # 4. Reconcile the tenant Trino catalog: issue CREATE CATALOG via the
-    # admin path using the global service-identity creds from env vars.
-    # Failures bubble up as 5xx so the API caller knows reconcile drift
-    # exists; the /management/migrate/reconcile-trino-catalogs endpoint can
-    # recover it.
+    # 3. Reconcile the tenant Trino catalog: issue CREATE CATALOG via the
+    # admin path using the global service-identity creds from env vars. The
+    # global identity already has broad Polaris + S3 access from bootstrap,
+    # so no per-tenant grants are needed. Failures bubble up as 5xx so the
+    # API caller knows reconcile drift exists; the
+    # /management/migrate/reconcile-trino-catalogs endpoint can recover it.
     await app_state.trino_catalog_reconciler.reconcile_tenant(group_name)
 
     # Ensure tenant metadata row exists for this group
@@ -656,7 +641,10 @@ async def delete_group(
 
     if not group_name.endswith("ro"):
         # Drop the Trino catalog first so the coordinator stops routing queries
-        # to a Polaris catalog that's about to disappear. Idempotent.
+        # to a Polaris catalog that's about to disappear. Idempotent. No
+        # per-tenant Polaris/IAM revoke is needed — the global Trino service
+        # identity holds tenant-spanning grants from bootstrap, not per-tenant
+        # bindings.
         try:
             await app_state.trino_catalog_reconciler.deprovision_tenant(group_name)
         except Exception as e:  # noqa: BLE001 — best-effort, log and continue
@@ -665,13 +653,6 @@ async def delete_group(
                 group_name,
                 e,
             )
-
-        # Revoke the global Trino service identity's access to this tenant
-        # (Polaris role binding + IAM group membership). Best-effort: each
-        # step tolerates already-gone resources. Has to run before
-        # polaris_group_manager.delete_group so the {group}ro_member
-        # principal role still exists when we try to revoke it.
-        await revoke_global_trino_access(group_name, app_state=app_state)
 
     # Polaris first — drop catalog + roles. No-op for *ro inputs.
     await app_state.polaris_group_manager.delete_group(group_name)
@@ -880,120 +861,6 @@ class EnsurePolarisResponse(BaseModel):
             default_factory=list,
             description="Base group names excluded by the caller that exist in the system",
         ),
-    ]
-    errors: Annotated[list[MigrationError], Field(description="Errors encountered")]
-    performed_by: Annotated[str, Field(description="Admin who performed the operation")]
-    timestamp: Annotated[datetime, Field(description="When operation was performed")]
-
-
-class RepairPolarisCatalogStorageRequest(BaseModel):
-    """Request model for repairing existing Polaris catalog storage config."""
-
-    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
-
-    dry_run: Annotated[
-        bool,
-        Field(
-            default=True,
-            description=(
-                "When true, only report catalog storage-config drift. Set to "
-                "false to update Polaris catalog metadata in place."
-            ),
-        ),
-    ]
-    include_users: Annotated[
-        list[str],
-        Field(
-            default_factory=list,
-            description=(
-                "Optional allow-list of usernames to inspect. Empty means all users."
-            ),
-        ),
-    ]
-    include_groups: Annotated[
-        list[str],
-        Field(
-            default_factory=list,
-            description=(
-                "Optional allow-list of base group names to inspect. Empty means "
-                "all base groups."
-            ),
-        ),
-    ]
-    exclude_users: Annotated[
-        list[str],
-        Field(
-            default_factory=list,
-            description="Usernames to skip. Takes precedence over include_users.",
-        ),
-    ]
-    exclude_groups: Annotated[
-        list[str],
-        Field(
-            default_factory=list,
-            description=(
-                "Base group names to skip. Takes precedence over include_groups."
-            ),
-        ),
-    ]
-
-
-class RepairPolarisCatalogStorageChange(BaseModel):
-    """One catalog whose storage metadata differs from current MMS config."""
-
-    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
-
-    catalog_name: Annotated[str, Field(description="Polaris catalog name")]
-    resource_type: Annotated[str, Field(description="Source resource type")]
-    resource_name: Annotated[str, Field(description="Source user or base group name")]
-    storage_location: Annotated[str, Field(description="Desired catalog base location")]
-    mismatched_fields: Annotated[
-        list[str], Field(description="Catalog metadata fields that differ")
-    ]
-    current_properties: Annotated[
-        dict[str, Any], Field(description="Current Polaris catalog properties")
-    ]
-    desired_properties: Annotated[
-        dict[str, Any], Field(description="Desired Polaris catalog properties")
-    ]
-    current_storage_config: Annotated[
-        dict[str, Any], Field(description="Current Polaris storageConfigInfo")
-    ]
-    desired_storage_config: Annotated[
-        dict[str, Any], Field(description="Desired Polaris storageConfigInfo")
-    ]
-    repaired: Annotated[
-        bool, Field(description="Whether the endpoint updated this catalog")
-    ]
-
-
-class RepairPolarisCatalogStorageResponse(BaseModel):
-    """Response model for catalog storage-config repair."""
-
-    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
-
-    dry_run: Annotated[bool, Field(description="Whether this was a dry run")]
-    catalogs_checked: Annotated[
-        int, Field(description="Catalogs successfully inspected", ge=0)
-    ]
-    catalogs_needing_repair: Annotated[
-        int, Field(description="Catalogs whose metadata differed", ge=0)
-    ]
-    catalogs_repaired: Annotated[
-        int, Field(description="Catalogs updated in Polaris", ge=0)
-    ]
-    changes: Annotated[
-        list[RepairPolarisCatalogStorageChange],
-        Field(description="Catalogs with detected drift"),
-    ]
-    unchanged: Annotated[list[str], Field(description="Catalogs already matching")]
-    users_skipped: Annotated[
-        list[str],
-        Field(description=("Present users skipped by exclude_users")),
-    ]
-    groups_skipped: Annotated[
-        list[str],
-        Field(description="Present base groups skipped by exclude_groups"),
     ]
     errors: Annotated[list[MigrationError], Field(description="Errors encountered")]
     performed_by: Annotated[str, Field(description="Admin who performed the operation")]
@@ -1213,215 +1080,6 @@ async def ensure_all_polaris_resources(
     )
 
 
-def _catalog_storage_location(warehouse_base: str, resource_name: str) -> str:
-    return (
-        f"{warehouse_base.rstrip('/')}/{resource_name}/{ICEBERG_STORAGE_SUBDIRECTORY}/"
-    )
-
-
-def _catalog_entity(catalog_response: dict[str, Any]) -> dict[str, Any]:
-    catalog = catalog_response.get("catalog")
-    if isinstance(catalog, dict):
-        return catalog
-    return catalog_response
-
-
-def _catalog_entity_version(catalog: dict[str, Any]) -> int | None:
-    version = catalog.get("entityVersion")
-    if version is None:
-        version = catalog.get("entity_version")
-    if version is None:
-        return None
-    return int(version)
-
-
-def _catalog_properties(catalog: dict[str, Any]) -> dict[str, Any]:
-    properties = catalog.get("properties")
-    if isinstance(properties, dict):
-        return properties
-    return {}
-
-
-def _catalog_storage_config(catalog: dict[str, Any]) -> dict[str, Any]:
-    storage_config = catalog.get("storageConfigInfo")
-    if isinstance(storage_config, dict):
-        return storage_config
-    return {}
-
-
-def _mismatched_fields(
-    *,
-    current_properties: dict[str, Any],
-    desired_properties: dict[str, Any],
-    current_storage_config: dict[str, Any],
-    desired_storage_config: dict[str, Any],
-) -> list[str]:
-    mismatches: list[str] = []
-    for key, desired_value in desired_properties.items():
-        if current_properties.get(key) != desired_value:
-            mismatches.append(f"properties.{key}")
-    for key, desired_value in desired_storage_config.items():
-        if current_storage_config.get(key) != desired_value:
-            mismatches.append(f"storageConfigInfo.{key}")
-    return mismatches
-
-
-@router.post(
-    "/migrate/repair-polaris-catalog-storage",
-    response_model=RepairPolarisCatalogStorageResponse,
-    summary="Repair Polaris catalog storage metadata",
-    description=(
-        "Compare every user and tenant catalog's Polaris storage metadata with "
-        "the current MMS S3 endpoint and warehouse layout. Defaults to dry-run. "
-        "Set `dry_run=false` to update the catalog metadata in place without "
-        "dropping namespaces or table registrations. Use this during MinIO/S3 "
-        "endpoint migrations after deploying the new MMS configuration."
-    ),
-)
-async def repair_polaris_catalog_storage(
-    request: Request,
-    payload: RepairPolarisCatalogStorageRequest = RepairPolarisCatalogStorageRequest(),
-    authenticated_user=Depends(require_admin),
-):
-    """Repair existing Polaris catalogs after storage endpoint migration.
-
-    This intentionally avoids recreating catalogs: Polaris table registrations
-    live inside the catalog metadata, so changing storageConfigInfo in place is
-    the lower-risk path when only the S3 endpoint has changed.
-    """
-    app_state = get_app_state(request)
-    polaris_service = app_state.polaris_service
-
-    include_users = set(payload.include_users)
-    include_groups = set(payload.include_groups)
-    exclude_users = set(payload.exclude_users)
-    exclude_groups = set(payload.exclude_groups)
-
-    all_usernames = await app_state.user_manager.list_resources()
-    all_group_names = await app_state.group_manager.list_resources()
-    base_groups = [g for g in all_group_names if not g.endswith("ro")]
-
-    target_users = [
-        u
-        for u in all_usernames
-        if u not in exclude_users and (not include_users or u in include_users)
-    ]
-    target_groups = [
-        g
-        for g in base_groups
-        if g not in exclude_groups and (not include_groups or g in include_groups)
-    ]
-    skipped_users = sorted(set(all_usernames) & exclude_users)
-    skipped_groups = sorted(set(base_groups) & exclude_groups)
-
-    logger.info(
-        "Inspecting Polaris catalog storage metadata for %d users and %d groups "
-        "(dry_run=%s)",
-        len(target_users),
-        len(target_groups),
-        payload.dry_run,
-    )
-
-    checked = 0
-    repaired = 0
-    changes: list[RepairPolarisCatalogStorageChange] = []
-    unchanged: list[str] = []
-    errors: list[MigrationError] = []
-
-    targets = [
-        (
-            "user",
-            username,
-            personal_catalog_name(username),
-            _catalog_storage_location(app_state.users_sql_warehouse_base, username),
-        )
-        for username in target_users
-    ]
-    targets.extend(
-        (
-            "group",
-            group_name,
-            tenant_catalog_name(group_name),
-            _catalog_storage_location(app_state.tenant_sql_warehouse_base, group_name),
-        )
-        for group_name in target_groups
-    )
-
-    for resource_type, resource_name, catalog_name, storage_location in targets:
-        desired_properties = polaris_service.catalog_properties(storage_location)
-        desired_storage_config = polaris_service.catalog_storage_config(
-            storage_location
-        )
-        try:
-            current_response = await polaris_service.get_catalog(catalog_name)
-            catalog = _catalog_entity(current_response)
-            current_properties = _catalog_properties(catalog)
-            current_storage_config = _catalog_storage_config(catalog)
-            checked += 1
-
-            mismatches = _mismatched_fields(
-                current_properties=current_properties,
-                desired_properties=desired_properties,
-                current_storage_config=current_storage_config,
-                desired_storage_config=desired_storage_config,
-            )
-            if not mismatches:
-                unchanged.append(catalog_name)
-                continue
-
-            if not payload.dry_run:
-                await polaris_service.update_catalog_storage_config(
-                    catalog_name,
-                    storage_location,
-                    current_entity_version=_catalog_entity_version(catalog),
-                )
-                repaired += 1
-
-            changes.append(
-                RepairPolarisCatalogStorageChange(
-                    catalog_name=catalog_name,
-                    resource_type=resource_type,
-                    resource_name=resource_name,
-                    storage_location=storage_location,
-                    mismatched_fields=mismatches,
-                    current_properties=current_properties,
-                    desired_properties=desired_properties,
-                    current_storage_config=current_storage_config,
-                    desired_storage_config=desired_storage_config,
-                    repaired=not payload.dry_run,
-                )
-            )
-        except Exception as e:  # noqa: BLE001 — per-catalog best-effort
-            logger.warning(
-                "Failed to inspect/repair Polaris catalog %s for %s %s: %s",
-                catalog_name,
-                resource_type,
-                resource_name,
-                e,
-            )
-            errors.append(
-                MigrationError(
-                    resource_type=f"{resource_type}_catalog_storage",
-                    resource_name=resource_name,
-                    error=str(e),
-                )
-            )
-
-    return RepairPolarisCatalogStorageResponse(
-        dry_run=payload.dry_run,
-        catalogs_checked=checked,
-        catalogs_needing_repair=len(changes),
-        catalogs_repaired=repaired,
-        changes=changes,
-        unchanged=sorted(unchanged),
-        users_skipped=skipped_users,
-        groups_skipped=skipped_groups,
-        errors=errors,
-        performed_by=authenticated_user.user,
-        timestamp=datetime.now(),
-    )
-
-
 # ===== TRINO TENANT CATALOG RECONCILE =====
 
 
@@ -1448,18 +1106,6 @@ class ReconcileTrinoCatalogsResponse(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
 
-    service_identities: Annotated[
-        list[str],
-        Field(
-            default_factory=list,
-            description=(
-                "Tenants where the global Trino service identity's access "
-                "was (re-)granted — i.e. the global IAM user added to "
-                "{group}ro and the global Polaris principal granted "
-                "{group}ro_member."
-            ),
-        ),
-    ]
     reconciled: Annotated[
         list[str],
         Field(
@@ -1480,12 +1126,12 @@ class ReconcileTrinoCatalogsResponse(BaseModel):
     response_model=ReconcileTrinoCatalogsResponse,
     summary="Reconcile Trino tenant catalogs",
     description=(
-        "Ensure the per-tenant service identity for every tenant, then reissue "
-        "``CREATE CATALOG`` from the persisted credentials. Idempotent. Use cases:\n"
-        "- backfill after the service-identity machinery first lands\n"
+        "Reissue ``CREATE CATALOG`` for every tenant from the global service "
+        "identity credentials. Idempotent. Use cases:\n"
+        "- backfill after the Trino tenant catalog machinery first lands\n"
         "- recovery after a Trino coordinator restart (catalogs are dynamic "
         "  and disappear on restart)\n"
-        "- recovery after a per-tenant reconcile drift (R3 in the tech spec)\n"
+        "- recovery after a per-tenant reconcile drift\n"
         "Each tenant is reconciled independently; per-tenant errors do not "
         "block the others."
     ),
@@ -1495,13 +1141,10 @@ async def reconcile_all_trino_catalogs(
     payload: ReconcileTrinoCatalogsRequest = ReconcileTrinoCatalogsRequest(),
     authenticated_user=Depends(require_admin),
 ):
-    """Bulk ensure + reconcile of Trino tenant catalogs.
+    """Bulk reconcile of Trino tenant catalogs.
 
     Iterates over base groups (those without the ``ro`` suffix) and runs
-    service-identity ensure followed by ``TrinoCatalogReconciler.reconcile_tenant``
-    for each. The ensure step is cache-first: it repairs IAM/Polaris reader
-    bindings every time, but only rotates credentials when the cached service
-    credentials are missing or the IAM service user is absent.
+    ``TrinoCatalogReconciler.reconcile_tenant`` for each.
     """
     app_state = get_app_state(request)
     exclude_groups = set(payload.exclude_groups)
@@ -1517,33 +1160,11 @@ async def reconcile_all_trino_catalogs(
         len(skipped),
     )
 
-    granted: list[str] = []
     reconciled: list[str] = []
     errors: list[MigrationError] = []
     for group_name in target_base_groups:
         try:
             group_name = validate_tenant_group_name(group_name)
-            # Idempotent re-grant of the global identity's access to this
-            # tenant. Skips the relevant side silently when the matching
-            # TRINO_GLOBAL_* env var is unset.
-            await grant_global_trino_access(group_name, app_state=app_state)
-            granted.append(group_name)
-        except Exception as e:  # noqa: BLE001 — per-group best-effort
-            logger.warning(
-                "Failed to grant global Trino access for group %s: %s",
-                group_name,
-                e,
-            )
-            errors.append(
-                MigrationError(
-                    resource_type="trino_global_access",
-                    resource_name=group_name,
-                    error=str(e),
-                )
-            )
-            continue
-
-        try:
             alias = await app_state.trino_catalog_reconciler.reconcile_tenant(
                 group_name
             )
@@ -1561,7 +1182,6 @@ async def reconcile_all_trino_catalogs(
             )
 
     return ReconcileTrinoCatalogsResponse(
-        service_identities=sorted(granted),
         reconciled=sorted(reconciled),
         skipped=skipped,
         errors=errors,

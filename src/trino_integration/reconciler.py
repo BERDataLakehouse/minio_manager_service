@@ -8,10 +8,10 @@ module owns that lifecycle.
 Architecture:
 
 * A **single global** Polaris service principal + IAM service user back every
-  tenant catalog. Both are pre-provisioned by an admin once per environment;
-  their credentials live in env vars (``TRINO_GLOBAL_*``). MMS grants the
-  identity access to each new tenant catalog at tenant-create time (see
-  ``trino_integration.service_identity.grant_global_trino_access``).
+  tenant catalog. Both are pre-provisioned by an admin once per environment
+  with broad access (Polaris ``service_admin`` role + ``s3:*`` on the
+  ``cdm-lake`` bucket); their credentials live in env vars
+  (``TRINO_GLOBAL_*``). No per-tenant grant/revoke happens at runtime.
 * The reconciler reads those global credentials at construction time and
   issues ``CREATE CATALOG`` to the Trino coordinator as the configured
   admin identity (default ``platform_admin``), authenticated via the

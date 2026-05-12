@@ -41,8 +41,6 @@ class TestAppStateNamedTuple:
             s3_credential_service=MagicMock(),
             s3_credential_store=MagicMock(),
             trino_catalog_reconciler=MagicMock(),
-            trino_global_iam_username="trino_svc",
-            trino_global_polaris_principal="trino_svc",
             tenant_manager=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
@@ -56,19 +54,14 @@ class TestAppStateNamedTuple:
         assert state.s3_credential_service is not None
         assert state.s3_credential_store is not None
         assert state.trino_catalog_reconciler is not None
-        assert state.trino_global_iam_username == "trino_svc"
-        assert state.trino_global_polaris_principal == "trino_svc"
         assert state.tenant_manager is not None
 
-    def test_app_state_exposes_polaris_service_and_global_trino_fields(self):
-        """The grant/revoke helpers in
-        :mod:`trino_integration.service_identity` reach into ``polaris_service``
-        and the two ``trino_global_*`` strings on AppState. Verify those fields
-        exist so a refactor that drops one of them breaks loudly here.
+    def test_app_state_exposes_polaris_service(self):
+        """Polaris orchestration depends on ``polaris_service`` being on
+        AppState; verify the field exists so a refactor that drops it
+        breaks loudly here.
         """
         assert "polaris_service" in AppState._fields
-        assert "trino_global_iam_username" in AppState._fields
-        assert "trino_global_polaris_principal" in AppState._fields
 
 
 # === REQUEST STATE TESTS ===
@@ -311,8 +304,6 @@ class TestDestroyAppState:
             s3_credential_service=MagicMock(),
             s3_credential_store=MagicMock(),
             trino_catalog_reconciler=MagicMock(),
-            trino_global_iam_username="trino_svc",
-            trino_global_polaris_principal="trino_svc",
             tenant_manager=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
@@ -363,8 +354,6 @@ class TestDestroyAppState:
             s3_credential_service=MagicMock(),
             s3_credential_store=MagicMock(),
             trino_catalog_reconciler=MagicMock(),
-            trino_global_iam_username="trino_svc",
-            trino_global_polaris_principal="trino_svc",
             tenant_manager=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",

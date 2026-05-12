@@ -11,7 +11,6 @@ import time
 
 from minio.managers.user_manager import GLOBAL_USER_GROUP
 from service.app_state import AppState
-from trino_integration.service_identity import grant_global_trino_access
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +39,13 @@ async def ensure_globalusers_trino_catalog(app_state: AppState) -> str | None:
     """Ensure the default ``globalusers`` tenant is visible in Trino.
 
     ``globalusers`` is special: it is auto-created by user bootstrap rather
-    than by the admin create-group route. The create-group route grants the
-    global Trino identity access and reconciles automatically, but on a
-    cold-start path (Trino coordinator restart, fresh local stack) the
-    catalog may be missing even though Polaris artifacts exist. This helper
-    re-grants the global identity (idempotent) and re-reconciles in that
-    case so a user's first credential fetch repairs the catalog.
+    than by the admin create-group route. The create-group route reconciles
+    automatically, but on a cold-start path (Trino coordinator restart,
+    fresh local stack) the catalog may be missing even though Polaris
+    artifacts exist. This helper re-reconciles in that case so a user's
+    first credential fetch repairs the catalog. No per-tenant Polaris or
+    IAM grants are issued — the global Trino service identity already has
+    broad access from bootstrap.
 
     Returns the Trino catalog alias when reconciliation was performed,
     otherwise ``None``.
@@ -63,7 +63,6 @@ async def ensure_globalusers_trino_catalog(app_state: AppState) -> str | None:
             _mark_globalusers_trino_bootstrap_checked()
             return None
 
-        await grant_global_trino_access(GLOBAL_USER_GROUP, app_state=app_state)
         alias = await app_state.trino_catalog_reconciler.reconcile_tenant(
             GLOBAL_USER_GROUP
         )

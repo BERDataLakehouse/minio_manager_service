@@ -299,29 +299,6 @@ class PolarisService:
             )
         return storage_config
 
-    async def update_catalog_storage_config(
-        self,
-        name: str,
-        storage_location: str,
-        *,
-        s3_endpoint: str | None = None,
-        current_entity_version: int | None = None,
-    ) -> Dict[str, Any]:
-        """Update catalog storage properties in place.
-
-        Used by MinIO/S3 endpoint migrations to repair existing Polaris
-        catalogs without dropping table registrations.
-        """
-        payload: Dict[str, Any] = {
-            "properties": self.catalog_properties(storage_location),
-            "storageConfigInfo": self.catalog_storage_config(
-                storage_location, s3_endpoint=s3_endpoint
-            ),
-        }
-        if current_entity_version is not None:
-            payload["currentEntityVersion"] = current_entity_version
-        return await self._request("PUT", f"/catalogs/{name}", json=payload)
-
     async def list_catalogs(self) -> List[Dict[str, Any]]:
         """List all catalogs."""
         resp = await self._request("GET", "/catalogs")

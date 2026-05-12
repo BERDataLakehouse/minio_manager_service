@@ -28,7 +28,6 @@ from service import app_state
 from service.dependencies import auth, require_admin
 from service.kb_auth import AdminPermission, KBaseUser
 from s3.utils.validators import validate_tenant_group_name
-from trino_integration.service_identity import grant_global_trino_access
 
 router = APIRouter(prefix="/polaris")
 
@@ -221,10 +220,9 @@ class ReconcileTrinoCatalogResponse(BaseModel):
     status_code=status.HTTP_200_OK,
     summary="Force-reconcile a single tenant Trino catalog",
     description=(
-        "Ensure the service identity for ``tenant_name``, then drop and recreate "
-        "the Trino catalog from the credentials persisted in MMS. Idempotent. "
-        "Use cases:\n"
-        "- after rotating the per-tenant service principal credential\n"
+        "Drop and recreate the Trino catalog for ``tenant_name`` using the "
+        "global service identity credentials from env. Idempotent. Use cases:\n"
+        "- after rotating the global Trino service identity credentials\n"
         "- recovery after a partial-failure during regular tenant create\n"
         "- ad-hoc admin force-recreate.\n"
         "For bulk reconcile across all tenants use "
@@ -238,10 +236,6 @@ async def reconcile_tenant_trino_catalog(
 ) -> ReconcileTrinoCatalogResponse:
     """Force-reconcile one tenant's Trino catalog. Admin only."""
     tenant_name = validate_tenant_group_name(tenant_name)
-    # Re-grant the global service identity's access to the tenant first
-    # (idempotent). The reconcile then issues CREATE CATALOG with the
-    # global creds from env.
-    await grant_global_trino_access(tenant_name, app_state=app_state_obj)
     alias = await app_state_obj.trino_catalog_reconciler.reconcile_tenant(tenant_name)
     return ReconcileTrinoCatalogResponse(
         tenant_name=tenant_name,
