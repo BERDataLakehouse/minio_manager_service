@@ -65,13 +65,21 @@ services:
       - MMS_DB_USER=mms
       - MMS_DB_PASSWORD=mmspassword
       - MMS_DB_ENCRYPTION_KEY=change-me-in-prod
-      # Global Trino service identity credentials. The reconciler splices
-      # these into CREATE CATALOG when invoked. This compose file does not
-      # include a Trino coordinator, so reconcile calls would fail anyway,
-      # but the identities are still bootstrapped to mirror the
-      # spark_notebook / datalake-mcp-server stacks for parity.
+      # Trino admin path — matches admin.shared-secret in
+      # configs/trino/access-control.properties. The reconciler uses these
+      # to issue CREATE/DROP CATALOG against Trino as platform_admin.
+      - TRINO_HOST=trino
+      - TRINO_PORT=8080
+      - TRINO_ADMIN_USERNAME=platform_admin
+      - TRINO_ADMIN_TOKEN=local-dev-trino-admin-token
+      # Global Trino service identity credentials. Pre-provisioned with
+      # broad access (Polaris service_admin + s3:* on cdm-lake); MMS
+      # splices them into CREATE CATALOG for every tenant.
+      # S3 keys are pinned by minio-create-buckets via `mc admin user add`.
       - TRINO_GLOBAL_S3_ACCESS_KEY=trino_svc
       - TRINO_GLOBAL_S3_SECRET_KEY=local-dev-trino-svc-s3-secret
+      # Polaris client_id/secret are server-generated; trino-svc-bootstrap
+      # writes them into a shared volume and MMS reads via _FILE.
       - TRINO_GLOBAL_POLARIS_CLIENT_ID_FILE=/shared-trino-svc/polaris_client_id.txt
       - TRINO_GLOBAL_POLARIS_CLIENT_SECRET_FILE=/shared-trino-svc/polaris_client_secret.txt
     volumes:
@@ -85,6 +93,8 @@ services:
         condition: service_completed_successfully
       trino-svc-bootstrap:
         condition: service_completed_successfully
+      trino:
+        condition: service_healthy
       redis:
         condition: service_healthy
       polaris:
@@ -141,6 +151,48 @@ services:
       - ./scripts/trino-svc-bootstrap.sh:/bootstrap.sh:ro
       - trino-svc-credential:/shared-trino-svc
     entrypoint: ["/bin/sh", "/bootstrap.sh"]
+
+  trino:
+    # Trino coordinator with the BERDL access-control plugin baked in.
+    # Uses the pre-built image from the trino_access_control repo so the
+    # MMS-only stack doesn't need that repo cloned locally. Catalog
+    # management is dynamic — MMS issues CREATE/DROP CATALOG via the
+    # admin path at runtime; no static catalog config files are mounted.
+    image: ghcr.io/berdatalakehouse/trino_access_control:pr-16
+    platform: linux/amd64
+    ports:
+      - "8082:8080"  # Trino Web UI / API
+    volumes:
+      - ./configs/trino/config.properties:/etc/trino/config.properties
+      - ./configs/trino/access-control.properties:/etc/trino/access-control.properties
+      - ./configs/trino/resource-groups.properties:/etc/trino/resource-groups.properties
+      - ./configs/trino/resource-groups.json:/etc/trino/resource-groups.json
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    stop_grace_period: 150s
+
+  trino-worker:
+    # Trino worker — executes query fragments assigned by the coordinator.
+    # Single-worker is enough for the MMS-only stack; production uses k8s
+    # HPA. Scale ad-hoc with: docker compose up -d --scale trino-worker=N
+    image: ghcr.io/berdatalakehouse/trino_access_control:pr-16
+    platform: linux/amd64
+    volumes:
+      - ./configs/trino/worker-config.properties:/etc/trino/config.properties
+    depends_on:
+      trino:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   postgres:
     image: postgres:15
