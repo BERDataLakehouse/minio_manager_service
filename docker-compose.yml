@@ -144,6 +144,11 @@ services:
     # principal identity; rotates credentials on every run, so MMS picks
     # up fresh values whenever the stack restarts.
     image: curlimages/curl:8.11.1
+    # Run as root so the script can write into the shared volume —
+    # curlimages/curl defaults to UID 100 which can't write to a
+    # docker-managed volume initialized as root. Files end up root:644
+    # which MMS (runs as a non-root user) can still read.
+    user: root
     depends_on:
       polaris:
         condition: service_healthy

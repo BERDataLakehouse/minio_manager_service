@@ -66,10 +66,13 @@ HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
   "${MGMT}/principals/${TRINO_PRINCIPAL}/principal-roles" \
   -H "${AUTH}" -H "${CT}" -H "${RH}" \
   -d "{\"principalRole\":{\"name\":\"${TRINO_PRINCIPAL_ROLE}\"}}")
+# Polaris returns 500 (not 409) when the role is already bound to the
+# principal — the same idempotency quirk kberdl_polaris/scripts/
+# polaris-setup.sh treats as success for grant operations.
 case "${HTTP_CODE}" in
-  200|201) echo "  -> assigned" ;;
-  409)     echo "  -> already assigned (OK)" ;;
-  *)       echo "ERROR: principal-role assign returned ${HTTP_CODE}" >&2; exit 1 ;;
+  200|201)  echo "  -> assigned" ;;
+  409|500)  echo "  -> already assigned (OK)" ;;
+  *)        echo "ERROR: principal-role assign returned ${HTTP_CODE}" >&2; exit 1 ;;
 esac
 
 echo "Resetting credentials for '${TRINO_PRINCIPAL}'..."
