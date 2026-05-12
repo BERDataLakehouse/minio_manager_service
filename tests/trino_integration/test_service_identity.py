@@ -2,10 +2,13 @@
 
 Covers the small public surface area of ``trino_integration.service_identity``:
 
-- ``tenant_alias`` / ``tenant_warehouse_name`` / ``validate_trino_tenant_name``
+- ``tenant_alias`` / ``tenant_warehouse_name`` — naming helpers.
 - ``grant_global_trino_access`` — wires the global IAM user into ``{group}ro``
   and grants the global Polaris principal the ``{group}ro_member`` role.
 - ``revoke_global_trino_access`` — symmetric, best-effort.
+
+Tenant-name validation itself lives in ``s3.utils.validators`` and is
+exercised by ``tests/s3/utils/test_validators.py``.
 """
 
 from types import SimpleNamespace
@@ -19,7 +22,6 @@ from trino_integration.service_identity import (
     revoke_global_trino_access,
     tenant_alias,
     tenant_warehouse_name,
-    validate_trino_tenant_name,
 )
 
 
@@ -39,13 +41,6 @@ class TestNamingHelpers:
     def test_tenant_warehouse_name(self):
         assert tenant_warehouse_name("globalusers") == "tenant_globalusers"
         assert tenant_warehouse_name("kbase") == "tenant_kbase"
-
-    def test_validate_trino_tenant_name_accepts_normal(self):
-        assert validate_trino_tenant_name("globalusers") == "globalusers"
-
-    def test_validate_trino_tenant_name_rejects_ro_suffix(self):
-        with pytest.raises(GroupOperationError, match="ro"):
-            validate_trino_tenant_name("globaluserro")
 
 
 # === Grant / revoke helpers ===

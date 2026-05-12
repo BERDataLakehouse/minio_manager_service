@@ -1742,39 +1742,6 @@ class TestReconcileTrinoCatalogsEndpoint:
         mock_app_state.group_manager.list_resources = AsyncMock(
             return_value=["team1", "team1ro", "team2", "team2ro"]
         )
-        mock_app_state.user_manager.resource_exists = AsyncMock(return_value=True)
-
-        async def create_service_user(username):
-            return UserModel(
-                username=username,
-                s3_access_key=username,
-                s3_secret_key=f"{username}-secret",
-                home_paths=[],
-                groups=[],
-                total_policies=0,
-            )
-
-        mock_app_state.user_manager.create_service_user = AsyncMock(
-            side_effect=create_service_user
-        )
-
-        async def get_s3_credentials(username):
-            return (username, f"{username}-secret")
-
-        async def get_polaris_credentials(username):
-            group = username.removeprefix("trino-").removesuffix("-svc")
-            return PolarisCredentialRecord(
-                client_id=f"{username}-cid",
-                client_secret=f"{username}-psec",
-                personal_catalog=f"tenant_{group}",
-            )
-
-        mock_app_state.s3_credential_store.get_credentials = AsyncMock(
-            side_effect=get_s3_credentials
-        )
-        mock_app_state.polaris_credential_store.get_credentials = AsyncMock(
-            side_effect=get_polaris_credentials
-        )
 
         async def reconcile(group_name):
             return group_name

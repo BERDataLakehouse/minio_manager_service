@@ -164,7 +164,6 @@ def test_parse_policy_plain_json_string():
 def test_defaults():
     client = S3IAMClient("http://localhost:9000", "key", "secret")
     assert client._path_prefix == "/"
-    assert client._service_user_path_prefix == "/service-users/"
     assert client._max_keys == 2
     assert client._region_name == "default"
 
@@ -172,19 +171,16 @@ def test_defaults():
 def test_path_prefix_normalization_no_slashes():
     client = S3IAMClient("http://localhost:9000", "key", "secret", path_prefix="mms")
     assert client._path_prefix == "/mms/"
-    assert client._service_user_path_prefix == "/mms/service-users/"
 
 
 def test_path_prefix_normalization_leading_only():
     client = S3IAMClient("http://localhost:9000", "key", "secret", path_prefix="/mms")
     assert client._path_prefix == "/mms/"
-    assert client._service_user_path_prefix == "/mms/service-users/"
 
 
 def test_path_prefix_normalization_already_correct():
     client = S3IAMClient("http://localhost:9000", "key", "secret", path_prefix="/mms/")
     assert client._path_prefix == "/mms/"
-    assert client._service_user_path_prefix == "/mms/service-users/"
 
 
 def test_max_keys_too_low_raises():
@@ -255,16 +251,6 @@ async def test_create_user(iam_client, mock_iam_boto_client):
     await iam_client.create_user("alice")
     mock_iam_boto_client.create_user.assert_called_once_with(
         UserName="alice", Path="/mms/"
-    )
-
-
-@pytest.mark.asyncio
-async def test_create_service_user_uses_service_user_path(
-    iam_client, mock_iam_boto_client
-):
-    await iam_client.create_service_user("svc-reader")
-    mock_iam_boto_client.create_user.assert_called_once_with(
-        UserName="svc-reader", Path="/mms/service-users/"
     )
 
 
@@ -385,14 +371,8 @@ async def test_list_users(iam_client, mock_iam_boto_client):
     mock_iam_boto_client.get_paginator = MagicMock(
         return_value=make_paginator(
             [
-                {
-                    "Users": [
-                        {"UserName": "alice", "Path": "/mms/"},
-                        {"UserName": "svc-reader", "Path": "/mms/service-users/"},
-                        {"UserName": "bob", "Path": "/mms/"},
-                    ]
-                },
-                {"Users": [{"UserName": "carol", "Path": "/mms/"}]},
+                {"Users": [{"UserName": "alice"}, {"UserName": "bob"}]},
+                {"Users": [{"UserName": "carol"}]},
             ]
         )
     )
@@ -400,29 +380,6 @@ async def test_list_users(iam_client, mock_iam_boto_client):
     assert result == ["alice", "bob", "carol"]
     mock_iam_boto_client.get_paginator.return_value.paginate.assert_called_once_with(
         PathPrefix="/mms/"
-    )
-
-
-@pytest.mark.asyncio
-async def test_list_service_users(iam_client, mock_iam_boto_client):
-    mock_iam_boto_client.get_paginator = MagicMock(
-        return_value=make_paginator(
-            [
-                {
-                    "Users": [
-                        {"UserName": "svc-reader", "Path": "/mms/service-users/"},
-                        {"UserName": "svc-writer", "Path": "/mms/service-users/"},
-                    ]
-                }
-            ]
-        )
-    )
-
-    result = await iam_client.list_service_users()
-
-    assert result == ["svc-reader", "svc-writer"]
-    mock_iam_boto_client.get_paginator.return_value.paginate.assert_called_once_with(
-        PathPrefix="/mms/service-users/"
     )
 
 
@@ -577,15 +534,7 @@ async def test_remove_user_from_group(iam_client, mock_iam_boto_client):
 async def test_list_users_in_group(iam_client, mock_iam_boto_client):
     mock_iam_boto_client.get_paginator = MagicMock(
         return_value=make_paginator(
-            [
-                {
-                    "Users": [
-                        {"UserName": "alice", "Path": "/mms/"},
-                        {"UserName": "svc-reader", "Path": "/mms/service-users/"},
-                        {"UserName": "bob", "Path": "/mms/"},
-                    ]
-                }
-            ]
+            [{"Users": [{"UserName": "alice"}, {"UserName": "bob"}]}]
         )
     )
     result = await iam_client.list_users_in_group("researchers")

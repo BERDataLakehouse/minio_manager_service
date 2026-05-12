@@ -28,10 +28,10 @@ from service.exceptions import (
     UserOperationError,
 )
 from trino_integration.bootstrap import ensure_globalusers_trino_catalog
+from s3.utils.validators import validate_tenant_group_name
 from trino_integration.service_identity import (
     grant_global_trino_access,
     revoke_global_trino_access,
-    validate_trino_tenant_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -510,7 +510,7 @@ async def create_group(
     reader principal-role bindings in Polaris.
     """
     # Validate early to return 400 before MinIO/Polaris/Trino side effects.
-    group_name = validate_trino_tenant_name(group_name)
+    group_name = validate_tenant_group_name(group_name)
 
     app_state = get_app_state(request)
 
@@ -1522,7 +1522,7 @@ async def reconcile_all_trino_catalogs(
     errors: list[MigrationError] = []
     for group_name in target_base_groups:
         try:
-            group_name = validate_trino_tenant_name(group_name)
+            group_name = validate_tenant_group_name(group_name)
             # Idempotent re-grant of the global identity's access to this
             # tenant. Skips the relevant side silently when the matching
             # TRINO_GLOBAL_* env var is unset.

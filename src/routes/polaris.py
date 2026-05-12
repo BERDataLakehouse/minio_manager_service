@@ -27,10 +27,8 @@ from polaris.orchestration import ensure_user_polaris_state
 from service import app_state
 from service.dependencies import auth, require_admin
 from service.kb_auth import AdminPermission, KBaseUser
-from trino_integration.service_identity import (
-    grant_global_trino_access,
-    validate_trino_tenant_name,
-)
+from s3.utils.validators import validate_tenant_group_name
+from trino_integration.service_identity import grant_global_trino_access
 
 router = APIRouter(prefix="/polaris")
 
@@ -239,7 +237,7 @@ async def reconcile_tenant_trino_catalog(
     _authenticated_user: Annotated[KBaseUser, Depends(require_admin)],
 ) -> ReconcileTrinoCatalogResponse:
     """Force-reconcile one tenant's Trino catalog. Admin only."""
-    tenant_name = validate_trino_tenant_name(tenant_name)
+    tenant_name = validate_tenant_group_name(tenant_name)
     # Re-grant the global service identity's access to the tenant first
     # (idempotent). The reconcile then issues CREATE CATALOG with the
     # global creds from env.

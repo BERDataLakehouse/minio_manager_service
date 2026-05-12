@@ -13,7 +13,8 @@ tenant-delete, but never mints or stores per-tenant credentials.
 
 This module owns:
 - Tenant naming helpers used by the reconciler (`tenant_alias`,
-  `tenant_warehouse_name`, `validate_trino_tenant_name`).
+  `tenant_warehouse_name`); tenant-name validation lives in
+  ``s3.utils.validators.validate_tenant_group_name``.
 - The grant/revoke helpers (`grant_global_trino_access`,
   `revoke_global_trino_access`) called from the create/delete-group routes.
 
@@ -25,26 +26,9 @@ import logging
 import re
 
 from polaris.constants import tenant_reader_principal_role
-from s3.utils.validators import validate_group_name
-from service.exceptions import GroupOperationError
+from s3.utils.validators import validate_tenant_group_name
 
 logger = logging.getLogger(__name__)
-
-
-def validate_trino_tenant_name(group_name: str) -> str:
-    """Validate a tenant name for Trino-side integration.
-
-    Inherits the standard MMS group-name rules plus the existing ``ro``-suffix
-    reservation. No additional Trino-specific constraints — the tenant name
-    is never embedded in a service-identity username.
-    """
-    group_name = validate_group_name(group_name)
-    if group_name.endswith("ro"):
-        raise GroupOperationError(
-            "Tenant group name cannot end with 'ro' because that suffix is "
-            "reserved for read-only tenant groups"
-        )
-    return group_name
 
 
 def tenant_alias(group_name: str) -> str:
@@ -77,7 +61,7 @@ async def grant_global_trino_access(group_name: str, *, app_state) -> None:
     When either env var is unset (test/local-dev convenience) the matching
     step is skipped silently. Production environments must set both.
     """
-    group_name = validate_trino_tenant_name(group_name)
+    group_name = validate_tenant_group_name(group_name)
     ro_group = f"{group_name}ro"
 
     if app_state.trino_global_iam_username:
@@ -118,7 +102,7 @@ async def revoke_global_trino_access(group_name: str, *, app_state) -> None:
     can no longer list the tenant via Polaris), then IAM-side removal
     from ``{group}ro``.
     """
-    group_name = validate_trino_tenant_name(group_name)
+    group_name = validate_tenant_group_name(group_name)
     ro_group = f"{group_name}ro"
 
     if app_state.trino_global_polaris_principal:

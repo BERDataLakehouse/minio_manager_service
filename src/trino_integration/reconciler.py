@@ -33,11 +33,11 @@ from typing import Iterable
 
 import trino
 
+from s3.utils.validators import validate_tenant_group_name
 from service.exceptions import PolarisOperationError
 from trino_integration.service_identity import (
     tenant_alias,
     tenant_warehouse_name,
-    validate_trino_tenant_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -289,7 +289,7 @@ class TrinoCatalogReconciler:
         drop/recreate work when the catalog is already visible.
         """
         self._require_admin_token()
-        group_name = validate_trino_tenant_name(group_name)
+        group_name = validate_tenant_group_name(group_name)
         alias = tenant_alias(group_name)
         _validate_catalog_name(alias)
 
@@ -333,7 +333,7 @@ class TrinoCatalogReconciler:
                 "catalog properties."
             )
 
-        group_name = validate_trino_tenant_name(group_name)
+        group_name = validate_tenant_group_name(group_name)
         alias = tenant_alias(group_name)
         warehouse = tenant_warehouse_name(group_name)
 
@@ -376,7 +376,7 @@ class TrinoCatalogReconciler:
         Tolerates the catalog already being absent.
         """
         self._require_admin_token()
-        group_name = validate_trino_tenant_name(group_name)
+        group_name = validate_tenant_group_name(group_name)
         alias = tenant_alias(group_name)
         drop_sql = f'DROP CATALOG IF EXISTS "{alias}"'
         logger.info(

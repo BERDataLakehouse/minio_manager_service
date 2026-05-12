@@ -12,8 +12,6 @@ from s3.exceptions import IamGroupNotFoundError, IamPolicyNotFoundError
 
 logger = logging.getLogger(__name__)
 
-SERVICE_USER_PATH_SEGMENT = "service-users"
-
 
 class IamUserInfo(NamedTuple):
     """Name and IAM path of a user."""
@@ -35,18 +33,6 @@ def _parse_policy(doc: str | dict) -> dict:
     if isinstance(doc, dict):
         return doc
     return json.loads(unquote(doc))
-
-
-def _normalize_iam_path(path: str) -> str:
-    if not path.startswith("/"):
-        path = "/" + path
-    if not path.endswith("/"):
-        path = path + "/"
-    return path
-
-
-def _child_iam_path(parent: str, child: str) -> str:
-    return _normalize_iam_path(f"{parent.rstrip('/')}/{child.strip('/')}")
 
 
 class S3IAMClient:
@@ -74,10 +60,8 @@ class S3IAMClient:
         endpoint_url: the URL of the S3-compatible IAM endpoint.
         access_key: the access key ID for authentication.
         secret_key: the secret access key for authentication.
-        path_prefix: IAM path prefix applied to regular users and groups.
-            Service users are created under the child path
-            ``{path_prefix}/service-users/`` so normal user listings can
-            exclude them independent of username convention. Defaults to "/".
+        path_prefix: IAM path prefix applied to all created users and groups,
+            used to distinguish service-managed accounts from others. Defaults to "/".
         max_keys: maximum number of access keys allowed per user (active + inactive).
             Defaults to 2, matching the AWS IAM limit. See:
             https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html
@@ -86,13 +70,14 @@ class S3IAMClient:
         """
         if max_keys < 2:  # note CEPH allows 4
             raise ValueError(f"max_keys must be at least 2, got {max_keys}")
+        if not path_prefix.startswith("/"):
+            path_prefix = "/" + path_prefix
+        if not path_prefix.endswith("/"):
+            path_prefix = path_prefix + "/"
         self._endpoint_url = endpoint_url
         self._access_key = access_key
         self._secret_key = secret_key
-        self._path_prefix = _normalize_iam_path(path_prefix)
-        self._service_user_path_prefix = _child_iam_path(
-            self._path_prefix, SERVICE_USER_PATH_SEGMENT
-        )
+        self._path_prefix = path_prefix
         self._max_keys = max_keys
         self._region_name = region_name
         self._client = None
@@ -154,27 +139,13 @@ class S3IAMClient:
 
         exists_ok: if True, silently succeed if the user already exists.
         """
-        await self._create_user_at_path(
-            username, self._path_prefix, exists_ok=exists_ok
-        )
-        logger.info("Created IAM user: %s", username)
-
-    async def create_service_user(self, username: str, exists_ok: bool = False) -> None:
-        """Create an IAM service user under the service-user path."""
-        await self._create_user_at_path(
-            username, self._service_user_path_prefix, exists_ok=exists_ok
-        )
-        logger.info("Created IAM service user: %s", username)
-
-    async def _create_user_at_path(
-        self, username: str, path: str, *, exists_ok: bool
-    ) -> None:
         try:
-            await self._client.create_user(UserName=username, Path=path)
+            await self._client.create_user(UserName=username, Path=self._path_prefix)
         except ClientError as e:
             if exists_ok and e.response["Error"]["Code"] == "EntityAlreadyExists":
                 return
             raise
+        logger.info("Created IAM user: %s", username)
 
     async def delete_user(self, username: str) -> None:
         """
@@ -219,29 +190,12 @@ class S3IAMClient:
         return IamUserInfo(username=user["UserName"], path=user["Path"])
 
     async def list_users(self) -> list[str]:
-        """Return regular usernames, excluding users under service-user paths."""
+        """Return the usernames of all IAM users under the configured path prefix."""
         users = []
         paginator = self._client.get_paginator("list_users")
         async for page in paginator.paginate(PathPrefix=self._path_prefix):
-            users.extend(
-                u["UserName"]
-                for u in page["Users"]
-                if u.get("Path") == self._path_prefix
-            )
-        logger.debug("Listed %d IAM users under path %s", len(users), self._path_prefix)
-        return users
-
-    async def list_service_users(self) -> list[str]:
-        """Return IAM service usernames under the service-user path."""
-        users = []
-        paginator = self._client.get_paginator("list_users")
-        async for page in paginator.paginate(PathPrefix=self._service_user_path_prefix):
             users.extend(u["UserName"] for u in page["Users"])
-        logger.debug(
-            "Listed %d IAM service users under path %s",
-            len(users),
-            self._service_user_path_prefix,
-        )
+        logger.debug("Listed %d IAM users under path %s", len(users), self._path_prefix)
         return users
 
     # ── Groups ───────────────────────────────────────────────────────────────
@@ -324,7 +278,7 @@ class S3IAMClient:
         logger.info("Removed user %s from group %s", username, group_name)
 
     async def list_users_in_group(self, group_name: str) -> list[str]:
-        """Return regular usernames in a group, excluding service users.
+        """Return the usernames of all users in a group.
 
         Raises:
             IamGroupNotFoundError: if the group does not exist.
@@ -333,11 +287,7 @@ class S3IAMClient:
             users = []
             paginator = self._client.get_paginator("get_group")
             async for page in paginator.paginate(GroupName=group_name):
-                users.extend(
-                    u["UserName"]
-                    for u in page["Users"]
-                    if u.get("Path") == self._path_prefix
-                )
+                users.extend(u["UserName"] for u in page["Users"])
             return users
         except ClientError as e:
             if e.response["Error"]["Code"] == "NoSuchEntity":
