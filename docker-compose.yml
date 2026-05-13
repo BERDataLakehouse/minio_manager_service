@@ -285,8 +285,8 @@ services:
       - QUARKUS_DATASOURCE_PASSWORD=hivepassword
       - POLARIS_REALM_CONTEXT_REALMS=POLARIS
       - AWS_REGION=us-east-1
-      - AWS_ACCESS_KEY_ID=minio
-      - AWS_SECRET_ACCESS_KEY=minio123
+      - AWS_ACCESS_KEY_ID=test_access_key
+      - AWS_SECRET_ACCESS_KEY=test_access_secret
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8182/q/health"]
       interval: 10s
