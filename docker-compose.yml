@@ -18,16 +18,17 @@ services:
     command: server --address 0.0.0.0:9002 --console-address 0.0.0.0:9003 /data
 
   ceph:
-    image: ghcr.io/kbasetest/ceph-rgw-test-image:0.1.3
+    image: ghcr.io/kbasetest/ceph-rgw-test-image:0.1.4
     environment:
       RGW_PORT: "8080"
       RGW_ACCESS_KEY: test_access_key
       RGW_SECRET_KEY: test_access_secret
+      RGW_USERS: "trino_svc:trino_svc:local-dev-trino-svc-s3-secret"
     ports:
       - "9050:8080"
       - "8445:8443"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080"]
+      test: ["CMD-SHELL", "curl -s http://127.0.0.1:8080/ | grep -q '<'"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -66,6 +67,25 @@ services:
       - MMS_DB_PASSWORD=mmspassword
       - MMS_DB_ENCRYPTION_KEY=change-me-in-prod
       - MMS_IAM_PATH_PREFIX=/data_governance_service
+      # Trino admin path — matches admin.shared-secret in
+      # configs/trino/access-control.properties. The reconciler uses these
+      # to issue CREATE/DROP CATALOG against Trino as platform_admin.
+      - TRINO_HOST=trino
+      - TRINO_PORT=8080
+      - TRINO_ADMIN_USERNAME=platform_admin
+      - TRINO_ADMIN_TOKEN=local-dev-trino-admin-token
+      # Global Trino service identity credentials. Pre-provisioned with
+      # broad access (Polaris service_admin + s3:* on cdm-lake); MMS
+      # splices them into CREATE CATALOG for every tenant.
+      # S3 keys are pinned by minio-create-buckets via `mc admin user add`.
+      - TRINO_GLOBAL_S3_ACCESS_KEY=trino_svc
+      - TRINO_GLOBAL_S3_SECRET_KEY=local-dev-trino-svc-s3-secret
+      # Polaris client_id/secret are server-generated; trino-svc-bootstrap
+      # writes them into a shared volume and MMS reads via _FILE.
+      - TRINO_GLOBAL_POLARIS_CLIENT_ID_FILE=/shared-trino-svc/polaris_client_id.txt
+      - TRINO_GLOBAL_POLARIS_CLIENT_SECRET_FILE=/shared-trino-svc/polaris_client_secret.txt
+    volumes:
+      - trino-svc-credential:/shared-trino-svc:ro
     ports:
       - "8010:8000"
     depends_on:
@@ -73,12 +93,152 @@ services:
         condition: service_healthy
       ceph:
         condition: service_healthy
+      minio-create-buckets:
+        condition: service_completed_successfully
+      ceph-create-buckets:
+        condition: service_completed_successfully
+      trino-svc-bootstrap:
+        condition: service_completed_successfully
+      trino:
+        condition: service_healthy
       redis:
         condition: service_healthy
       polaris:
         condition: service_healthy
       postgres:
         condition: service_healthy
+
+  minio-create-buckets:
+    # Creates the cdm-lake bucket so the trino-svc IAM policy targets a
+    # real resource, then provisions the trino_svc IAM user with a pinned
+    # access key + secret and attaches an inline ``s3:*`` policy on
+    # cdm-lake. Mirrors the equivalent bootstrap in spark_notebook /
+    # datalake-mcp-server stacks.
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      # Inline policy spec for trino_svc (s3:* on cdm-lake). Kept in a
+      # sibling file because the YAML folded entrypoint below collapses
+      # newlines, which would break an inline heredoc.
+      - ./scripts/trino-svc-policy.json:/policies/trino-svc-policy.json:ro
+    entrypoint: >
+      /bin/sh -c "
+      set -e;
+      echo 'Configuring MinIO...';
+      mc alias set local http://minio:9002 minio minio123;
+
+      echo 'Creating buckets...';
+      mc mb --ignore-existing local/cdm-lake;
+
+      echo 'Ensuring trino_svc IAM user exists...';
+      mc admin user info local trino_svc >/dev/null 2>&1 || mc admin user add local trino_svc local-dev-trino-svc-s3-secret;
+
+      echo 'Creating + attaching trino-svc-cdm-lake-fullaccess policy...';
+      mc admin policy create local trino-svc-cdm-lake-fullaccess /policies/trino-svc-policy.json || true;
+      mc admin policy attach local trino-svc-cdm-lake-fullaccess --user trino_svc || true;
+
+      echo 'MinIO bucket creation complete.';
+      "
+
+  ceph-create-buckets:
+    # Creates the cdm-lake bucket so the trino-svc IAM policy targets a
+    # real resource, then attaches an inline ``s3:*`` policy on
+    # to the trino_svc user (provisioned by the ceph image via RGW_USERS).
+    # Mirrors the equivalent bootstrap in spark_notebook /
+    # datalake-mcp-server stacks.
+    image: amazon/aws-cli
+    depends_on:
+      ceph:
+        condition: service_healthy
+    environment:
+      - AWS_ACCESS_KEY_ID=test_access_key
+      - AWS_SECRET_ACCESS_KEY=test_access_secret
+      - AWS_DEFAULT_REGION=us-east-1
+      - CEPH_ENDPOINT=http://ceph:8080
+    volumes:
+      - ./scripts/trino-svc-policy.json:/policies/trino-svc-policy.json:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        echo 'Creating Ceph buckets...'
+        aws --endpoint-url $$CEPH_ENDPOINT s3api create-bucket --bucket cdm-lake
+
+        echo 'Attaching policy to trino_svc...'
+        aws --endpoint-url $$CEPH_ENDPOINT iam put-user-policy \
+          --user-name trino_svc \
+          --policy-name trino-svc-cdm-lake-fullaccess \
+          --policy-document file:///policies/trino-svc-policy.json
+
+        echo 'Ceph bucket and policy setup complete.'
+
+  trino-svc-bootstrap:
+    # Creates the global Polaris ``trino_svc`` principal + service_admin
+    # role and writes the rotated client_id/client_secret to a shared
+    # volume that MMS reads via TRINO_GLOBAL_POLARIS_CLIENT_*_FILE. See
+    # scripts/trino-svc-bootstrap.sh for the script body. Idempotent on
+    # principal identity; rotates credentials on every run, so MMS picks
+    # up fresh values whenever the stack restarts.
+    image: curlimages/curl:8.11.1
+    # Run as root so the script can write into the shared volume —
+    # curlimages/curl defaults to UID 100 which can't write to a
+    # docker-managed volume initialized as root. Files end up root:644
+    # which MMS (runs as a non-root user) can still read.
+    user: root
+    depends_on:
+      polaris:
+        condition: service_healthy
+    volumes:
+      - ./scripts/trino-svc-bootstrap.sh:/bootstrap.sh:ro
+      - trino-svc-credential:/shared-trino-svc
+    entrypoint: ["/bin/sh", "/bootstrap.sh"]
+
+  trino:
+    # Trino coordinator with the BERDL access-control plugin baked in.
+    # Uses the pre-built image from the trino_access_control repo so the
+    # MMS-only stack doesn't need that repo cloned locally. Catalog
+    # management is dynamic — MMS issues CREATE/DROP CATALOG via the
+    # admin path at runtime; no static catalog config files are mounted.
+    image: ghcr.io/berdatalakehouse/trino_access_control:pr-16
+    platform: linux/amd64
+    ports:
+      - "8083:8080"  # Trino Web UI / API
+    volumes:
+      - ./configs/trino/config.properties:/etc/trino/config.properties
+      - ./configs/trino/access-control.properties:/etc/trino/access-control.properties
+      - ./configs/trino/resource-groups.properties:/etc/trino/resource-groups.properties
+      - ./configs/trino/resource-groups.json:/etc/trino/resource-groups.json
+    depends_on:
+      minio:
+        condition: service_healthy
+      ceph:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    stop_grace_period: 150s
+
+  trino-worker:
+    # Trino worker — executes query fragments assigned by the coordinator.
+    # Single-worker is enough for the MMS-only stack; production uses k8s
+    # HPA. Scale ad-hoc with: docker compose up -d --scale trino-worker=N
+    image: ghcr.io/berdatalakehouse/trino_access_control:pr-16
+    platform: linux/amd64
+    volumes:
+      - ./configs/trino/worker-config.properties:/etc/trino/config.properties
+    depends_on:
+      trino:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   postgres:
     image: postgres:15
@@ -144,3 +304,4 @@ services:
 
 volumes:
   postgres_data:
+  trino-svc-credential:  # trino-svc-bootstrap → MMS Polaris client_id/secret

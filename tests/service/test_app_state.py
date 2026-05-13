@@ -37,6 +37,7 @@ class TestAppStateNamedTuple:
             polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
             s3_credential_service=MagicMock(),
+            trino_catalog_reconciler=MagicMock(),
             tenant_manager=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
@@ -46,19 +47,8 @@ class TestAppStateNamedTuple:
         assert state.polaris_group_manager is not None
         assert state.polaris_credential_service is not None
         assert state.s3_credential_service is not None
+        assert state.trino_catalog_reconciler is not None
         assert state.tenant_manager is not None
-
-    def test_app_state_does_not_expose_raw_polaris_service(self):
-        """The low-level PolarisService is teardown-only.
-
-        Routes interact with Polaris exclusively through the manager layer
-        (``polaris_user_manager`` / ``polaris_group_manager``) and the
-        ``polaris_credential_service``. Exposing the raw client on AppState
-        would invite direct calls that bypass the manager-layer
-        orchestration; keep it on ``app.state._polaris_service`` for
-        ``destroy_app_state`` only.
-        """
-        assert "polaris_service" not in AppState._fields
 
 
 # === REQUEST STATE TESTS ===
@@ -308,6 +298,7 @@ class TestDestroyAppState:
             polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
             s3_credential_service=MagicMock(),
+            trino_catalog_reconciler=MagicMock(),
             tenant_manager=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",
@@ -358,6 +349,7 @@ class TestDestroyAppState:
             polaris_group_manager=MagicMock(),
             polaris_credential_service=MagicMock(),
             s3_credential_service=MagicMock(),
+            trino_catalog_reconciler=MagicMock(),
             tenant_manager=MagicMock(),
             users_sql_warehouse_base="s3a://test-bucket/users-sql",
             tenant_sql_warehouse_base="s3a://test-bucket/tenant-sql",

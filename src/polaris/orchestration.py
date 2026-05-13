@@ -42,7 +42,7 @@ async def ensure_user_polaris_state(
       2. Read the user's current MinIO group memberships via
          :meth:`MinioGroupManager.get_user_groups`.
       3. Deduplicate using :func:`dedup_groups_preferring_write` so a user
-         in both ``teamA`` and ``teamAro`` gets one writer binding (not
+         in both ``team1`` and ``team1ro`` gets one writer binding (not
          both writer and reader).
       4. For each unique base group, mirror the membership into Polaris via
          :meth:`PolarisGroupManager.add_user_to_group`. Bases listed in

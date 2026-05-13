@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from credentials.polaris_store import PolarisCredentialRecord
+from minio.managers.user_manager import GLOBAL_USER_GROUP
 from polaris.orchestration import ensure_user_polaris_state
 from service.app_state import get_app_state
 from service.dependencies import auth
@@ -104,6 +105,10 @@ async def get_credentials(
         polaris_group_manager=app_state.polaris_group_manager,
         group_manager=app_state.group_manager,
     )
+    # Self-heal the default-tenant Trino catalog if missing on a cold
+    # stack. The reconciler pre-checks SHOW CATALOGS first so this is a
+    # cheap no-op in steady state.
+    await app_state.trino_catalog_reconciler.reconcile_tenant(GLOBAL_USER_GROUP)
     polaris_record = await app_state.polaris_credential_service.get_or_create(username)
 
     return _to_response(username, s3_access_key, s3_secret_key, polaris_record)
@@ -140,6 +145,10 @@ async def rotate_credentials(
         polaris_group_manager=app_state.polaris_group_manager,
         group_manager=app_state.group_manager,
     )
+    # Self-heal the default-tenant Trino catalog if missing on a cold
+    # stack. The reconciler pre-checks SHOW CATALOGS first so this is a
+    # cheap no-op in steady state.
+    await app_state.trino_catalog_reconciler.reconcile_tenant(GLOBAL_USER_GROUP)
     polaris_record = await app_state.polaris_credential_service.rotate(username)
 
     return _to_response(username, s3_access_key, s3_secret_key, polaris_record)

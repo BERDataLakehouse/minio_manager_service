@@ -13,13 +13,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from minio.managers.user_manager import GLOBAL_USER_GROUP
 from polaris.orchestration import ensure_user_polaris_state
 from s3.models.user import UserModel
-from s3.utils.validators import validate_group_name
+from s3.utils.validators import validate_tenant_group_name
 from service.app_state import get_app_state
 from service.dependencies import auth, require_admin
 from service.exceptions import (
-    DataGovernanceError,
     GroupOperationError,
     TenantNotFoundError,
     UserOperationError,
@@ -308,6 +308,11 @@ async def create_user(
     # service does not perform.
     polaris_record = await app_state.polaris_credential_service.get_or_create(username)
 
+    # 4. Self-heal the default-tenant Trino catalog if missing on a cold
+    # stack. The reconciler pre-checks SHOW CATALOGS first so this is a
+    # cheap no-op in steady state.
+    await app_state.trino_catalog_reconciler.reconcile_tenant(GLOBAL_USER_GROUP)
+
     response = UserManagementResponse(
         username=user_info.username,
         s3_access_key=user_info.s3_access_key,
@@ -499,14 +504,8 @@ async def create_group(
     in MinIO IAM, then provisions the matching tenant catalog and writer/
     reader principal-role bindings in Polaris.
     """
-    # Prevent creating groups ending with 'ro' - this suffix is reserved for read-only variants
-    if group_name.endswith("ro"):
-        raise DataGovernanceError(
-            "Group name cannot end with 'ro' - this suffix is reserved for read-only group variants"
-        )
-
-    # Validate group name early to return 400 for invalid names
-    validate_group_name(group_name)
+    # Validate early to return 400 before MinIO/Polaris/Trino side effects.
+    group_name = validate_tenant_group_name(group_name)
 
     app_state = get_app_state(request)
 
@@ -521,6 +520,14 @@ async def create_group(
     await app_state.polaris_group_manager.create_group(
         group_name=group_name, creator=authenticated_user.user
     )
+
+    # 3. Reconcile the tenant Trino catalog: issue CREATE CATALOG via the
+    # admin path using the global service-identity creds from env vars. The
+    # global identity already has broad Polaris + S3 access from bootstrap,
+    # so no per-tenant grants are needed. Failures bubble up as 5xx so the
+    # API caller knows reconcile drift exists; the
+    # /management/migrate/reconcile-trino-catalogs endpoint can recover it.
+    await app_state.trino_catalog_reconciler.reconcile_tenant(group_name)
 
     # Ensure tenant metadata row exists for this group
     await app_state.tenant_manager.ensure_metadata(
@@ -629,12 +636,36 @@ async def delete_group(
     request: Request,
     authenticated_user=Depends(require_admin),
 ):
-    """Delete a group and any associated Polaris tenant catalog + metadata.
+    """Delete a group and any associated Trino, Polaris, and MinIO state.
 
-    Tear-down order: Polaris first (so the catalog and role bindings are gone
-    before MinIO IAM disappears), then MinIO IAM, then tenant metadata.
+    Tear-down order:
+      1. Trino — drop the tenant catalog so the coordinator stops routing
+         queries to a Polaris catalog that's about to disappear. Skipped
+         for ``*ro`` inputs and best-effort on failure (logged + continue).
+      2. Polaris — drop the tenant catalog and writer/reader principal
+         roles before MinIO IAM disappears so role bindings can never
+         reference a deleted IAM identity.
+      3. MinIO IAM — delete the group resource (and the ``{name}ro``
+         companion).
+      4. Tenant metadata — drop the metadata row last, after every
+         backing service has acknowledged removal.
     """
     app_state = get_app_state(request)
+
+    if not group_name.endswith("ro"):
+        # Drop the Trino catalog first so the coordinator stops routing queries
+        # to a Polaris catalog that's about to disappear. Idempotent. No
+        # per-tenant Polaris/IAM revoke is needed — the global Trino service
+        # identity holds tenant-spanning grants from bootstrap, not per-tenant
+        # bindings.
+        try:
+            await app_state.trino_catalog_reconciler.deprovision_tenant(group_name)
+        except Exception as e:  # noqa: BLE001 — best-effort, log and continue
+            logger.warning(
+                "Failed to drop Trino catalog for group=%s: %s; continuing teardown.",
+                group_name,
+                e,
+            )
 
     # Polaris first — drop catalog + roles. No-op for *ro inputs.
     await app_state.polaris_group_manager.delete_group(group_name)
@@ -834,7 +865,7 @@ class EnsurePolarisResponse(BaseModel):
         list[str],
         Field(
             default_factory=list,
-            description="Usernames excluded by the caller that exist in the system",
+            description=("Usernames excluded by the caller that exist in the system"),
         ),
     ]
     groups_skipped: Annotated[
@@ -1064,6 +1095,119 @@ async def ensure_all_polaris_resources(
         provisioned_groups=sorted(provisioned_groups),
         users_skipped=skipped_users,
         groups_skipped=skipped_groups,
+        errors=errors,
+        performed_by=authenticated_user.user,
+        timestamp=datetime.now(),
+    )
+
+
+# ===== TRINO TENANT CATALOG RECONCILE =====
+
+
+class ReconcileTrinoCatalogsRequest(BaseModel):
+    """Optional payload for the bulk reconcile endpoint."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    exclude_groups: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description=(
+                "Base group names to skip. Useful for groups that are not "
+                "yet Polaris-backed or are intentionally excluded from "
+                "Trino exposure."
+            ),
+        ),
+    ]
+
+
+class ReconcileTrinoCatalogsResponse(BaseModel):
+    """Result of a bulk Trino tenant catalog reconcile."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, frozen=True)
+
+    reconciled: Annotated[
+        list[str],
+        Field(
+            default_factory=list, description="Tenant aliases successfully reconciled"
+        ),
+    ]
+    skipped: Annotated[
+        list[str],
+        Field(default_factory=list, description="Tenants skipped per exclude_groups"),
+    ]
+    errors: Annotated[list[MigrationError], Field(description="Per-tenant failures")]
+    performed_by: Annotated[str, Field(description="Admin who performed the operation")]
+    timestamp: Annotated[datetime, Field(description="When operation was performed")]
+
+
+@router.post(
+    "/migrate/reconcile-trino-catalogs",
+    response_model=ReconcileTrinoCatalogsResponse,
+    summary="Reconcile Trino tenant catalogs",
+    description=(
+        "Reissue ``CREATE CATALOG`` for every tenant from the global service "
+        "identity credentials. Idempotent. Use cases:\n"
+        "- backfill after the Trino tenant catalog machinery first lands\n"
+        "- recovery after a Trino coordinator restart (catalogs are dynamic "
+        "  and disappear on restart)\n"
+        "- recovery after a per-tenant reconcile drift\n"
+        "Each tenant is reconciled independently; per-tenant errors do not "
+        "block the others."
+    ),
+)
+async def reconcile_all_trino_catalogs(
+    request: Request,
+    payload: ReconcileTrinoCatalogsRequest = ReconcileTrinoCatalogsRequest(),
+    authenticated_user=Depends(require_admin),
+):
+    """Bulk reconcile of Trino tenant catalogs.
+
+    Iterates over base groups (those without the ``ro`` suffix) and runs
+    ``TrinoCatalogReconciler.reconcile_tenant`` for each.
+    """
+    app_state = get_app_state(request)
+    exclude_groups = set(payload.exclude_groups)
+
+    all_group_names = await app_state.group_manager.list_resources()
+    base_groups = [g for g in all_group_names if not g.endswith("ro")]
+    target_base_groups = [g for g in base_groups if g not in exclude_groups]
+    skipped = sorted(set(base_groups) & exclude_groups)
+
+    logger.info(
+        "Reconciling Trino tenant catalogs for %d groups (skipped %d excluded)",
+        len(target_base_groups),
+        len(skipped),
+    )
+
+    reconciled: list[str] = []
+    errors: list[MigrationError] = []
+    for group_name in target_base_groups:
+        try:
+            group_name = validate_tenant_group_name(group_name)
+            # force=True so rotated TRINO_GLOBAL_* credentials are pushed
+            # into existing coordinator catalogs. The pre-check default
+            # would skip them and rotation wouldn't take effect.
+            alias = await app_state.trino_catalog_reconciler.reconcile_tenant(
+                group_name, force=True
+            )
+            reconciled.append(alias)
+        except Exception as e:  # noqa: BLE001 — per-group best-effort
+            logger.warning(
+                "Failed to reconcile Trino catalog for group %s: %s", group_name, e
+            )
+            errors.append(
+                MigrationError(
+                    resource_type="trino_catalog",
+                    resource_name=group_name,
+                    error=str(e),
+                )
+            )
+
+    return ReconcileTrinoCatalogsResponse(
+        reconciled=sorted(reconciled),
+        skipped=skipped,
         errors=errors,
         performed_by=authenticated_user.user,
         timestamp=datetime.now(),
