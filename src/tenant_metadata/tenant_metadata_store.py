@@ -103,8 +103,11 @@ class TenantMetadataStore:
     the new state on the next read in the same pod regardless of TTL.
     """
 
-    def __init__(self, pool: AsyncConnectionPool) -> None:
-        self._pool = pool
+    def __init__(
+        self, *, rw: AsyncConnectionPool, ro: AsyncConnectionPool
+    ) -> None:
+        self._rw = rw
+        self._ro = ro
 
         # ── Read-side caches ──
         # Each cache is keyed by the natural identity of the query.
@@ -187,7 +190,7 @@ class TenantMetadataStore:
     ) -> dict | None:
         """Create a tenant_metadata row. Returns None if already exists (idempotent)."""
         now = datetime.now(timezone.utc)
-        async with self._pool.connection() as conn:
+        async with self._rw.connection() as conn:
             cur = await conn.execute(
                 _INSERT_METADATA,
                 {
@@ -212,10 +215,10 @@ class TenantMetadataStore:
         return _row_to_metadata(row)
 
     async def get_metadata(self, tenant_name: str) -> dict | None:
-        """Return metadata for a single tenant, or None if not found."""
+        """Return metadata for a single tenant, or None if not found. Reads from ro."""
 
         async def _load() -> dict | None:
-            async with self._pool.connection() as conn:
+            async with self._ro.connection() as conn:
                 cur = await conn.execute(_SELECT_METADATA, {"tenant_name": tenant_name})
                 row = await cur.fetchone()
             if row is None:
@@ -223,6 +226,20 @@ class TenantMetadataStore:
             return _row_to_metadata(row)
 
         return await self._metadata_cache.get_or_load(tenant_name, _load)
+
+    async def get_metadata_for_writer(self, tenant_name: str) -> dict | None:
+        """Reads from rw, bypassing the cache. Required when a caller has just
+        attempted a write (``create_metadata``) that lost an ON CONFLICT race
+        and needs to read what the winning writer just inserted. Replica lag
+        would otherwise let the fallback read see None even though the row
+        exists; the in-process TTL cache could also serve a stale miss.
+        """
+        async with self._rw.connection() as conn:
+            cur = await conn.execute(_SELECT_METADATA, {"tenant_name": tenant_name})
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return _row_to_metadata(row)
 
     async def update_metadata(
         self,
@@ -259,7 +276,7 @@ class TenantMetadataStore:
             f"WHERE tenant_name = %(tenant_name)s "
             f"RETURNING {', '.join(_METADATA_COLUMNS)};"
         )
-        async with self._pool.connection() as conn:
+        async with self._rw.connection() as conn:
             cur = await conn.execute(sql, params)
             row = await cur.fetchone()
             await conn.commit()
@@ -272,7 +289,7 @@ class TenantMetadataStore:
 
     async def delete_metadata(self, tenant_name: str) -> bool:
         """Delete tenant metadata (cascades to tenant_stewards). Returns True if deleted."""
-        async with self._pool.connection() as conn:
+        async with self._rw.connection() as conn:
             cur = await conn.execute(_DELETE_METADATA, {"tenant_name": tenant_name})
             await conn.commit()
         deleted = cur.rowcount > 0
@@ -290,7 +307,7 @@ class TenantMetadataStore:
         """Return metadata for all tenants."""
 
         async def _load() -> list[dict]:
-            async with self._pool.connection() as conn:
+            async with self._ro.connection() as conn:
                 cur = await conn.execute(_SELECT_ALL_METADATA)
                 rows = await cur.fetchall()
             return [_row_to_metadata(row) for row in rows]
@@ -306,7 +323,7 @@ class TenantMetadataStore:
     ) -> dict:
         """Assign a user as steward (idempotent). Always returns the steward row."""
         now = datetime.now(timezone.utc)
-        async with self._pool.connection() as conn:
+        async with self._rw.connection() as conn:
             cur = await conn.execute(
                 _UPSERT_STEWARD,
                 {
@@ -326,7 +343,7 @@ class TenantMetadataStore:
 
     async def remove_steward(self, tenant_name: str, username: str) -> bool:
         """Remove a steward assignment. Returns True if removed."""
-        async with self._pool.connection() as conn:
+        async with self._rw.connection() as conn:
             cur = await conn.execute(
                 _DELETE_STEWARD,
                 {"tenant_name": tenant_name, "username": username},
@@ -342,7 +359,7 @@ class TenantMetadataStore:
         """Return all stewards for a tenant."""
 
         async def _load() -> list[dict]:
-            async with self._pool.connection() as conn:
+            async with self._ro.connection() as conn:
                 cur = await conn.execute(_SELECT_STEWARDS, {"tenant_name": tenant_name})
                 rows = await cur.fetchall()
             return [_row_to_steward(row) for row in rows]
@@ -353,7 +370,7 @@ class TenantMetadataStore:
         """Check if a user is a steward for the given tenant."""
 
         async def _load() -> bool:
-            async with self._pool.connection() as conn:
+            async with self._ro.connection() as conn:
                 cur = await conn.execute(
                     _IS_STEWARD,
                     {"tenant_name": tenant_name, "username": username},
@@ -366,7 +383,7 @@ class TenantMetadataStore:
         """Return tenant names where the user is a steward."""
 
         async def _load() -> list[str]:
-            async with self._pool.connection() as conn:
+            async with self._ro.connection() as conn:
                 cur = await conn.execute(
                     _SELECT_STEWARD_TENANTS, {"username": username}
                 )

@@ -32,7 +32,9 @@ def mock_pool():
 @pytest.fixture
 def store(mock_pool):
     """Create a PolarisCredentialStore with a mocked pool."""
-    return PolarisCredentialStore(mock_pool, encryption_key="test-encryption-key")
+    return PolarisCredentialStore(
+        rw=mock_pool, ro=mock_pool, encryption_key="test-encryption-key"
+    )
 
 
 class TestPolarisCredentialStoreGetCredentials:
@@ -130,3 +132,64 @@ class TestPolarisCredentialStoreClose:
         """Test close() does not close the shared pool (DatabasePool owns it)."""
         await store.close()
         mock_pool.close.assert_not_called()
+
+
+# ── Pool selection (rw vs ro routing) ─────────────────────────────────────
+
+
+def _tracked_pool(*, fetchone=None):
+    cur = AsyncMock()
+    cur.fetchone = AsyncMock(return_value=fetchone)
+    cur.rowcount = 0
+
+    conn = AsyncMock()
+    conn.execute = AsyncMock(return_value=cur)
+    conn.commit = AsyncMock()
+
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=conn)
+    cm.__aexit__ = AsyncMock(return_value=None)
+
+    pool = MagicMock()
+    pool.connection = MagicMock(return_value=cm)
+    return pool
+
+
+class TestPoolSelection:
+    """Lock down which pool each PolarisCredentialStore method routes to."""
+
+    @pytest.fixture
+    def store(self):
+        self.rw = _tracked_pool()
+        self.ro = _tracked_pool()
+        return PolarisCredentialStore(rw=self.rw, ro=self.ro, encryption_key="k")
+
+    @pytest.mark.asyncio
+    async def test_get_credentials_reads_ro(self, store):
+        await store.get_credentials("u")
+        assert self.ro.connection.called
+        assert not self.rw.connection.called
+
+    @pytest.mark.asyncio
+    async def test_get_credentials_for_writer_reads_rw(self, store):
+        await store.get_credentials_for_writer("u")
+        assert self.rw.connection.called
+        assert not self.ro.connection.called
+
+    @pytest.mark.asyncio
+    async def test_store_credentials_writes_rw(self, store):
+        await store.store_credentials("u", "cid", "csec", "user_u")
+        assert self.rw.connection.called
+        assert not self.ro.connection.called
+
+    @pytest.mark.asyncio
+    async def test_delete_credentials_writes_rw(self, store):
+        await store.delete_credentials("u")
+        assert self.rw.connection.called
+        assert not self.ro.connection.called
+
+    @pytest.mark.asyncio
+    async def test_health_check_pings_rw(self, store):
+        await store.health_check()
+        assert self.rw.connection.called
+        assert not self.ro.connection.called

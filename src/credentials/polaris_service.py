@@ -62,9 +62,11 @@ class PolarisCredentialService:
             return cached
 
         async with self._lock_manager.credential_lock(f"{_LOCK_KEY_PREFIX}{username}"):
-            # Double-check under the lock: another instance may have populated
-            # the cache while we waited.
-            cached = await self._credential_store.get_credentials(username)
+            # Double-check under the lock — read from rw because replica lag
+            # would let two pods race past this check and rotate credentials
+            # in lockstep. See S3CredentialService.get_or_create for the
+            # equivalent rule on the MinIO side.
+            cached = await self._credential_store.get_credentials_for_writer(username)
             if cached is not None:
                 logger.info(
                     "Returning cached Polaris credentials for user %s (post-lock)",

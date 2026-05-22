@@ -54,7 +54,7 @@ def mock_pool():
 
 @pytest.fixture
 def client(mock_pool):
-    return KBaseUserProfileClient("http://auth:5000/", pool=mock_pool)
+    return KBaseUserProfileClient("http://auth:5000/", ro=mock_pool)
 
 
 # ── Constructor ──────────────────────────────────────────────────────────
@@ -62,12 +62,12 @@ def client(mock_pool):
 
 class TestInit:
     def test_strips_trailing_slash(self, mock_pool):
-        c = KBaseUserProfileClient("http://auth:5000/", pool=mock_pool)
+        c = KBaseUserProfileClient("http://auth:5000/", ro=mock_pool)
         assert c._auth_url == "http://auth:5000"
         assert c._users_url == "http://auth:5000/api/V2/users/"
 
     def test_no_trailing_slash(self, mock_pool):
-        c = KBaseUserProfileClient("http://auth:5000", pool=mock_pool)
+        c = KBaseUserProfileClient("http://auth:5000", ro=mock_pool)
         assert c._auth_url == "http://auth:5000"
 
 
@@ -197,3 +197,32 @@ class TestFetchEmails:
         result = await client._fetch_emails(["alice", "bob"])
         assert result["alice"] == "alice@org.com"
         assert result["bob"] is None
+
+
+# ── Pool selection (ro routing) ───────────────────────────────────────────
+
+
+def _tracked_pool(*, fetchall=None):
+    cur = AsyncMock()
+    cur.fetchall = AsyncMock(return_value=fetchall or [])
+    conn = AsyncMock()
+    conn.execute = AsyncMock(return_value=cur)
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=conn)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    pool = MagicMock()
+    pool.connection = MagicMock(return_value=cm)
+    return pool
+
+
+class TestPoolSelection:
+    """KBaseUserProfileClient only reads (emails). Confirms ro routing."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_emails_reads_ro(self):
+        ro = _tracked_pool(fetchall=[("alice", "alice@example.com")])
+        client = KBaseUserProfileClient("http://auth:5000/", ro=ro)
+
+        result = await client._fetch_emails(["alice"])
+        assert ro.connection.called
+        assert result == {"alice": "alice@example.com"}

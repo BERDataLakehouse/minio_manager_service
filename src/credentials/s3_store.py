@@ -35,18 +35,43 @@ DELETE FROM user_credentials WHERE username = %(username)s;
 class S3CredentialStore:
     """Async PostgreSQL credential store with pgcrypto encryption.
 
-    Accepts a shared ``AsyncConnectionPool`` from ``DatabasePool``.
-    Table creation and pgcrypto verification are handled by Alembic
-    migrations and ``DatabasePool.create()`` respectively.
+    Accepts two shared pools: ``rw`` (primary) and ``ro`` (replica). Plain
+    cache lookups route to ``ro``. Mutations and in-lock re-checks
+    (``get_credentials_for_writer``) route to ``rw`` because replica lag would
+    cause a stale "missing" read inside a distributed lock to generate
+    duplicate credentials.
     """
 
-    def __init__(self, pool: AsyncConnectionPool, encryption_key: str) -> None:
-        self._pool = pool
+    def __init__(
+        self,
+        *,
+        rw: AsyncConnectionPool,
+        ro: AsyncConnectionPool,
+        encryption_key: str,
+    ) -> None:
+        self._rw = rw
+        self._ro = ro
         self._encryption_key = encryption_key
 
     async def get_credentials(self, username: str) -> tuple[str, str] | None:
-        """Return (access_key, secret_key) or None if not cached."""
-        async with self._pool.connection() as conn:
+        """Return (access_key, secret_key) or None if not cached. Reads from ro."""
+        async with self._ro.connection() as conn:
+            cur = await conn.execute(
+                _SELECT, {"username": username, "enc_key": self._encryption_key}
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return (row[0], row[1])
+
+    async def get_credentials_for_writer(
+        self, username: str
+    ) -> tuple[str, str] | None:
+        """Same as ``get_credentials`` but reads from rw. Required inside any
+        distributed-lock re-check — replica lag would otherwise let two pods
+        race to generate credentials and overwrite each other via the upsert.
+        """
+        async with self._rw.connection() as conn:
             cur = await conn.execute(
                 _SELECT, {"username": username, "enc_key": self._encryption_key}
             )
@@ -59,7 +84,7 @@ class S3CredentialStore:
         self, username: str, access_key: str, secret_key: str
     ) -> None:
         """Insert or update encrypted credentials."""
-        async with self._pool.connection() as conn:
+        async with self._rw.connection() as conn:
             await conn.execute(
                 _UPSERT,
                 {
@@ -74,15 +99,15 @@ class S3CredentialStore:
 
     async def delete_credentials(self, username: str) -> None:
         """Remove cached credentials for a user."""
-        async with self._pool.connection() as conn:
+        async with self._rw.connection() as conn:
             await conn.execute(_DELETE, {"username": username})
             await conn.commit()
         logger.info(f"Deleted cached credentials for user {username}")
 
     async def health_check(self) -> bool:
-        """Verify the database connection is alive."""
+        """Verify the primary database connection is alive."""
         try:
-            async with self._pool.connection() as conn:
+            async with self._rw.connection() as conn:
                 await conn.execute("SELECT 1")
             return True
         except Exception:
