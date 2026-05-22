@@ -103,9 +103,7 @@ class TenantMetadataStore:
     the new state on the next read in the same pod regardless of TTL.
     """
 
-    def __init__(
-        self, *, rw: AsyncConnectionPool, ro: AsyncConnectionPool
-    ) -> None:
+    def __init__(self, *, rw: AsyncConnectionPool, ro: AsyncConnectionPool) -> None:
         self._rw = rw
         self._ro = ro
 

@@ -13,8 +13,12 @@ router = APIRouter(tags=["health"])
 class DatabaseHealth(BaseModel):
     """Per-pool reachability for the dual-pool DatabasePool."""
 
-    primary: Annotated[bool, Field(description="True when the rw pool answered SELECT 1")]
-    replica: Annotated[bool, Field(description="True when the ro pool answered SELECT 1")]
+    primary: Annotated[
+        bool, Field(description="True when the rw pool answered SELECT 1")
+    ]
+    replica: Annotated[
+        bool, Field(description="True when the ro pool answered SELECT 1")
+    ]
     replica_enabled: Annotated[
         bool,
         Field(

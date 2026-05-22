@@ -64,9 +64,7 @@ class S3CredentialStore:
             return None
         return (row[0], row[1])
 
-    async def get_credentials_for_writer(
-        self, username: str
-    ) -> tuple[str, str] | None:
+    async def get_credentials_for_writer(self, username: str) -> tuple[str, str] | None:
         """Same as ``get_credentials`` but reads from rw. Required inside any
         distributed-lock re-check — replica lag would otherwise let two pods
         race to generate credentials and overwrite each other via the upsert.

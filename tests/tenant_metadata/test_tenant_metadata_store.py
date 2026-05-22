@@ -732,7 +732,12 @@ class TestPoolSelection:
     def store(self):
         self.rw = _tracked_pool(
             fetchone=(
-                "t1", "T1", "desc", None, None, "creator",
+                "t1",
+                "T1",
+                "desc",
+                None,
+                None,
+                "creator",
                 __import__("datetime").datetime.now(),
                 __import__("datetime").datetime.now(),
                 None,
@@ -741,7 +746,12 @@ class TestPoolSelection:
         )
         self.ro = _tracked_pool(
             fetchone=(
-                "t1", "T1", "desc", None, None, "creator",
+                "t1",
+                "T1",
+                "desc",
+                None,
+                None,
+                "creator",
                 __import__("datetime").datetime.now(),
                 __import__("datetime").datetime.now(),
                 None,

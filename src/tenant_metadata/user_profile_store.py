@@ -39,9 +39,7 @@ class UserProfileStore:
     name / email resolution for any request) go to ``ro``.
     """
 
-    def __init__(
-        self, *, rw: AsyncConnectionPool, ro: AsyncConnectionPool
-    ) -> None:
+    def __init__(self, *, rw: AsyncConnectionPool, ro: AsyncConnectionPool) -> None:
         self._rw = rw
         self._ro = ro
 

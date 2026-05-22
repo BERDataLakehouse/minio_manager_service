@@ -100,7 +100,11 @@ class TestCreate:
             patch("service.database.make_conninfo", return_value="conninfo"),
         ):
             db = await DatabasePool.create(
-                host="h", port=5432, dbname="mms", user="u", password="p",
+                host="h",
+                port=5432,
+                dbname="mms",
+                user="u",
+                password="p",
                 ro_dbname="mms_ro",
             )
 
@@ -121,8 +125,13 @@ class TestCreate:
             patch("service.database.make_conninfo", return_value="conninfo"),
         ):
             db = await DatabasePool.create(
-                host="h", port=5432, dbname="mms", user="u", password="p",
-                ro_dbname="mms_ro", read_from_replica=False,
+                host="h",
+                port=5432,
+                dbname="mms",
+                user="u",
+                password="p",
+                ro_dbname="mms_ro",
+                read_from_replica=False,
             )
 
         assert db.rw is primary
@@ -139,7 +148,11 @@ class TestCreate:
             patch("service.database.make_conninfo", return_value="conninfo"),
         ):
             db = await DatabasePool.create(
-                host="h", port=5432, dbname="mms", user="u", password="p",
+                host="h",
+                port=5432,
+                dbname="mms",
+                user="u",
+                password="p",
                 ro_dbname=None,
             )
 
@@ -161,7 +174,11 @@ class TestCreate:
             patch("service.database.make_conninfo", return_value="conninfo"),
         ):
             db = await DatabasePool.create(
-                host="h", port=5432, dbname="mms", user="u", password="p",
+                host="h",
+                port=5432,
+                dbname="mms",
+                user="u",
+                password="p",
                 ro_dbname="mms_ro",
             )
 
@@ -179,7 +196,11 @@ class TestCreate:
         ):
             with pytest.raises(RuntimeError, match="pgcrypto"):
                 await DatabasePool.create(
-                    host="h", port=5432, dbname="mms", user="u", password="p",
+                    host="h",
+                    port=5432,
+                    dbname="mms",
+                    user="u",
+                    password="p",
                 )
 
         primary.close.assert_called_once()
