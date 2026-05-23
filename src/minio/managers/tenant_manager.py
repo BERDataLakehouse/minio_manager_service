@@ -409,7 +409,10 @@ class TenantManager:
             organization=update.organization if update else None,
         )
         if result is None:
-            result = await self.metadata_store.get_metadata(tenant_name)
+            # ON CONFLICT DO NOTHING — another pod inserted first. Read from
+            # the primary (not the replica) because replica lag could leave
+            # the just-inserted row invisible and produce a spurious 500.
+            result = await self.metadata_store.get_metadata_for_writer(tenant_name)
         return self._meta_dict_to_response(result)
 
     async def delete_metadata(self, tenant_name: str) -> None:
@@ -425,9 +428,10 @@ class TenantManager:
         if meta is not None:
             return meta
         result = await self.metadata_store.create_metadata(tenant_name, created_by)
-        # ON CONFLICT DO NOTHING may return None if concurrent insert won
         if result is None:
-            return await self.metadata_store.get_metadata(tenant_name)
+            # ON CONFLICT DO NOTHING — another pod inserted first. Read from
+            # the primary; the replica may not yet have the row.
+            return await self.metadata_store.get_metadata_for_writer(tenant_name)
         return result
 
     # ── Steward management ───────────────────────────────────────────────

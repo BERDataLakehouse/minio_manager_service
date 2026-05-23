@@ -305,7 +305,7 @@ services:
     # mode pooling with prepared-statement support; auth_query lookups happen
     # in the postgres admin db via the pgbouncer_auth_schema.user_lookup()
     # function created by scripts/init-mms-db.sh.
-    image: edoburu/pgbouncer:1.22.1-p0
+    image: edoburu/pgbouncer:v1.25.1-p0
     ports:
       - "6442:6432"
     volumes:
