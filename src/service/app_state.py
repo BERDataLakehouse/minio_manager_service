@@ -79,36 +79,46 @@ async def build_app(app: FastAPI) -> None:
     db_user = not_falsy(os.getenv("MMS_DB_USER"), "MMS_DB_USER")
     db_password = not_falsy(os.getenv("MMS_DB_PASSWORD"), "MMS_DB_PASSWORD")
 
+    # Optional: read-only pool that targets the streaming replica through
+    # PgBouncer's mms_ro database. When unset, the ro pool aliases to the
+    # primary so the service degrades to single-pool behaviour.
+    db_ro_name = os.getenv("MMS_DB_RO_NAME") or None
+    read_from_replica = os.getenv("READ_FROM_REPLICA_ENABLED", "true").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
     # Run Alembic migrations (no-op when already at head).
     # Runs in a thread to avoid blocking the async event loop at startup.
     await asyncio.to_thread(run_migrations)
 
-    # Initialize shared database pool (must come before auth for profile capture)
-    logger.info("Initializing database pool...")
+    # Initialize shared database pools (must come before auth for profile capture)
+    logger.info("Initializing database pools...")
     db_pool = await DatabasePool.create(
         host=db_host,
         port=db_port,
         dbname=db_name,
         user=db_user,
         password=db_password,
+        ro_dbname=db_ro_name,
+        read_from_replica=read_from_replica,
     )
-    logger.info("Database pool initialized")
+    logger.info(
+        "Database pools initialized (replica_enabled=%s)", db_pool.replica_enabled
+    )
 
-    # Initialize stores backed by the shared pool
+    encryption_key = not_falsy(
+        os.getenv("MMS_DB_ENCRYPTION_KEY"), "MMS_DB_ENCRYPTION_KEY"
+    )
     s3_credential_store = S3CredentialStore(
-        pool=db_pool.pool,
-        encryption_key=not_falsy(
-            os.getenv("MMS_DB_ENCRYPTION_KEY"), "MMS_DB_ENCRYPTION_KEY"
-        ),
+        rw=db_pool.rw, ro=db_pool.ro, encryption_key=encryption_key
     )
     polaris_credential_store = PolarisCredentialStore(
-        pool=db_pool.pool,
-        encryption_key=not_falsy(
-            os.getenv("MMS_DB_ENCRYPTION_KEY"), "MMS_DB_ENCRYPTION_KEY"
-        ),
+        rw=db_pool.rw, ro=db_pool.ro, encryption_key=encryption_key
     )
-    user_profile_store = UserProfileStore(pool=db_pool.pool)
-    tenant_metadata_store = TenantMetadataStore(pool=db_pool.pool)
+    user_profile_store = UserProfileStore(rw=db_pool.rw, ro=db_pool.ro)
+    tenant_metadata_store = TenantMetadataStore(rw=db_pool.rw, ro=db_pool.ro)
     logger.info("Database stores initialized")
 
     # Initialize auth with KBase auth URL and admin roles from environment variables
@@ -213,7 +223,7 @@ async def build_app(app: FastAPI) -> None:
     logger.info("Trino catalog reconciler initialized")
 
     # Initialize profile client and tenant manager
-    profile_client = KBaseUserProfileClient(auth_url, pool=db_pool.pool)
+    profile_client = KBaseUserProfileClient(auth_url, ro=db_pool.ro)
     tenant_manager = TenantManager(
         metadata_store=tenant_metadata_store,
         group_manager=group_manager,

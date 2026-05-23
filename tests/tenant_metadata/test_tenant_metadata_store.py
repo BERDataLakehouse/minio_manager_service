@@ -37,7 +37,7 @@ def mock_pool():
 
 @pytest.fixture
 def store(mock_pool):
-    return TenantMetadataStore(pool=mock_pool)
+    return TenantMetadataStore(rw=mock_pool, ro=mock_pool)
 
 
 # ── Helper function tests ────────────────────────────────────────────────
@@ -699,3 +699,132 @@ class TestSingleFlightOnStore:
         assert all(r["tenant_name"] == "t1" for r in results)
         # 8 concurrent reads -> 1 SQL execute (single-flight).
         assert execute_calls == 1
+
+
+# ── Pool selection (rw vs ro routing) ─────────────────────────────────────
+
+
+def _tracked_pool(*, fetchone=None, fetchall=None, rowcount=0):
+    cur = AsyncMock()
+    cur.fetchone = AsyncMock(return_value=fetchone)
+    cur.fetchall = AsyncMock(return_value=fetchall or [])
+    cur.rowcount = rowcount
+    conn = AsyncMock()
+    conn.execute = AsyncMock(return_value=cur)
+    conn.commit = AsyncMock()
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=conn)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    pool = MagicMock()
+    pool.connection = MagicMock(return_value=cm)
+    return pool
+
+
+class TestPoolSelection:
+    """Lock down which pool each TenantMetadataStore method routes to.
+
+    Reads -> ro (cached SingleFlightTTL fronts these but the load function
+    uses ro). Writes -> rw. Conflict-recovery reads (get_metadata_for_writer)
+    -> rw to dodge replica lag.
+    """
+
+    @pytest.fixture
+    def store(self):
+        self.rw = _tracked_pool(
+            fetchone=(
+                "t1",
+                "T1",
+                "desc",
+                None,
+                None,
+                "creator",
+                __import__("datetime").datetime.now(),
+                __import__("datetime").datetime.now(),
+                None,
+            ),
+            rowcount=1,
+        )
+        self.ro = _tracked_pool(
+            fetchone=(
+                "t1",
+                "T1",
+                "desc",
+                None,
+                None,
+                "creator",
+                __import__("datetime").datetime.now(),
+                __import__("datetime").datetime.now(),
+                None,
+            ),
+        )
+        return TenantMetadataStore(rw=self.rw, ro=self.ro)
+
+    @pytest.mark.asyncio
+    async def test_get_metadata_reads_ro(self, store):
+        await store.get_metadata("t1")
+        assert self.ro.connection.called
+        assert not self.rw.connection.called
+
+    @pytest.mark.asyncio
+    async def test_get_metadata_for_writer_reads_rw(self, store):
+        await store.get_metadata_for_writer("t1")
+        assert self.rw.connection.called
+        assert not self.ro.connection.called
+
+    @pytest.mark.asyncio
+    async def test_list_metadata_reads_ro(self, store):
+        await store.list_metadata()
+        assert self.ro.connection.called
+        assert not self.rw.connection.called
+
+    @pytest.mark.asyncio
+    async def test_create_metadata_writes_rw(self, store):
+        await store.create_metadata("t1", "creator")
+        assert self.rw.connection.called
+        assert not self.ro.connection.called
+
+    @pytest.mark.asyncio
+    async def test_update_metadata_writes_rw(self, store):
+        await store.update_metadata("t1", "creator", display_name="new")
+        assert self.rw.connection.called
+        assert not self.ro.connection.called
+
+    @pytest.mark.asyncio
+    async def test_delete_metadata_writes_rw(self, store):
+        await store.delete_metadata("t1")
+        assert self.rw.connection.called
+        assert not self.ro.connection.called
+
+    @pytest.mark.asyncio
+    async def test_add_steward_writes_rw(self, store):
+        # add_steward needs the fetchone to be a 4-tuple (steward shape).
+        self.rw.connection.return_value.__aenter__.return_value.execute.return_value.fetchone = AsyncMock(
+            return_value=("t1", "u1", "admin", __import__("datetime").datetime.now())
+        )
+        await store.add_steward("t1", "u1", "admin")
+        assert self.rw.connection.called
+        assert not self.ro.connection.called
+
+    @pytest.mark.asyncio
+    async def test_remove_steward_writes_rw(self, store):
+        await store.remove_steward("t1", "u1")
+        assert self.rw.connection.called
+        assert not self.ro.connection.called
+
+    @pytest.mark.asyncio
+    async def test_get_stewards_reads_ro(self, store):
+        await store.get_stewards("t1")
+        assert self.ro.connection.called
+        assert not self.rw.connection.called
+
+    @pytest.mark.asyncio
+    async def test_is_steward_reads_ro(self, store):
+        await store.is_steward("t1", "u1")
+        assert self.ro.connection.called
+        assert not self.rw.connection.called
+
+    @pytest.mark.asyncio
+    async def test_get_steward_tenants_reads_ro(self, store):
+        await store.get_steward_tenants("u1")
+        assert self.ro.connection.called
+        assert not self.rw.connection.called

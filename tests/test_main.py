@@ -10,14 +10,64 @@ from main import create_application
 from service.kb_auth import AdminPermission, KBaseUser
 
 
+def _attach_db_pool(app, *, primary=True, replica=True, replica_enabled=True):
+    """Attach a mock DatabasePool to app.state for the health endpoint."""
+    db_pool = MagicMock()
+    db_pool.replica_enabled = replica_enabled
+    db_pool.health_check = AsyncMock(
+        return_value={"primary": primary, "replica": replica}
+    )
+    app.state._db_pool = db_pool
+    return db_pool
+
+
 # ── Health check ──────────────────────────────────────────────────────────
 
 
-def test_health_check(client):
-    """Test the health check endpoint."""
+def test_health_check_healthy(client):
+    """Both pools reachable + replica enabled → status='healthy', 200."""
+    _attach_db_pool(client.app)
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy"}
+    body = response.json()
+    assert body["status"] == "healthy"
+    assert body["database"] == {
+        "primary": True,
+        "replica": True,
+        "replica_enabled": True,
+    }
+
+
+def test_health_check_degraded_when_replica_down(client):
+    """Primary OK, replica down → status='degraded', 200 (so readiness passes)."""
+    _attach_db_pool(client.app, primary=True, replica=False, replica_enabled=True)
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
+
+
+def test_health_check_healthy_when_replica_aliased(client):
+    """Replica aliased to primary (replica_enabled=False) → 'healthy', not 'degraded'."""
+    _attach_db_pool(client.app, primary=True, replica=True, replica_enabled=False)
+    assert client.get("/health").json()["status"] == "healthy"
+
+
+def test_health_check_unhealthy_when_primary_down(client):
+    """Primary down → status='unhealthy', 503."""
+    _attach_db_pool(client.app, primary=False, replica=False, replica_enabled=True)
+    response = client.get("/health")
+    assert response.status_code == 503
+    assert response.json()["status"] == "unhealthy"
+
+
+def test_health_check_unhealthy_when_pool_uninitialized(client):
+    """No db_pool on app.state (startup race) → 503."""
+    # Don't attach _db_pool
+    if hasattr(client.app.state, "_db_pool"):
+        del client.app.state._db_pool
+    response = client.get("/health")
+    assert response.status_code == 503
+    assert response.json()["status"] == "unhealthy"
 
 
 # ── AuthMiddleware ────────────────────────────────────────────────────────
@@ -32,6 +82,10 @@ class TestAuthMiddleware:
         mock_app_state = MagicMock()
         mock_app_state.auth = mock_auth
         app.state._minio_manager_state = mock_app_state
+
+        # /health now reads app.state._db_pool — attach a healthy mock so
+        # these auth-middleware tests can hit the endpoint without 503.
+        _attach_db_pool(app)
 
         return app, mock_auth
 

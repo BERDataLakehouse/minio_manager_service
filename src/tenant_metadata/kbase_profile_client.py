@@ -24,10 +24,10 @@ SELECT username, email
 class KBaseUserProfileClient:
     """Fetches user profiles: display names from KBase Auth, emails from local store."""
 
-    def __init__(self, auth_url: str, pool: AsyncConnectionPool) -> None:
+    def __init__(self, auth_url: str, *, ro: AsyncConnectionPool) -> None:
         self._auth_url = auth_url.rstrip("/")
         self._users_url = f"{self._auth_url}/api/V2/users/"
-        self._pool = pool
+        self._ro = ro
         self._display_cache: LRUCache = LRUCache(maxsize=10_000, ttl=300)
 
     async def get_user_profiles(
@@ -84,8 +84,8 @@ class KBaseUserProfileClient:
             logger.exception("Failed to fetch display names from KBase Auth")
 
     async def _fetch_emails(self, usernames: list[str]) -> dict[str, str | None]:
-        """Fetch emails from local user_profiles table."""
-        async with self._pool.connection() as conn:
+        """Fetch emails from local user_profiles table (replica)."""
+        async with self._ro.connection() as conn:
             cur = await conn.execute(_SELECT_EMAILS, {"usernames": usernames})
             rows = await cur.fetchall()
         return {row[0]: row[1] for row in rows}
