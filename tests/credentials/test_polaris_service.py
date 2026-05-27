@@ -36,6 +36,7 @@ def mock_store():
     """Create a mock PolarisCredentialStore."""
     store = AsyncMock()
     store.get_credentials = AsyncMock(return_value=None)
+    store.get_credentials_for_writer = AsyncMock(return_value=None)
     store.store_credentials = AsyncMock()
     store.delete_credentials = AsyncMock()
     store.close = AsyncMock()
@@ -146,18 +147,22 @@ class TestPolarisCredentialServiceGetOrCreate:
     async def test_post_lock_cache_hit_returns_without_reset(
         self, service, mock_store, mock_polaris_user_manager
     ):
-        """Test a concurrent creator can populate the cache while we wait."""
+        """A concurrent creator populates the cache while we wait — the
+        in-lock re-check via ``get_credentials_for_writer`` sees the new row.
+        """
         cached = PolarisCredentialRecord(
             client_id="cached-id",
             client_secret="cached-secret",
             personal_catalog="user_testuser",
         )
-        mock_store.get_credentials.side_effect = [None, cached]
+        mock_store.get_credentials = AsyncMock(return_value=None)
+        mock_store.get_credentials_for_writer = AsyncMock(return_value=cached)
 
         result = await service.get_or_create("testuser")
 
         assert result == cached
-        assert mock_store.get_credentials.call_count == 2
+        mock_store.get_credentials.assert_called_once_with("testuser")
+        mock_store.get_credentials_for_writer.assert_called_once_with("testuser")
         mock_polaris_user_manager.create_user.assert_not_called()
         mock_polaris_user_manager.reset_credentials.assert_not_called()
         mock_store.store_credentials.assert_not_called()

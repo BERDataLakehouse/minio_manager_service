@@ -56,15 +56,40 @@ class PolarisCredentialRecord:
 
 
 class PolarisCredentialStore:
-    """Async PostgreSQL store for encrypted Polaris principal credentials."""
+    """Async PostgreSQL store for encrypted Polaris principal credentials.
 
-    def __init__(self, pool: AsyncConnectionPool, encryption_key: str) -> None:
-        self._pool = pool
+    Same dual-pool contract as ``S3CredentialStore``: plain reads from ``ro``,
+    mutations and lock-protected re-checks (``get_credentials_for_writer``)
+    from ``rw``.
+    """
+
+    def __init__(
+        self,
+        *,
+        rw: AsyncConnectionPool,
+        ro: AsyncConnectionPool,
+        encryption_key: str,
+    ) -> None:
+        self._rw = rw
+        self._ro = ro
         self._encryption_key = encryption_key
 
     async def get_credentials(self, username: str) -> PolarisCredentialRecord | None:
-        """Return cached credentials or None if no cache entry exists."""
-        async with self._pool.connection() as conn:
+        """Return cached credentials or None if no cache entry exists. Reads from ro."""
+        return await self._select(self._ro, username)
+
+    async def get_credentials_for_writer(
+        self, username: str
+    ) -> PolarisCredentialRecord | None:
+        """Same as ``get_credentials`` but reads from rw. Required inside any
+        distributed-lock re-check; see ``S3CredentialStore.get_credentials_for_writer``.
+        """
+        return await self._select(self._rw, username)
+
+    async def _select(
+        self, pool: AsyncConnectionPool, username: str
+    ) -> PolarisCredentialRecord | None:
+        async with pool.connection() as conn:
             cur = await conn.execute(
                 _SELECT, {"username": username, "enc_key": self._encryption_key}
             )
@@ -85,7 +110,7 @@ class PolarisCredentialStore:
         personal_catalog: str,
     ) -> None:
         """Insert or update encrypted Polaris credentials."""
-        async with self._pool.connection() as conn:
+        async with self._rw.connection() as conn:
             await conn.execute(
                 _UPSERT,
                 {
@@ -101,15 +126,15 @@ class PolarisCredentialStore:
 
     async def delete_credentials(self, username: str) -> None:
         """Remove cached Polaris credentials for a user."""
-        async with self._pool.connection() as conn:
+        async with self._rw.connection() as conn:
             await conn.execute(_DELETE, {"username": username})
             await conn.commit()
         logger.info("Deleted cached Polaris credentials for user %s", username)
 
     async def health_check(self) -> bool:
-        """Verify the database connection is alive."""
+        """Verify the primary database connection is alive."""
         try:
-            async with self._pool.connection() as conn:
+            async with self._rw.connection() as conn:
                 await conn.execute("SELECT 1")
             return True
         except Exception:

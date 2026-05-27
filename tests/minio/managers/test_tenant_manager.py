@@ -53,6 +53,7 @@ def mock_metadata_store():
     store.list_metadata = AsyncMock(return_value=[])
     store.get_steward_tenants = AsyncMock(return_value=[])
     store.get_metadata = AsyncMock(return_value=_meta_dict())
+    store.get_metadata_for_writer = AsyncMock(return_value=_meta_dict())
     store.create_metadata = AsyncMock(return_value=_meta_dict())
     store.update_metadata = AsyncMock(return_value=_meta_dict())
     store.delete_metadata = AsyncMock(return_value=True)
@@ -557,14 +558,17 @@ class TestCreateMetadata:
     async def test_create_idempotent_returns_existing(
         self, manager, mock_metadata_store
     ):
-        """When metadata already exists, create returns the existing record."""
+        """When metadata already exists, the conflict fallback reads via
+        ``get_metadata_for_writer`` (rw) — not the replica — to avoid lag
+        making the just-written row invisible.
+        """
         mock_metadata_store.create_metadata.return_value = None
         existing = _meta_dict("t1", created_by="original_creator")
-        mock_metadata_store.get_metadata.return_value = existing
+        mock_metadata_store.get_metadata_for_writer.return_value = existing
         result = await manager.create_metadata("t1", "admin")
         assert result.tenant_name == "t1"
         assert result.created_by == "original_creator"
-        mock_metadata_store.get_metadata.assert_called_once_with("t1")
+        mock_metadata_store.get_metadata_for_writer.assert_called_once_with("t1")
 
     @pytest.mark.asyncio
     async def test_create_with_update_body(self, manager, mock_metadata_store):
@@ -628,12 +632,16 @@ class TestEnsureMetadata:
 
     @pytest.mark.asyncio
     async def test_handles_concurrent_insert(self, manager, mock_metadata_store):
-        """If create returns None (concurrent insert won), re-fetch."""
-        mock_metadata_store.get_metadata.side_effect = [None, _meta_dict()]
+        """If create returns None (concurrent insert won), re-fetch from rw
+        (not the replica) so replica lag can't make the just-written row
+        invisible."""
+        mock_metadata_store.get_metadata.return_value = None
         mock_metadata_store.create_metadata.return_value = None
+        mock_metadata_store.get_metadata_for_writer.return_value = _meta_dict()
         result = await manager.ensure_metadata("t1", "system")
         assert result["tenant_name"] == "t1"
-        assert mock_metadata_store.get_metadata.call_count == 2
+        mock_metadata_store.get_metadata.assert_called_once_with("t1")
+        mock_metadata_store.get_metadata_for_writer.assert_called_once_with("t1")
 
 
 # ── get_stewards ─────────────────────────────────────────────────────────
