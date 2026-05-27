@@ -51,9 +51,16 @@ def mock_user_manager():
 
 @pytest.fixture
 def mock_credential_store():
-    """Create a mock S3CredentialStore."""
+    """Create a mock S3CredentialStore.
+
+    Both ``get_credentials`` (fast path) and ``get_credentials_for_writer``
+    (post-lock re-check) default to None. The service's lock path calls the
+    writer variant — tests asserting the post-lock cached path must set
+    ``get_credentials_for_writer.return_value`` rather than ``get_credentials``.
+    """
     store = AsyncMock()
     store.get_credentials = AsyncMock(return_value=None)
+    store.get_credentials_for_writer = AsyncMock(return_value=None)
     store.store_credentials = AsyncMock()
     store.delete_credentials = AsyncMock()
     return store
@@ -135,18 +142,15 @@ class TestGetOrCreate:
     async def test_double_check_prevents_duplicate_work(
         self, service, mock_user_manager, mock_credential_store
     ):
-        """Cache populated between fast-path miss and post-lock check → no MinIO call."""
-        call_count = 0
+        """Cache populated between fast-path miss and post-lock check → no MinIO call.
 
-        async def get_creds_side_effect(username):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return None
-            return ("testuser", "populated-by-another-request")
-
-        mock_credential_store.get_credentials = AsyncMock(
-            side_effect=get_creds_side_effect
+        The fast path reads from ``get_credentials`` (replica) and gets None;
+        another pod populates the cache; the post-lock re-check via
+        ``get_credentials_for_writer`` (primary) sees the new row.
+        """
+        mock_credential_store.get_credentials = AsyncMock(return_value=None)
+        mock_credential_store.get_credentials_for_writer = AsyncMock(
+            return_value=("testuser", "populated-by-another-request")
         )
 
         result = await service.get_or_create("testuser")

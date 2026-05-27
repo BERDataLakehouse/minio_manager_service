@@ -54,13 +54,19 @@ services:
       - REDIS_URL=redis://redis:6379
       - POLARIS_CATALOG_URI=http://polaris:8181/api/catalog
       - POLARIS_CREDENTIAL=root:s3cr3t
-      - MMS_DB_HOST=postgres
-      - MMS_DB_PORT=5432
-      - MMS_DB_NAME=mms
+      - MMS_DB_HOST=pgbouncer
+      - MMS_DB_PORT=6432
+      - MMS_DB_NAME=mms_rw
+      - MMS_DB_RO_NAME=mms_ro
       - MMS_DB_USER=mms
       - MMS_DB_PASSWORD=mmspassword
       - MMS_DB_ENCRYPTION_KEY=change-me-in-prod
       - MMS_IAM_PATH_PREFIX=/data_governance_service
+      # Alembic migrations bypass PgBouncer and go straight to the primary,
+      # since transaction-mode pooling can break session-scoped DDL state.
+      - MMS_MIGRATION_DB_HOST=postgres
+      - MMS_MIGRATION_DB_PORT=5432
+      - MMS_MIGRATION_DB_NAME=mms
       # Trino admin path — matches admin.shared-secret in
       # configs/trino/access-control.properties. The reconciler uses these
       # to issue CREATE/DROP CATALOG against Trino as platform_admin.
@@ -99,7 +105,7 @@ services:
         condition: service_healthy
       polaris:
         condition: service_healthy
-      postgres:
+      pgbouncer:
         condition: service_healthy
 
   minio-create-buckets:
@@ -235,7 +241,8 @@ services:
       retries: 5
 
   postgres:
-    image: postgres:15
+    # Aligned with the cluster primary (postgres:17.6 StatefulSet in dev/stage/prod).
+    image: postgres:17.6
     ports:
       - "5442:5432"
     environment:
@@ -246,9 +253,82 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-mms-db.sh:/docker-entrypoint-initdb.d/01-init-mms-db.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hive"]
+      test: ["CMD-SHELL", "pg_isready -U hive -d polaris"]
       interval: 5s
       timeout: 2s
+      retries: 15
+
+  postgres-replica-init:
+    # One-shot job that runs pg_basebackup against the primary to populate
+    # the replica's data dir on first start. Idempotent — exits immediately
+    # if the data dir already has a PG_VERSION file (i.e. already a valid
+    # postgres data directory). Streams via the mms_replica_slot created by
+    # init-mms-db.sh, so WAL is preserved across restarts.
+    image: postgres:17.6
+    user: postgres
+    environment:
+      - PGPASSWORD=replicator_pw
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        set -e
+        if [ -s /var/lib/postgresql/data/PG_VERSION ]; then
+          echo "Replica data dir already initialized (PG_VERSION present) — skipping pg_basebackup."
+          exit 0
+        fi
+        echo "Running pg_basebackup from primary into /var/lib/postgresql/data ..."
+        pg_basebackup -h postgres -p 5432 -U replicator -D /var/lib/postgresql/data -R -S mms_replica_slot -X stream -P
+        chmod 0700 /var/lib/postgresql/data
+        echo "pg_basebackup complete; standby.signal present."
+
+  postgres-replica:
+    # Streaming replica of `postgres`. Read-only by virtue of being a hot
+    # standby (PG rejects writes on standby with "cannot execute INSERT in a
+    # read-only transaction"). PgBouncer's mms_ro database routes here.
+    image: postgres:17.6
+    ports:
+      - "5443:5432"
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+    depends_on:
+      postgres-replica-init:
+        condition: service_completed_successfully
+    healthcheck:
+      # Must verify we're actually serving as a standby, not just that TCP is
+      # open. Uses `hive` because that's the primary's superuser (POSTGRES_USER
+      # on the postgres service), replicated to standby via pg_basebackup.
+      test: ["CMD-SHELL", "psql -U hive -d polaris -tAc 'SELECT pg_is_in_recovery()' | grep -q '^t$$'"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  pgbouncer:
+    # Connection pooler in front of postgres + postgres-replica. Transaction-
+    # mode pooling with prepared-statement support; auth_query lookups happen
+    # in the postgres admin db via the pgbouncer_auth_schema.user_lookup()
+    # function created by scripts/init-mms-db.sh.
+    image: edoburu/pgbouncer:v1.25.1-p0
+    ports:
+      - "6442:6432"
+    volumes:
+      - ./configs/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./configs/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-replica:
+        condition: service_healthy
+    healthcheck:
+      # Authenticate as the stats user (created by init-mms-db.sh) and ping the
+      # admin db. This exercises the auth_query path end-to-end, not just TCP.
+      test: ["CMD-SHELL", "PGPASSWORD=pgbouncer_stats_pw psql -h 127.0.0.1 -p 6432 -U pgbouncer_stats -d pgbouncer -c 'SHOW VERSION' >/dev/null"]
+      interval: 5s
+      timeout: 3s
       retries: 15
 
   polaris-bootstrap:
@@ -298,4 +378,5 @@ services:
 
 volumes:
   postgres_data:
+  postgres_replica_data:
   trino-svc-credential:  # trino-svc-bootstrap → MMS Polaris client_id/secret

@@ -47,9 +47,12 @@ class S3CredentialService:
             logger.info(f"Returning cached credentials for user {username}")
             return cached
 
-        # Slow path — lock, double-check, create
+        # Slow path — lock, double-check, create. The post-lock re-check MUST
+        # read from the primary (`get_credentials_for_writer`), not the replica:
+        # replica lag would let two pods race past this check, generate
+        # different credentials, and overwrite each other via the upsert.
         async with self._lock_manager.credential_lock(username):
-            cached = await self._credential_store.get_credentials(username)
+            cached = await self._credential_store.get_credentials_for_writer(username)
             if cached is not None:
                 logger.info(
                     f"Returning cached credentials for user {username} (post-lock)"

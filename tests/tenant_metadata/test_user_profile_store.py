@@ -28,7 +28,7 @@ def mock_pool():
 
 @pytest.fixture
 def store(mock_pool):
-    return UserProfileStore(pool=mock_pool)
+    return UserProfileStore(rw=mock_pool, ro=mock_pool)
 
 
 class TestUpsert:
@@ -100,3 +100,55 @@ class TestGetEmail:
 
         result = await store.get_email("unknown")
         assert result is None
+
+
+# ── Pool selection (rw vs ro routing) ─────────────────────────────────────
+
+
+def _tracked_pool(*, fetchone=None, fetchall=None):
+    cur = AsyncMock()
+    cur.fetchone = AsyncMock(return_value=fetchone)
+    cur.fetchall = AsyncMock(return_value=fetchall or [])
+    conn = AsyncMock()
+    conn.execute = AsyncMock(return_value=cur)
+    conn.commit = AsyncMock()
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=conn)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    pool = MagicMock()
+    pool.connection = MagicMock(return_value=cm)
+    return pool
+
+
+class TestPoolSelection:
+    """Lock down which pool each UserProfileStore method routes to."""
+
+    @pytest.fixture
+    def store(self):
+        self.rw = _tracked_pool()
+        self.ro = _tracked_pool()
+        return UserProfileStore(rw=self.rw, ro=self.ro)
+
+    @pytest.mark.asyncio
+    async def test_upsert_writes_rw(self, store):
+        await store.upsert("u", "User", "u@example.com")
+        assert self.rw.connection.called
+        assert not self.ro.connection.called
+
+    @pytest.mark.asyncio
+    async def test_get_profiles_reads_ro(self, store):
+        await store.get_profiles(["u1", "u2"])
+        assert self.ro.connection.called
+        assert not self.rw.connection.called
+
+    @pytest.mark.asyncio
+    async def test_get_profiles_empty_short_circuits(self, store):
+        await store.get_profiles([])
+        assert not self.rw.connection.called
+        assert not self.ro.connection.called
+
+    @pytest.mark.asyncio
+    async def test_get_email_reads_ro(self, store):
+        await store.get_email("u")
+        assert self.ro.connection.called
+        assert not self.rw.connection.called

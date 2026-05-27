@@ -33,10 +33,15 @@ SELECT display_name, email
 
 
 class UserProfileStore:
-    """Async PostgreSQL store for cached user profiles."""
+    """Async PostgreSQL store for cached user profiles.
 
-    def __init__(self, pool: AsyncConnectionPool) -> None:
-        self._pool = pool
+    Writes (profile capture on first auth) go to ``rw``; lookups (display
+    name / email resolution for any request) go to ``ro``.
+    """
+
+    def __init__(self, *, rw: AsyncConnectionPool, ro: AsyncConnectionPool) -> None:
+        self._rw = rw
+        self._ro = ro
 
     async def upsert(
         self,
@@ -45,7 +50,7 @@ class UserProfileStore:
         email: str | None,
     ) -> None:
         """Insert or update a user profile."""
-        async with self._pool.connection() as conn:
+        async with self._rw.connection() as conn:
             await conn.execute(
                 _UPSERT,
                 {
@@ -62,14 +67,14 @@ class UserProfileStore:
         """Batch-fetch profiles. Returns {username: (display_name, email)}."""
         if not usernames:
             return {}
-        async with self._pool.connection() as conn:
+        async with self._ro.connection() as conn:
             cur = await conn.execute(_SELECT_BATCH, {"usernames": usernames})
             rows = await cur.fetchall()
         return {row[0]: (row[1], row[2]) for row in rows}
 
     async def get_email(self, username: str) -> str | None:
         """Get a single user's email, or None if not captured."""
-        async with self._pool.connection() as conn:
+        async with self._ro.connection() as conn:
             cur = await conn.execute(_SELECT_ONE, {"username": username})
             row = await cur.fetchone()
         if row is None:

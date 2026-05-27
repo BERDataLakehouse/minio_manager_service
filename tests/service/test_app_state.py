@@ -157,9 +157,12 @@ class TestBuildApp:
             "MMS_DB_ENCRYPTION_KEY": "test-key",
         }
 
-        mock_pool = MagicMock()
+        mock_rw = MagicMock()
+        mock_ro = MagicMock()
         mock_db_pool = MagicMock()
-        mock_db_pool.pool = mock_pool
+        mock_db_pool.rw = mock_rw
+        mock_db_pool.ro = mock_ro
+        mock_db_pool.replica_enabled = True
 
         with (
             patch.dict(os.environ, env, clear=False),
