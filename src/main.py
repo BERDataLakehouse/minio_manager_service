@@ -23,7 +23,7 @@ from routes import (
 from service import app_state
 from service.config import configure_logging, get_settings
 from service.exception_handlers import universal_error_handler
-from service.exceptions import InvalidAuthHeaderError
+from service.exceptions import InvalidAuthHeaderError, S3Error
 from service.models import ErrorResponse
 
 # Configure logging
@@ -38,25 +38,35 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """Middleware to authenticate users and set them in the request state."""
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        request_user = None
-        auth_header = request.headers.get("Authorization")
+        try:
+            request_user = None
+            auth_header = request.headers.get("Authorization")
 
-        if auth_header:
-            scheme, credentials = get_authorization_scheme_param(auth_header)
-            if not (scheme and credentials):
-                raise InvalidAuthHeaderError(
-                    f"Authorization header requires {_SCHEME} scheme followed by token"
-                )
-            if scheme.lower() != _SCHEME.lower():
-                # don't put the received scheme in the error message, might be a token
-                raise InvalidAuthHeaderError(
-                    f"Authorization header requires {_SCHEME} scheme"
-                )
+            if auth_header:
+                scheme, credentials = get_authorization_scheme_param(auth_header)
+                if not (scheme and credentials):
+                    raise InvalidAuthHeaderError(
+                        f"Authorization header requires {_SCHEME} scheme followed by token"
+                    )
+                if scheme.lower() != _SCHEME.lower():
+                    # don't put the received scheme in the error message, might be a token
+                    raise InvalidAuthHeaderError(
+                        f"Authorization header requires {_SCHEME} scheme"
+                    )
 
-            app_state_obj = app_state.get_app_state(request)
-            request_user = await app_state_obj.auth.get_user(credentials)
+                app_state_obj = app_state.get_app_state(request)
+                request_user = await app_state_obj.auth.get_user(credentials)
 
-        app_state.set_request_user(request, request_user)
+            app_state.set_request_user(request, request_user)
+        except S3Error as exc:
+            # Exceptions raised inside BaseHTTPMiddleware.dispatch bypass the
+            # ExceptionMiddleware; ServerErrorMiddleware sends the handler's
+            # response but then re-raises, so uvicorn logs a spurious
+            # "Exception in ASGI application" traceback even though the client
+            # got the right status. Convert known auth/service errors to a
+            # response here. Unexpected errors still propagate and are logged
+            # as genuine 500s.
+            return await universal_error_handler(request, exc)
 
         return await call_next(request)
 
