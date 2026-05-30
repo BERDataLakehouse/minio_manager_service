@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from main import create_application
+from service.errors import ErrorType
+from service.exceptions import InvalidTokenError
 from service.kb_auth import AdminPermission, KBaseUser
 
 
@@ -128,6 +130,25 @@ class TestAuthMiddleware:
         # Empty header — no scheme/creds, so user is None (no error raised)
         # get_authorization_scheme_param returns ("", "") for empty string
         assert response.status_code == 200
+
+    def test_invalid_token_returns_401_without_reraise(self):
+        """An auth error in dispatch is converted to a response, not re-raised.
+
+        raise_server_exceptions defaults to True here: under the old code the
+        exception propagated out of ServerErrorMiddleware and this would raise
+        instead of returning 401.
+        """
+        app, mock_auth = self._make_app()
+        mock_auth.get_user.side_effect = InvalidTokenError(
+            "KBase auth server reported token is invalid."
+        )
+        client = TestClient(app)  # raise_server_exceptions=True (default)
+
+        response = client.get(
+            "/health", headers={"Authorization": "Bearer expired-token"}
+        )
+        assert response.status_code == 401
+        assert response.json()["error_type"] == ErrorType.INVALID_TOKEN.error_type
 
 
 # ── create_application ────────────────────────────────────────────────────
