@@ -16,7 +16,7 @@ dependencies = [
     "aiobotocore==3.3.0",
     "redis==7.4.0",
     "ruff==0.15.7",
-    "psycopg[binary]==3.3.3",
+    "psycopg[binary]==3.3.4",
     "psycopg-pool==3.3.0",
     "alembic==1.18.4",
     # Trino dbapi for the per-tenant catalog reconciler. Only used for short
