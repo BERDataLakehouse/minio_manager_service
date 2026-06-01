@@ -17,7 +17,7 @@ dependencies = [
     "redis==7.4.0",
     "ruff==0.15.7",
     "psycopg[binary]==3.3.3",
-    "psycopg-pool==3.3.0",
+    "psycopg-pool==3.3.1",
     "alembic==1.18.4",
     # Trino dbapi for the per-tenant catalog reconciler. Only used for short
     # CREATE/DROP CATALOG statements; the sync dbapi is wrapped with
