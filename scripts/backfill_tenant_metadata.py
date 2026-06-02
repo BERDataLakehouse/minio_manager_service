@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""Backfill tenant_metadata rows for existing MinIO groups.
+"""Backfill tenant_metadata rows for existing IAM groups.
 
 Usage (local, with env vars):
     MMS_DB_HOST=localhost MMS_DB_PORT=5432 MMS_DB_NAME=mms \
     MMS_DB_USER=mms MMS_DB_PASSWORD=secret \
-    MINIO_ENDPOINT=localhost:9000 MINIO_ROOT_USER=admin MINIO_ROOT_PASSWORD=secret \
+    MINIO_ENDPOINT=http://localhost:9000 MINIO_ROOT_USER=admin \
+    MINIO_ROOT_PASSWORD=secret \
+    MMS_IAM_PATH_PREFIX=/data_governance_service \
     python scripts/backfill_tenant_metadata.py [--dry-run]
 
-Usage (inside minio-manager container):
+Usage (inside the container):
     The scripts/ directory is included in the Docker image at /app/scripts/.
     All required env vars (MINIO_ENDPOINT, MINIO_ROOT_USER, MINIO_ROOT_PASSWORD,
-    MMS_DB_*) are already set in the container.
+    MMS_DB_*, MMS_IAM_PATH_PREFIX) are set in the container. Verify that
+    MMS_IAM_PATH_PREFIX matches the value used by your MMS installation before
+    running.
 
     # Exec into the container:
     docker exec -it <container> bash
@@ -19,7 +23,16 @@ Usage (inside minio-manager container):
     uv run python scripts/backfill_tenant_metadata.py --dry-run   # preview changes
     uv run python scripts/backfill_tenant_metadata.py              # run for real
 
-For each MinIO group that looks like a tenant (not in SYSTEM_GROUPS, not
+Environment variables:
+    MMS_DB_HOST, MMS_DB_PORT, MMS_DB_NAME, MMS_DB_USER, MMS_DB_PASSWORD
+        PostgreSQL connection details.
+    MINIO_ENDPOINT       IAM-compatible S3 endpoint URL (e.g. http://localhost:9000).
+    MINIO_ROOT_USER      Access key for the IAM endpoint.
+    MINIO_ROOT_PASSWORD  Secret key for the IAM endpoint.
+    MMS_IAM_PATH_PREFIX  IAM path prefix used to filter managed entities
+                         (default: /data_governance_service).
+
+For each IAM group that looks like a tenant (not in SYSTEM_GROUPS, not
 ending in 'ro'), inserts a tenant_metadata row with ON CONFLICT DO NOTHING.
 Safe to run multiple times.
 """
@@ -35,9 +48,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import AsyncConnectionPool
 
-from s3.core.s3_client import S3Client
-from minio.managers.group_manager import GroupManager
-from minio.managers.tenant_manager import SYSTEM_GROUPS
+from s3.core.s3_iam_client import S3IAMClient
+from s3.managers.tenant_manager import SYSTEM_GROUPS
 from s3.models.s3_config import S3Config
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -60,17 +72,21 @@ async def main(dry_run: bool) -> None:
         access_key=os.environ["MINIO_ROOT_USER"],
         secret_key=os.environ["MINIO_ROOT_PASSWORD"],
     )
-    minio_client = await S3Client.create(config)
-    group_manager = GroupManager(minio_client, config)
+    iam_client = await S3IAMClient.create(
+        endpoint_url=config.endpoint,
+        access_key=config.access_key,
+        secret_key=config.secret_key,
+        path_prefix=os.environ.get("MMS_IAM_PATH_PREFIX", "/data_governance_service"),
+    )
 
-    all_groups = await group_manager.list_resources()
+    all_groups = await iam_client.list_groups()
     tenants = [g for g in all_groups if _is_tenant_group(g)]
     logger.info("Found %d tenant groups to backfill", len(tenants))
 
     if dry_run:
         for t in sorted(tenants):
             logger.info("  [dry-run] would insert: %s", t)
-        await minio_client.close_session()
+        await iam_client.close()
         return
 
     conninfo = make_conninfo(
@@ -101,7 +117,7 @@ async def main(dry_run: bool) -> None:
     )
 
     await pool.close()
-    await minio_client.close_session()
+    await iam_client.close()
 
 
 if __name__ == "__main__":

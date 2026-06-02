@@ -18,6 +18,28 @@ docker compose up -d
 
 ## Scripts
 
+### `mms_routes_integration.py`
+
+> **Warning: this script deletes and recreates all MMS IAM data for the two token
+> users. Do not run it with tokens belonging to accounts that have real data in the
+> system.**
+
+End-to-end HTTP smoke-test for all MMS API routes using `requests`. Exercises the full
+service stack (Ceph, Redis, Postgres) via the running `minio-manager` container. Covers
+health, credentials, workspaces, management (users and groups), tenants, sharing, and
+policy regeneration.
+
+Requires two KBase tokens: one for a regular `BERDL_USER` and one for an MMS admin
+(`CDM_JUPYTERHUB_ADMIN` role). Usernames are resolved from the KBase auth API at startup;
+tokens are never logged or printed.
+
+```bash
+INTEG_TEST_KBASE_TOKEN_STANDARD=<token> \
+INTEG_TEST_KBASE_TOKEN_ADMIN=<token> \
+PYTHONPATH=src uv run python test_scripts/mms_routes_integration.py
+```
+
+Optional env var: `KBASE_AUTH_HOST` (default: `https://ci.kbase.us`).
 
 ### `s3_iam_integration.py`
 

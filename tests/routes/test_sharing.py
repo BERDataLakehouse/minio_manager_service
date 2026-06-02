@@ -21,7 +21,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from minio.managers.sharing_manager import (
+from s3.managers.sharing_manager import (
     PathAccessInfo,
     SharingResult,
     UnsharingResult,
