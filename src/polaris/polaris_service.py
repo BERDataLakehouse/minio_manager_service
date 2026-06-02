@@ -9,7 +9,7 @@ a consistent exception surface.
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Dict, List
 from urllib.parse import quote
 
@@ -232,6 +232,47 @@ class PolarisService:
             **kwargs,
         )
 
+    async def _get_or_create(
+        self,
+        get: Callable[[], Awaitable[Dict[str, Any]]],
+        endpoint: str,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Idempotently create a Polaris entity, GET-first to avoid INSERT churn.
+
+        Polaris implements entity creation as a naked INSERT and translates the
+        resulting unique-constraint violation into an HTTP 409. So POSTing a
+        create for an entity that already exists makes Polaris's persistence
+        layer attempt a duplicate INSERT — logging a ``duplicate key value``
+        ERROR and burning a rollback on the postgres primary — just to return
+        the 409 the caller discards. The credential path re-runs the full
+        per-tenant RBAC bootstrap on every request, so in steady state that is
+        thousands of needless errors a day (see
+        ``docs/polaris-duplicate-key-fix-plan.md``).
+
+        Checking existence with a GET first means we only POST when the entity
+        is genuinely absent. The 409 branch is kept as a fallback for the
+        create-create race between replicas.
+
+        Args:
+            get: zero-arg callable returning the GET coroutine (a callable, not
+                a coroutine, so it can be awaited again on the race fallback).
+            endpoint: management-API path to POST the create to.
+            payload: JSON body for the create POST.
+        """
+        try:
+            return await get()
+        except PolarisOperationError as e:
+            if e.status != 404:
+                raise
+
+        try:
+            return await self._request("POST", endpoint, json=payload)
+        except PolarisOperationError as e:
+            if e.status == 409:  # lost a create race — fetch what now exists
+                return await get()
+            raise
+
     async def create_catalog(
         self,
         name: str,
@@ -239,6 +280,8 @@ class PolarisService:
         s3_endpoint: str | None = None,
     ) -> Dict[str, Any]:
         """Create a Polaris catalog with S3/MinIO storage.
+
+        Idempotent and GET-first (see :meth:`_get_or_create`).
 
         Args:
             name: Catalog name (e.g., "user_tgu2", "tenant_globalusers")
@@ -257,12 +300,9 @@ class PolarisService:
                 ),
             }
         }
-        try:
-            return await self._request("POST", "/catalogs", json=payload)
-        except PolarisOperationError as e:
-            if e.status == 409:  # Conflict - already exists
-                return await self.get_catalog(name)
-            raise e
+        return await self._get_or_create(
+            lambda: self.get_catalog(name), "/catalogs", payload
+        )
 
     async def get_catalog(self, name: str) -> Dict[str, Any]:
         """Get a specific catalog."""
@@ -305,14 +345,17 @@ class PolarisService:
         return resp.get("catalogs", [])
 
     async def create_principal(self, name: str) -> Dict[str, Any]:
-        """Create a Polaris principal and its credentials."""
+        """Create a Polaris principal. Idempotent and GET-first.
+
+        When the principal already exists this returns the GET response (no
+        secret), matching the prior 409 behavior. Credential material is issued
+        separately via :meth:`reset_principal_credentials`, so callers never
+        rely on this method returning the one-time client secret.
+        """
         payload = {"principal": {"name": name, "type": "USER", "properties": {}}}
-        try:
-            return await self._request("POST", "/principals", json=payload)
-        except PolarisOperationError as e:
-            if e.status == 409:
-                return await self.get_principal(name)
-            raise e
+        return await self._get_or_create(
+            lambda: self.get_principal(name), "/principals", payload
+        )
 
     async def get_principal(self, name: str) -> Dict[str, Any]:
         """Get a specific principal."""
@@ -345,16 +388,13 @@ class PolarisService:
         return await self._request("POST", f"/principals/{name}/reset", json={})
 
     async def create_catalog_role(self, catalog: str, role_name: str) -> Dict[str, Any]:
-        """Create a role within a catalog."""
+        """Create a role within a catalog. Idempotent and GET-first."""
         payload = {"catalogRole": {"name": role_name, "properties": {}}}
-        try:
-            return await self._request(
-                "POST", f"/catalogs/{catalog}/catalog-roles", json=payload
-            )
-        except PolarisOperationError as e:
-            if e.status == 409:
-                return await self.get_catalog_role(catalog, role_name)
-            raise e
+        return await self._get_or_create(
+            lambda: self.get_catalog_role(catalog, role_name),
+            f"/catalogs/{catalog}/catalog-roles",
+            payload,
+        )
 
     async def get_catalog_role(self, catalog: str, role_name: str) -> Dict[str, Any]:
         """Get a specific role within a catalog."""
@@ -427,14 +467,11 @@ class PolarisService:
         )
 
     async def create_principal_role(self, role_name: str) -> Dict[str, Any]:
-        """Create a principal role."""
+        """Create a principal role. Idempotent and GET-first."""
         payload = {"principalRole": {"name": role_name, "properties": {}}}
-        try:
-            return await self._request("POST", "/principal-roles", json=payload)
-        except PolarisOperationError as e:
-            if e.status == 409:
-                return await self._request("GET", f"/principal-roles/{role_name}")
-            raise e
+        return await self._get_or_create(
+            lambda: self.get_principal_role(role_name), "/principal-roles", payload
+        )
 
     async def get_catalog_roles_for_principal_role(
         self, principal_role: str, catalog: str

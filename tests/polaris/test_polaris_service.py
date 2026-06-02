@@ -471,14 +471,19 @@ class TestCreateCatalog:
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.return_value = {"catalog": {"name": "user_tgu2"}}
+            # GET-first existence check misses (404), so we fall through to POST.
+            mock_req.side_effect = [
+                PolarisOperationError("Not Found", status=404),
+                {"catalog": {"name": "user_tgu2"}},
+            ]
 
             result = await polaris_service.create_catalog(
                 name="user_tgu2",
                 storage_location="s3://cdm-lake/users-sql-warehouse/tgu2/iceberg/",
             )
 
-            mock_req.assert_called_once()
+            assert mock_req.call_count == 2  # GET (miss) then POST (create)
+            # call_args is the most recent call — the create POST.
             call_payload = mock_req.call_args[1]["json"]
             catalog = call_payload["catalog"]
             assert catalog["name"] == "user_tgu2"
@@ -505,7 +510,10 @@ class TestCreateCatalog:
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.return_value = {}
+            mock_req.side_effect = [
+                PolarisOperationError("Not Found", status=404),
+                {},
+            ]
 
             await polaris_service.create_catalog(
                 name="test",
@@ -524,7 +532,10 @@ class TestCreateCatalog:
         svc = PolarisService("http://polaris:8181", "root:secret")
 
         with patch.object(svc, "_request", new_callable=AsyncMock) as mock_req:
-            mock_req.return_value = {}
+            mock_req.side_effect = [
+                PolarisOperationError("Not Found", status=404),
+                {},
+            ]
 
             await svc.create_catalog(name="test", storage_location="s3://bucket/path/")
 
@@ -545,7 +556,10 @@ class TestCreateCatalog:
         )
 
         with patch.object(svc, "_request", new_callable=AsyncMock) as mock_req:
-            mock_req.return_value = {}
+            mock_req.side_effect = [
+                PolarisOperationError("Not Found", status=404),
+                {},
+            ]
 
             await svc.create_catalog(name="test", storage_location="s3://bucket/path/")
 
@@ -555,32 +569,51 @@ class TestCreateCatalog:
             assert storage_config["region"] == "eu-west-1"
 
     @pytest.mark.asyncio
-    async def test_create_catalog_conflict_returns_existing(self, polaris_service):
-        """Test 409 conflict falls back to get_catalog."""
-        conflict_error = PolarisOperationError("Conflict", status=409)
-
+    async def test_create_catalog_already_exists_skips_post(self, polaris_service):
+        """Existing catalog is returned via GET-first; no create POST is sent."""
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.side_effect = [conflict_error, {"name": "existing_catalog"}]
+            mock_req.return_value = {"name": "existing_catalog"}
 
-            # First call raises 409, second call (get_catalog) returns existing
             result = await polaris_service.create_catalog(
                 "existing_catalog", "s3://bucket/path/"
             )
 
             assert result == {"name": "existing_catalog"}
-            assert mock_req.call_count == 2
+            # Only the GET existence check runs — no failed-INSERT POST.
+            assert mock_req.call_count == 1
+            assert mock_req.call_args[0][0] == "GET"
 
     @pytest.mark.asyncio
-    async def test_create_catalog_non_conflict_error_raises(self, polaris_service):
-        """Test non-409 errors are re-raised."""
-        server_error = PolarisOperationError("Server Error", status=500)
-
+    async def test_create_catalog_create_race_falls_back_to_get(self, polaris_service):
+        """GET miss → POST loses a create race (409) → GET returns the winner's row."""
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.side_effect = server_error
+            mock_req.side_effect = [
+                PolarisOperationError("Not Found", status=404),
+                PolarisOperationError("Conflict", status=409),
+                {"name": "existing_catalog"},
+            ]
+
+            result = await polaris_service.create_catalog(
+                "existing_catalog", "s3://bucket/path/"
+            )
+
+            assert result == {"name": "existing_catalog"}
+            assert mock_req.call_count == 3  # GET → POST(409) → GET
+
+    @pytest.mark.asyncio
+    async def test_create_catalog_non_conflict_error_raises(self, polaris_service):
+        """A non-409 error from the create POST is re-raised."""
+        with patch.object(
+            polaris_service, "_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.side_effect = [
+                PolarisOperationError("Not Found", status=404),
+                PolarisOperationError("Server Error", status=500),
+            ]
 
             with pytest.raises(PolarisOperationError) as exc_info:
                 await polaris_service.create_catalog("test", "s3://bucket/path/")
@@ -599,31 +632,36 @@ class TestCreatePrincipal:
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.return_value = {"principal": {"name": "testuser"}}
+            mock_req.side_effect = [
+                PolarisOperationError("Not Found", status=404),
+                {"principal": {"name": "testuser"}},
+            ]
 
             result = await polaris_service.create_principal("testuser")
 
-            mock_req.assert_called_once_with(
+            # Most recent call is the create POST (GET miss came first).
+            mock_req.assert_called_with(
                 "POST",
                 "/principals",
                 json={
                     "principal": {"name": "testuser", "type": "USER", "properties": {}}
                 },
             )
+            assert mock_req.call_count == 2
             assert result == {"principal": {"name": "testuser"}}
 
     @pytest.mark.asyncio
-    async def test_create_principal_conflict_returns_existing(self, polaris_service):
-        """Test 409 conflict falls back to get_principal."""
-        conflict = PolarisOperationError("Conflict", status=409)
-
+    async def test_create_principal_already_exists_skips_post(self, polaris_service):
+        """Existing principal is returned via GET-first; no create POST is sent."""
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.side_effect = [conflict, {"principal": {"name": "existing"}}]
+            mock_req.return_value = {"principal": {"name": "existing"}}
 
             result = await polaris_service.create_principal("existing")
             assert result == {"principal": {"name": "existing"}}
+            assert mock_req.call_count == 1
+            assert mock_req.call_args[0][0] == "GET"
 
     @pytest.mark.asyncio
     async def test_get_principal(self, polaris_service):
@@ -680,35 +718,34 @@ class TestCatalogRoles:
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.return_value = {}
+            mock_req.side_effect = [
+                PolarisOperationError("Not Found", status=404),
+                {},
+            ]
 
             await polaris_service.create_catalog_role("user_tgu2", "catalog_admin")
 
-            mock_req.assert_called_once_with(
+            mock_req.assert_called_with(
                 "POST",
                 "/catalogs/user_tgu2/catalog-roles",
                 json={"catalogRole": {"name": "catalog_admin", "properties": {}}},
             )
+            assert mock_req.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_create_catalog_role_conflict(self, polaris_service):
-        """Test 409 conflict falls back to GET existing role via get_catalog_role."""
-        conflict = PolarisOperationError("Conflict", status=409)
-
+    async def test_create_catalog_role_already_exists_skips_post(self, polaris_service):
+        """Existing catalog role is returned via GET-first; no create POST is sent."""
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.side_effect = [
-                conflict,
-                {"catalogRole": {"name": "catalog_admin"}},
-            ]
+            mock_req.return_value = {"catalogRole": {"name": "catalog_admin"}}
 
             result = await polaris_service.create_catalog_role(
                 "user_tgu2", "catalog_admin"
             )
             assert result == {"catalogRole": {"name": "catalog_admin"}}
-            # Second call hits the get_catalog_role helper path.
-            mock_req.assert_any_call(
+            # Only the GET existence check runs.
+            mock_req.assert_called_once_with(
                 "GET", "/catalogs/user_tgu2/catalog-roles/catalog_admin"
             )
 
@@ -1004,31 +1041,33 @@ class TestPrincipalRoles:
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.return_value = {}
+            mock_req.side_effect = [
+                PolarisOperationError("Not Found", status=404),
+                {},
+            ]
 
             await polaris_service.create_principal_role("tgu2_role")
 
-            mock_req.assert_called_once_with(
+            mock_req.assert_called_with(
                 "POST",
                 "/principal-roles",
                 json={"principalRole": {"name": "tgu2_role", "properties": {}}},
             )
+            assert mock_req.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_create_principal_role_conflict(self, polaris_service):
-        """Test 409 conflict falls back to GET existing role."""
-        conflict = PolarisOperationError("Conflict", status=409)
-
+    async def test_create_principal_role_already_exists_skips_post(
+        self, polaris_service
+    ):
+        """Existing principal role is returned via GET-first; no create POST is sent."""
         with patch.object(
             polaris_service, "_request", new_callable=AsyncMock
         ) as mock_req:
-            mock_req.side_effect = [
-                conflict,
-                {"principalRole": {"name": "tgu2_role"}},
-            ]
+            mock_req.return_value = {"principalRole": {"name": "tgu2_role"}}
 
             result = await polaris_service.create_principal_role("tgu2_role")
             assert result == {"principalRole": {"name": "tgu2_role"}}
+            mock_req.assert_called_once_with("GET", "/principal-roles/tgu2_role")
 
     @pytest.mark.asyncio
     async def test_grant_catalog_role_to_principal_role(self, polaris_service):
