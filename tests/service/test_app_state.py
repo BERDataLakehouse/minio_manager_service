@@ -173,6 +173,9 @@ class TestBuildApp:
             patch(
                 "service.app_state.S3Client.create", new_callable=AsyncMock
             ) as mock_mc,
+            patch(
+                "service.app_state.S3IAMClient.create", new_callable=AsyncMock
+            ) as mock_iam,
             patch("service.app_state.DistributedLockManager") as mock_lock_cls,
             patch("service.app_state.PolarisService") as mock_polaris_cls,
             patch(
@@ -181,6 +184,7 @@ class TestBuildApp:
         ):
             mock_auth.return_value = MagicMock()
             mock_mc.return_value = MagicMock()
+            mock_iam.return_value = MagicMock()
             mock_lock = MagicMock()
             mock_lock.health_check = AsyncMock(return_value=True)
             mock_lock_cls.return_value = mock_lock
@@ -243,12 +247,16 @@ class TestBuildApp:
             patch(
                 "service.app_state.S3Client.create", new_callable=AsyncMock
             ) as mock_mc,
+            patch(
+                "service.app_state.S3IAMClient.create", new_callable=AsyncMock
+            ) as mock_iam,
             patch("service.app_state.DistributedLockManager") as mock_lock_cls,
             patch("service.app_state.PolarisService"),
         ):
             mock_db_create.return_value = mock_db_pool
             mock_auth.return_value = MagicMock()
             mock_mc.return_value = MagicMock()
+            mock_iam.return_value = MagicMock()
             mock_lock = MagicMock()
             mock_lock.health_check = AsyncMock(return_value=False)
             mock_lock_cls.return_value = mock_lock
@@ -271,6 +279,8 @@ class TestDestroyAppState:
         mock_lock.close = AsyncMock()
         mock_s3_client = MagicMock()
         mock_s3_client.close_session = AsyncMock()
+        mock_iam_client = MagicMock()
+        mock_iam_client.close = AsyncMock()
         mock_polaris = MagicMock()
         mock_polaris.close = AsyncMock()
         mock_db_pool = MagicMock()
@@ -278,6 +288,7 @@ class TestDestroyAppState:
 
         app.state._lock_manager = mock_lock
         app.state._s3_client = mock_s3_client
+        app.state._iam_client = mock_iam_client
         app.state._db_pool = mock_db_pool
         app.state._polaris_service = mock_polaris
         app.state._minio_manager_state = AppState(
@@ -299,6 +310,7 @@ class TestDestroyAppState:
         await destroy_app_state(app)
 
         mock_lock.close.assert_called_once()
+        mock_iam_client.close.assert_called_once()
         mock_s3_client.close_session.assert_called_once()
         mock_polaris.close.assert_called_once()
         mock_db_pool.close.assert_called_once()
@@ -318,6 +330,8 @@ class TestDestroyAppState:
         mock_lock.close = AsyncMock(side_effect=Exception("Redis error"))
         mock_s3_client = MagicMock()
         mock_s3_client.close_session = AsyncMock(side_effect=Exception("S3 error"))
+        mock_iam_client = MagicMock()
+        mock_iam_client.close = AsyncMock(side_effect=Exception("IAM error"))
         mock_polaris = MagicMock()
         mock_polaris.close = AsyncMock(side_effect=Exception("Polaris error"))
         mock_db_pool = MagicMock()
@@ -325,6 +339,7 @@ class TestDestroyAppState:
 
         app.state._lock_manager = mock_lock
         app.state._s3_client = mock_s3_client
+        app.state._iam_client = mock_iam_client
         app.state._db_pool = mock_db_pool
         app.state._polaris_service = mock_polaris
         app.state._minio_manager_state = AppState(
